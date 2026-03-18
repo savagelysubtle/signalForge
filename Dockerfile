@@ -7,7 +7,7 @@ RUN pip install --no-cache-dir uv
 COPY src/backend/pyproject.toml src/backend/uv.lock* ./src/backend/
 
 WORKDIR /app/src/backend
-RUN uv sync --no-dev --frozen 2>/dev/null || uv sync --no-dev
+RUN uv sync --no-dev --no-install-project --frozen 2>/dev/null || uv sync --no-dev --no-install-project
 
 WORKDIR /app
 COPY src/backend/ ./src/backend/

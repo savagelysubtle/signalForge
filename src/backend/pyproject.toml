@@ -21,7 +21,7 @@ dependencies = [
 
 [build-system]
 build-backend = "uv_build"
-requires = ["uv_build>=0.9.4,<0.10.0"]
+requires = ["uv_build>=0.9.4,<0.11.0"]
 
 [tool.uv.build-backend]
 module-root = ""
