@@ -1,67 +1,34 @@
 ---
-description: WHEN creating, configuring, or connecting to SQLite databases or any persistent data storage (db files, chart images, logs, caches) THEN store them in the OS-standard AppData directory, NEVER in the project/repo tree.
+description: WHEN creating, configuring, or connecting to databases or any persistent data storage (chart images, logs) THEN follow the environment-aware storage pattern — cloud storage in production, local AppData in development.
 globs: "**/database/**,**/migrations/**,**/*.sql,**/*db*.py,**/connection*.py,**/config.py"
 alwaysApply: false
 ---
 
-# AppData Storage Pattern for Databases and Persistent Data
+# Storage Pattern for Databases and Persistent Data
 
-All databases, downloaded assets, and logs MUST be stored in the OS-standard AppData directory. NEVER place `.db` files, chart images, or logs inside the project/repo tree.
+Storage strategy depends on the `ENVIRONMENT` setting:
 
-## Resolved Paths
+## Production (Cloud)
 
-| OS | Base Path |
-|---|---|
-| Windows | `%APPDATA%\SignalForge\` (e.g. `C:\Users\Steve\AppData\Roaming\SignalForge\`) |
-| macOS | `~/Library/Application Support/SignalForge/` |
-| Linux | `~/.config/SignalForge/` |
+| Data | Storage | Config |
+|---|---|---|
+| Database | PostgreSQL (Railway addon) | `DATABASE_URL` env var |
+| Chart images | Supabase Storage (`charts` bucket) | `SUPABASE_URL` + `SUPABASE_SERVICE_KEY` |
+| Logs | stdout (captured by Railway) | Python `logging` module |
 
-## Directory Structure
+## Development (Local)
 
-```
-<AppData>/SignalForge/
-├── databases/
-│   └── signalforge.db       # SQLite (WAL mode)
-├── charts/
-│   └── (chart PNG files)
-└── logs/
-    └── (application logs)
-```
-
-## Python Implementation
-
-Use `platformdirs` to resolve paths. NEVER hardcode OS-specific paths.
-
-```python
-from pathlib import Path
-from platformdirs import user_data_dir
-
-APP_NAME = "SignalForge"
-
-class AppDataPaths:
-    def __init__(self) -> None:
-        self.base_dir = Path(user_data_dir(APP_NAME, appauthor=False))
-
-    @property
-    def db_path(self) -> Path:
-        return self.base_dir / "databases" / "signalforge.db"
-
-    @property
-    def charts_dir(self) -> Path:
-        return self.base_dir / "charts"
-
-    @property
-    def logs_dir(self) -> Path:
-        return self.base_dir / "logs"
-
-    def ensure_directories(self) -> None:
-        for d in [self.db_path.parent, self.charts_dir, self.logs_dir]:
-            d.mkdir(parents=True, exist_ok=True)
-```
+| Data | Storage | Config |
+|---|---|---|
+| Database | PostgreSQL (local) or SQLite fallback | `DATABASE_URL` env var, or AppData path if unset |
+| Chart images | Local AppData directory | `platformdirs.user_data_dir("SignalForge")` |
+| Logs | Local AppData directory | `platformdirs.user_data_dir("SignalForge")` |
 
 ## Rules
 
-1. Call `ensure_directories()` once at app startup (in FastAPI lifespan handler).
-2. Pass `AppDataPaths.db_path` to the SQLite connection -- never construct a path to `data/` or any project-relative location.
-3. The `.gitignore` should NOT need database entries because no `.db` files exist in the repo.
-4. Reference doc: `docs/appdata-storage-pattern.md`.
+1. NEVER place `.db` files, chart images, or logs inside the project/repo tree.
+2. All configuration is driven by environment variables — see `.env.example`.
+3. In production, `DATABASE_URL` is set by Railway. Never hardcode connection strings.
+4. Chart images are stored in Supabase Storage bucket `charts`, organized as `{user_id}/{run_id}/{ticker}_{timeframe}.png`.
+5. The `.gitignore` should NOT need database entries because no data files exist in the repo.
+6. All database queries must include `user_id` filtering for multi-tenant data isolation.

@@ -7,7 +7,7 @@
 
 ## What Is This Project?
 
-SignalForge is a desktop stock analysis platform that chains four AI models (Perplexity, Claude, Gemini, GPT) into a pipeline that produces structured trading recommendations. It does NOT execute trades — the user reviews recommendations and trades manually in TradingView (connected to Questrade).
+SignalForge is a cloud-hosted stock analysis platform that chains four AI models (Perplexity, Claude, Gemini, GPT) into a pipeline that produces structured trading recommendations. It does NOT execute trades — the user reviews recommendations and trades manually in TradingView (connected to Questrade).
 
 The core loop: User triggers analysis → Perplexity screens stocks → Gemini gathers news/sentiment → Claude reads charts with news context → GPT synthesizes via bull/bear/judge debate → Dashboard displays recommendations → User decides to follow or pass → Logs outcome → System learns.
 
@@ -17,10 +17,13 @@ The core loop: User triggers analysis → Perplexity screens stocks → Gemini g
 
 | Layer | Technology |
 |-------|-----------|
-| Desktop shell | Tauri 2.x (Rust) — thin wrapper only |
+| Frontend hosting | Vercel (static site) |
+| Backend hosting | Railway (Docker container) |
+| Auth | Supabase Auth (email/password, JWT) |
 | Frontend | React + TypeScript + Tailwind (dark theme) |
 | Backend | Python 3.14 (FastAPI) — ALL business logic lives here |
-| Database | SQLite (WAL mode) |
+| Database | PostgreSQL (Railway addon) |
+| Chart storage | Supabase Storage (public bucket) |
 | Package manager | `uv` (Python), `bun` (frontend) |
 | LLM SDKs | `openai`, `anthropic`, `google-generativeai` |
 | Validation | Pydantic v2 |
@@ -180,13 +183,13 @@ def get_prompt_hash() -> str:
 
 ## Database
 
-SQLite with WAL mode. The schema is defined in `database/migrations/`. All tables use TEXT UUIDs as primary keys (`uuid.uuid4().hex`).
+PostgreSQL (Railway addon in production, can use local Postgres in development). The schema is managed via Alembic migrations in `database/migrations/`. All tables use TEXT UUIDs as primary keys (`uuid.uuid4().hex`). Multi-tenant: all user-facing tables include a `user_id` column for data isolation.
 
 **Core tables:** `strategies`, `pipeline_runs`, `stage_outputs`, `chart_images`, `recommendations`, `decisions`, `outcomes`, `reflections`.
 
 See `docs/ARCHITECTURE.md` section 4 for full schema.
 
-**Important:** Never store API keys in SQLite. They go in the `.env` file at the project root (gitignored). See `.env.example` for the template. Keys are loaded at startup by `services/keyring_service.py` using `python-dotenv`.
+**Important:** Never store API keys in the database. In production, they are set as Railway environment variables. In development, they go in the `.env` file at the project root (gitignored). See `.env.example` for the template. Keys are loaded at startup by `services/keyring_service.py` using `python-dotenv`.
 
 ---
 
@@ -220,9 +223,23 @@ src/frontend/                # React + TypeScript
   api/                       # Backend HTTP client
   types/                     # TypeScript interfaces
 
-src/tauri/                   # Rust — Tauri shell only
-  src/main.rs                # Sidecar management
 ```
+
+---
+
+## Cloud Architecture
+
+```
+Vercel (frontend) ──JWT──→ Railway (FastAPI backend) ──SQL──→ Railway Postgres
+                                    │
+                                    ├──→ Supabase Auth (JWT verification)
+                                    └──→ Supabase Storage (chart images)
+```
+
+- **Auth flow:** Frontend uses Supabase JS SDK for login/signup → gets JWT → sends JWT in `Authorization: Bearer` header to backend → backend verifies JWT using `SUPABASE_JWT_SECRET` → extracts `user_id` for data isolation.
+- **Chart images:** Backend uploads PNGs to Supabase Storage `charts` bucket → stores public URL in database → frontend loads images directly from Supabase CDN.
+- **API keys:** In production, set as Railway environment variables. In development, loaded from `.env` via `python-dotenv`.
+- **CORS:** Locked to frontend domain via `ALLOWED_ORIGINS` env var.
 
 ---
 
@@ -236,10 +253,6 @@ uv run uvicorn main:app --reload --port 8420
 # Start frontend (dev server)
 cd src/frontend
 bun run dev
-
-# Start Tauri (dev mode — wraps both)
-cd src/tauri
-cargo tauri dev
 ```
 
 ---
@@ -258,11 +271,11 @@ cargo tauri dev
 
 6. **The bull/bear debate is optional per strategy.** Check `strategy.enable_debate` before making 3 GPT calls. If disabled, make a single synthesis call.
 
-7. **Chart images are stored in AppData** at `%APPDATA%\SignalForge\charts\` (resolved via `platformdirs`), referenced by path in SQLite. Don't base64-encode them in the database. Never store data files in the project/repo tree.
+7. **Chart images are stored in Supabase Storage** in the `charts` bucket, organized as `{user_id}/{run_id}/{ticker}_{timeframe}.png`. The public URL is stored in the database. In local development, images can fall back to local filesystem storage. Never store data files in the project/repo tree.
 
 8. **The frontend never calls LLM APIs directly.** All API communication goes through the Python backend. The frontend only talks to FastAPI.
 
-9. **SQLite WAL mode** is set at connection time. This allows the frontend to read while the backend writes during pipeline execution.
+9. **All API endpoints (except `/health`) require a valid Supabase JWT** in the `Authorization: Bearer` header. The backend verifies the JWT and extracts `user_id` for multi-tenant data isolation.
 
 10. **TradingView widgets are free public iframes.** No API key needed. Dark theme, transparent background, dynamic symbol updates.
 

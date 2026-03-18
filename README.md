@@ -19,9 +19,13 @@ User triggers analysis
 
 | Layer | Technology |
 |-------|-----------|
+| Frontend hosting | Vercel (static site, auto-deploy) |
+| Backend hosting | Railway (Docker, auto-deploy) |
+| Auth | Supabase Auth (email/password, JWT) |
 | Frontend | React + TypeScript + Tailwind (dark theme) |
 | Backend | Python 3.14 (FastAPI) — all business logic |
-| Database | SQLite (WAL mode) |
+| Database | PostgreSQL (Railway addon) |
+| Chart storage | Supabase Storage |
 | Package Mgr | `uv` (Python), `bun` (frontend) |
 | LLM SDKs | `openai`, `anthropic`, `google-generativeai` |
 | Validation | Pydantic v2 |
@@ -51,25 +55,43 @@ cd ../frontend
 bun install
 ```
 
-### 2. Configure API keys
+### 2. Configure environment
 
-Copy the example env file and fill in your keys:
+Copy the example env file and fill in your values:
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env` with your API keys:
+Edit `.env`:
 
 ```
+# LLM API Keys
 PERPLEXITY_API_KEY=your-key-here
 ANTHROPIC_API_KEY=your-key-here
 GOOGLE_API_KEY=your-key-here
 OPENAI_API_KEY=your-key-here
 CHARTIMG_API_KEY=your-key-here
+
+# Cloud infrastructure (get these from your Supabase project settings)
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_ANON_KEY=your-anon-key
+SUPABASE_SERVICE_KEY=your-service-role-key
+SUPABASE_JWT_SECRET=your-jwt-secret
+
+# Database (local Postgres or leave blank for SQLite fallback)
+DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/signalforge
 ```
 
-> Keys are loaded from `.env` at startup. Never commit this file — it's gitignored.
+For the frontend, create `src/frontend/.env.local`:
+
+```
+VITE_API_URL=http://localhost:8420
+VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_ANON_KEY=your-anon-key
+```
+
+> These files are gitignored. Never commit real keys.
 
 ### 3. Run the app
 

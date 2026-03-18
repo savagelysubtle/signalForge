@@ -58,3 +58,6 @@ target/
 node_modules/
 .next/
 .vite/
+
+# Docker
+docker-compose.override.yml
