@@ -1,6 +1,6 @@
-import { useState, useCallback, useEffect } from 'react';
-import { api } from '../api/client';
-import type { ApiKeyStatus } from '../types';
+import { useState, useCallback, useEffect } from "react";
+import { api } from "../api/client";
+import type { ApiKeyStatus } from "../types";
 
 export function useApiKeyStatus() {
   const [status, setStatus] = useState<ApiKeyStatus | null>(null);
@@ -13,35 +13,18 @@ export function useApiKeyStatus() {
     try {
       const data = await api.getApiKeyStatus();
       setStatus(data);
-    } catch (err: any) {
-      setError(err.message || 'Failed to fetch API key status');
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error ? err.message : "Failed to fetch API key status";
+      setError(message);
     } finally {
       setIsLoading(false);
     }
   }, []);
 
-  const reloadKeys = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      await api.reloadApiKeys();
-      await fetchStatus();
-    } catch (err: any) {
-      setError(err.message || 'Failed to reload API keys');
-    } finally {
-      setIsLoading(false);
-    }
-  }, [fetchStatus]);
-
   useEffect(() => {
     fetchStatus();
   }, [fetchStatus]);
 
-  return {
-    status,
-    isLoading,
-    error,
-    reloadKeys,
-    refresh: fetchStatus,
-  };
+  return { status, isLoading, error, refresh: fetchStatus };
 }

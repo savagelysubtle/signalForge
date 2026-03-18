@@ -84,9 +84,7 @@ function AnalysisPanel({ analysis }: { analysis: ChartAnalysis }) {
   const confidence = CONFIDENCE_STYLES[analysis.confidence] ?? CONFIDENCE_STYLES.medium;
   const trendColor = TREND_COLORS[analysis.trend_direction] ?? 'text-text-primary';
 
-  const chartImageUrl = analysis.chart_image_path
-    ? `http://localhost:8420/api/charts/${analysis.chart_image_path}`
-    : null;
+  const chartImageUrl = analysis.chart_image_path || null;
 
   return (
     <div className="p-4 overflow-y-auto h-full space-y-5">
