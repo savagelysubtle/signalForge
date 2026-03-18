@@ -252,22 +252,22 @@ def _format_chart_data(charts: list[ChartAnalysis], tickers: list[str]) -> str:
         ]
         if ca.current_price is not None:
             lines.append(f"**Current/Last Price: ${ca.current_price:.2f}**")
-        lines.extend([
-            f"Trend: {ca.trend_direction} ({ca.trend_strength})",
-            f"Overall bias: {ca.overall_bias} | Confidence: {ca.confidence}",
-        ])
+        lines.extend(
+            [
+                f"Trend: {ca.trend_direction} ({ca.trend_strength})",
+                f"Overall bias: {ca.overall_bias} | Confidence: {ca.confidence}",
+            ]
+        )
         if ca.key_levels:
             level_strs = [
-                f"  ${lv.price:.2f} ({lv.level_type}, {lv.strength})"
-                for lv in ca.key_levels
+                f"  ${lv.price:.2f} ({lv.level_type}, {lv.strength})" for lv in ca.key_levels
             ]
             lines.append("Key levels:\n" + "\n".join(level_strs))
         if ca.patterns_detected:
             lines.append(f"Patterns: {', '.join(ca.patterns_detected)}")
         if ca.indicator_readings:
             ind_strs = [
-                f"  {ir.indicator}: {ir.value} ({ir.signal})"
-                for ir in ca.indicator_readings
+                f"  {ir.indicator}: {ir.value} ({ir.signal})" for ir in ca.indicator_readings
             ]
             lines.append("Indicators:\n" + "\n".join(ind_strs))
         if ca.volume_analysis:
@@ -420,9 +420,7 @@ def build_judge_prompt(
         parts.append(f"- Trading style: {config.trading_style}")
 
     if reflection_context:
-        parts.append(
-            f"\n## HISTORICAL PERFORMANCE CONTEXT\n{reflection_context}"
-        )
+        parts.append(f"\n## HISTORICAL PERFORMANCE CONTEXT\n{reflection_context}")
 
     parts.append(f"\n{_format_data_availability(tickers, screening, charts, sentiments)}")
     parts.append(f"\n## FUNDAMENTALS (Perplexity)\n{_format_screening_data(screening, tickers)}")
@@ -445,8 +443,10 @@ def build_judge_prompt(
         if bull_parts:
             parts.append(f"\n## BULL CASE ARGUMENTS\n{''.join(bull_parts)}")
     else:
-        parts.append("\n## BULL CASE ARGUMENTS\nNo debate was conducted. "
-                      "Perform your own internal bull analysis.")
+        parts.append(
+            "\n## BULL CASE ARGUMENTS\nNo debate was conducted. "
+            "Perform your own internal bull analysis."
+        )
 
     if bear_cases:
         bear_map = {bc.ticker: bc for bc in bear_cases}
@@ -464,8 +464,10 @@ def build_judge_prompt(
         if bear_parts:
             parts.append(f"\n## BEAR CASE ARGUMENTS\n{''.join(bear_parts)}")
     else:
-        parts.append("\n## BEAR CASE ARGUMENTS\nNo debate was conducted. "
-                      "Perform your own internal bear analysis.")
+        parts.append(
+            "\n## BEAR CASE ARGUMENTS\nNo debate was conducted. "
+            "Perform your own internal bear analysis."
+        )
 
     parts.append(
         "\nWeigh all evidence and produce your final recommendations as JSON "

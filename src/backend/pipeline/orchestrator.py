@@ -99,9 +99,7 @@ async def run_pipeline(
 
     try:
         if mode == "prompt":
-            screening, stage_metadata = await run_prompted_discovery(
-                user_prompt or "", config
-            )
+            screening, stage_metadata = await run_prompted_discovery(user_prompt or "", config)
         elif mode == "discovery" and config:
             screening, stage_metadata = await run_discovery(config)
         elif mode == "analysis":
@@ -141,16 +139,12 @@ async def run_pipeline(
     # ------------------------------------------------------------------
     # Stage 2: Gemini news sentiment (runs after Perplexity)
     # ------------------------------------------------------------------
-    effective_config = config or StrategyConfig(
-        id="default", name="default", screening_prompt=""
-    )
+    effective_config = config or StrategyConfig(id="default", name="default", screening_prompt="")
 
     if screening and screening.tickers:
         ticker_symbols = [t.ticker for t in screening.tickers]
         try:
-            sentiments, gemini_metadata_list = await run_sentiment(
-                ticker_symbols, effective_config
-            )
+            sentiments, gemini_metadata_list = await run_sentiment(ticker_symbols, effective_config)
             result.sentiment_analyses = sentiments
             for gm in gemini_metadata_list:
                 await _save_stage_output(run_id, gm)
@@ -239,10 +233,7 @@ async def run_pipeline(
     }
 
     has_data = (
-        screening
-        or result.sentiment_analyses
-        or result.chart_analyses
-        or result.recommendations
+        screening or result.sentiment_analyses or result.chart_analyses or result.recommendations
     )
     status = "completed" if has_data else ("partial" if result.stage_errors else "failed")
     await pool.execute(

@@ -38,8 +38,7 @@ def _get_client() -> genai.Client:
     api_key = get_api_key("google")
     if not api_key:
         raise RuntimeError(
-            "Google API key not configured. "
-            "Set GOOGLE_API_KEY in .env (see .env.example)."
+            "Google API key not configured. Set GOOGLE_API_KEY in .env (see .env.example)."
         )
     return genai.Client(api_key=api_key)
 
@@ -144,13 +143,15 @@ async def run_sentiment(
     for i, result in enumerate(results):
         if isinstance(result, Exception):
             logger.error("Gemini task failed for %s: %s", tickers[i], result)
-            all_metadata.append({
-                "stage": "gemini",
-                "ticker": tickers[i],
-                "model": GEMINI_MODEL,
-                "status": "api_error",
-                "error": str(result),
-            })
+            all_metadata.append(
+                {
+                    "stage": "gemini",
+                    "ticker": tickers[i],
+                    "model": GEMINI_MODEL,
+                    "status": "api_error",
+                    "error": str(result),
+                }
+            )
             continue
 
         sentiment, metadata = result

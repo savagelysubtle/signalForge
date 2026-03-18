@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 
 import asyncpg
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from database.connection import get_db
 from middleware.auth import CurrentUser
@@ -21,6 +24,7 @@ from pipeline.schemas import (
     SentimentAnalysis,
 )
 
+limiter = Limiter(key_func=get_remote_address)
 router = APIRouter(prefix="/pipeline", tags=["pipeline"])
 
 
@@ -40,9 +44,11 @@ class PipelineRunResponse(BaseModel):
 
 
 @router.post("/run", response_model=PipelineRunResponse)
+@limiter.limit("5/minute")
 async def trigger_pipeline_run(
     request: PipelineRunRequest,
     user_id: CurrentUser,
+    _rate_limit_request: Request = None,  # type: ignore[assignment]
 ) -> PipelineRunResponse:
     """Trigger a new pipeline analysis run.
 
@@ -170,15 +176,11 @@ async def _load_recommendations(
         bull = None
         bear = None
         if r["bull_case"] and r["bull_case"] != "{}":
-            try:
+            with contextlib.suppress(Exception):
                 bull = DebateCase.model_validate_json(r["bull_case"])
-            except Exception:
-                pass
         if r["bear_case"] and r["bear_case"] != "{}":
-            try:
+            with contextlib.suppress(Exception):
                 bear = DebateCase.model_validate_json(r["bear_case"])
-            except Exception:
-                pass
 
         recs.append(
             Recommendation(
@@ -244,10 +246,8 @@ async def _load_sentiment_analyses(
     sentiments: list[SentimentAnalysis] = []
     for r in rows:
         if r["raw_response"]:
-            try:
+            with contextlib.suppress(Exception):
                 sentiments.append(SentimentAnalysis.model_validate_json(r["raw_response"]))
-            except Exception:
-                pass
     return sentiments
 
 
@@ -264,8 +264,6 @@ async def _load_chart_analyses(
     charts: list[ChartAnalysis] = []
     for r in rows:
         if r["raw_response"]:
-            try:
+            with contextlib.suppress(Exception):
                 charts.append(ChartAnalysis.model_validate_json(r["raw_response"]))
-            except Exception:
-                pass
     return charts

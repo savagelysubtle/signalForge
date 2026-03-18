@@ -115,8 +115,7 @@ async def fetch_chart_image(
     api_key = get_api_key("chartimg")
     if not api_key:
         raise RuntimeError(
-            "Chart-Img API key not configured. "
-            "Set CHARTIMG_API_KEY in .env (see .env.example)."
+            "Chart-Img API key not configured. Set CHARTIMG_API_KEY in .env (see .env.example)."
         )
 
     interval = TIMEFRAME_MAP.get(timeframe, "1D")

@@ -40,8 +40,7 @@ def _get_client() -> AsyncAnthropic:
     api_key = get_api_key("anthropic")
     if not api_key:
         raise RuntimeError(
-            "Anthropic API key not configured. "
-            "Set ANTHROPIC_API_KEY in .env (see .env.example)."
+            "Anthropic API key not configured. Set ANTHROPIC_API_KEY in .env (see .env.example)."
         )
     return AsyncAnthropic(api_key=api_key)
 
@@ -136,7 +135,11 @@ async def _analyze_ticker(
 
     try:
         image_bytes, image_path = await fetch_chart_image(
-            ticker, config.chart_timeframe, config.chart_indicators, run_id, user_id,
+            ticker,
+            config.chart_timeframe,
+            config.chart_indicators,
+            run_id,
+            user_id,
         )
     except Exception as exc:
         metadata["duration_ms"] = int((time.perf_counter() - start) * 1000)
@@ -202,13 +205,15 @@ async def run_chart_analysis(
     for i, result in enumerate(results):
         if isinstance(result, Exception):
             logger.error("Claude task failed for %s: %s", tickers[i], result)
-            all_metadata.append({
-                "stage": "claude",
-                "ticker": tickers[i],
-                "model": CLAUDE_MODEL,
-                "status": "api_error",
-                "error": str(result),
-            })
+            all_metadata.append(
+                {
+                    "stage": "claude",
+                    "ticker": tickers[i],
+                    "model": CLAUDE_MODEL,
+                    "status": "api_error",
+                    "error": str(result),
+                }
+            )
             continue
 
         chart, metadata = result

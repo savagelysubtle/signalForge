@@ -41,8 +41,7 @@ def _get_client() -> AsyncOpenAI:
     api_key = get_api_key("perplexity")
     if not api_key:
         raise RuntimeError(
-            "Perplexity API key not configured. "
-            "Set PERPLEXITY_API_KEY in .env (see .env.example)."
+            "Perplexity API key not configured. Set PERPLEXITY_API_KEY in .env (see .env.example)."
         )
     return AsyncOpenAI(api_key=api_key, base_url=PERPLEXITY_BASE_URL)
 

@@ -66,9 +66,7 @@ async def list_strategies(user_id: str) -> list[StrategyConfig]:
 async def list_templates() -> list[StrategyConfig]:
     """Return all strategy templates."""
     pool = await get_db()
-    rows = await pool.fetch(
-        "SELECT * FROM strategies WHERE is_template = true ORDER BY name"
-    )
+    rows = await pool.fetch("SELECT * FROM strategies WHERE is_template = true ORDER BY name")
     return [_row_to_config(r) for r in rows]
 
 

@@ -49,8 +49,7 @@ def _get_client() -> AsyncOpenAI:
     api_key = get_api_key("openai")
     if not api_key:
         raise RuntimeError(
-            "OpenAI API key not configured. "
-            "Set OPENAI_API_KEY in .env (see .env.example)."
+            "OpenAI API key not configured. Set OPENAI_API_KEY in .env (see .env.example)."
         )
     return AsyncOpenAI(api_key=api_key)
 
@@ -184,13 +183,23 @@ async def run_debate(
 
     if config.enable_debate:
         bull_cases, bear_cases, debate_metadata = await _run_debate_phase(
-            tickers, screening, charts, sentiments, config,
+            tickers,
+            screening,
+            charts,
+            sentiments,
+            config,
         )
         all_metadata.extend(debate_metadata)
 
     recommendations, judge_metadata = await _run_judge_phase(
-        tickers, screening, charts, sentiments,
-        bull_cases, bear_cases, reflection_context, config,
+        tickers,
+        screening,
+        charts,
+        sentiments,
+        bull_cases,
+        bear_cases,
+        reflection_context,
+        config,
     )
     all_metadata.append(judge_metadata)
 
@@ -290,8 +299,14 @@ async def _run_judge_phase(
         Tuple of (list of Recommendations, metadata dict).
     """
     judge_prompt = build_judge_prompt(
-        tickers, screening, charts, sentiments,
-        bull_cases, bear_cases, reflection_context, config,
+        tickers,
+        screening,
+        charts,
+        sentiments,
+        bull_cases,
+        bear_cases,
+        reflection_context,
+        config,
     )
 
     metadata: dict = {

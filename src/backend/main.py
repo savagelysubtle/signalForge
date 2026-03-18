@@ -7,19 +7,55 @@ Start locally with::
 
 from __future__ import annotations
 
+import json
 import logging
+import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 from config import APP_NAME, APP_VERSION, settings
-from database.connection import close_db, init_db
+from database.connection import close_db, get_db, init_db
 from services.keyring_service import load_env
 from services.strategy import ensure_defaults
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(name)s - %(message)s")
+
+class _JSONFormatter(logging.Formatter):
+    """Emit each log record as a single JSON line for Railway log parsing."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        log_entry = {
+            "timestamp": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info and record.exc_info[1]:
+            log_entry["exception"] = self.formatException(record.exc_info)
+        return json.dumps(log_entry)
+
+
+def _configure_logging() -> None:
+    """Set up structured JSON logging for production, plain text for dev."""
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    root.handlers.clear()
+
+    handler = logging.StreamHandler(sys.stdout)
+    if settings.environment == "production":
+        handler.setFormatter(_JSONFormatter())
+    else:
+        handler.setFormatter(logging.Formatter("%(levelname)s: %(name)s - %(message)s"))
+    root.addHandler(handler)
+
+
+_configure_logging()
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -50,11 +86,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from api.pipeline import limiter as pipeline_limiter  # noqa: E402
+
+app.state.limiter = pipeline_limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 
 @app.get("/health")
 async def health_check() -> dict[str, str]:
-    """Health check endpoint (no auth required)."""
-    return {"status": "ok", "version": APP_VERSION}
+    """Health check endpoint with database connectivity verification.
+
+    Returns status "ok" if everything is healthy, "degraded" if the
+    database is unreachable. Railway uses this for zero-downtime deploys.
+    """
+    try:
+        pool = await get_db()
+        await pool.fetchval("SELECT 1")
+        return {"status": "ok", "version": APP_VERSION}
+    except Exception:
+        logger.warning("Health check: database unreachable")
+        return {"status": "degraded", "version": APP_VERSION}
 
 
 # --- Route registration (imported after app creation) ---
