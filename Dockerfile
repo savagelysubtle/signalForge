@@ -18,7 +18,8 @@ COPY templates/ ./templates/
 WORKDIR /app/src/backend
 
 ENV PORT=8420
+ENV PATH="/app/src/backend/.venv/bin:$PATH"
 
 EXPOSE ${PORT}
 
-CMD uv run uvicorn main:app --host 0.0.0.0 --port ${PORT}
+CMD uvicorn main:app --host 0.0.0.0 --port ${PORT}
