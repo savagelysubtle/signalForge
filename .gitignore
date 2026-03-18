@@ -54,6 +54,7 @@ htmlcov/
 # Rust / Tauri (future)
 target/
 
-# Node / Frontend (future)
+# Node / Frontend
 node_modules/
 .next/
+.vite/
