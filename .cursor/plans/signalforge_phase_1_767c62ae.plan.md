@@ -9,49 +9,49 @@ todos:
     content:
       'Create src/backend/ project: pyproject.toml (py314, uv), main.py
       (FastAPI), config.py, directory structure'
-    status: pending
+    status: completed
   - id: database
     content:
       'Implement SQLite database layer: connection.py (async, WAL mode), full
       schema migration SQL (all 8 tables from ARCHITECTURE.md)'
-    status: pending
+    status: completed
   - id: schemas
     content:
       'Define Pydantic models in pipeline/schemas.py: FundamentalData (with
       asset_type for crypto), ScreeningResult, PipelineResult, StrategyConfig'
-    status: pending
+    status: completed
   - id: validation
     content:
       'Build validation/retry layer in pipeline/validation.py:
       @with_validation_retry decorator with JSON parse + Pydantic validate +
       retry with error context'
-    status: pending
+    status: completed
   - id: perplexity
     content:
       'Implement Perplexity stage: stages/perplexity.py (discovery + analysis
       modes), prompts/perplexity_discovery.py, prompts/perplexity_analysis.py
       with versioned prompts'
-    status: pending
+    status: completed
   - id: services
     content:
       'Implement services: keyring_service.py (API key CRUD via Windows
       Credential Manager), strategy.py (CRUD + default hardcoded strategy)'
-    status: pending
+    status: completed
   - id: api-routes
     content:
       'Implement FastAPI routes: pipeline.py (run/status/list), strategies.py
       (list/templates), settings.py (API key management), health endpoint'
-    status: pending
+    status: completed
   - id: orchestrator
     content:
       'Build pipeline orchestrator.py: Phase 1 runs only Perplexity stage,
       tracks timing/errors, returns PipelineResult'
-    status: pending
+    status: completed
   - id: project-config
     content:
       Create .gitignore, update CLAUDE.md for py314/bun/crypto decisions, init
       git repo
-    status: in_progress
+    status: completed
 isProject: false
 ---
 

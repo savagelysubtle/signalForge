@@ -20,10 +20,10 @@ class FundamentalData(BaseModel):
     """Fundamental data for a single ticker from Perplexity screening."""
 
     ticker: str
-    company_name: str
+    company_name: str = ""
     asset_type: Literal["stock", "etf", "crypto"] = "stock"
-    sector: str
-    market_cap: str
+    sector: str = ""
+    market_cap: str | None = None
     pe_ratio: float | None = None
     revenue_growth: str | None = None
     free_cash_flow: str | None = None
@@ -35,7 +35,7 @@ class FundamentalData(BaseModel):
 class ScreeningResult(BaseModel):
     """Complete output from Perplexity screening/research stage."""
 
-    mode: Literal["discovery", "analysis"]
+    mode: Literal["discovery", "analysis", "prompt"]
     strategy_name: str | None = None
     tickers: list[FundamentalData]
     screening_summary: str
@@ -43,7 +43,7 @@ class ScreeningResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Claude Vision Stage (Stage 2a) — future phases
+# Claude Vision Stage (Stage 3) — future phases
 # ---------------------------------------------------------------------------
 
 
@@ -69,6 +69,7 @@ class ChartAnalysis(BaseModel):
 
     ticker: str
     timeframe: str
+    current_price: float | None = None
     trend_direction: Literal["bullish", "bearish", "neutral", "transitioning"]
     trend_strength: Literal["strong", "moderate", "weak"]
     key_levels: list[TechnicalLevel] = Field(default_factory=list)
@@ -82,7 +83,7 @@ class ChartAnalysis(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Gemini Sentiment Stage (Stage 2b) — future phases
+# Gemini Sentiment Stage (Stage 2)
 # ---------------------------------------------------------------------------
 
 
@@ -110,7 +111,7 @@ class SentimentAnalysis(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# GPT Debate Stage (Stage 3) — future phases
+# GPT Debate Stage (Stage 4)
 # ---------------------------------------------------------------------------
 
 
@@ -144,6 +145,18 @@ class Recommendation(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class DebateCaseList(BaseModel):
+    """Wrapper for batch bull/bear debate output from GPT."""
+
+    cases: list[DebateCase]
+
+
+class RecommendationList(BaseModel):
+    """Wrapper for batch judge recommendation output from GPT."""
+
+    recommendations: list[Recommendation]
+
+
 # ---------------------------------------------------------------------------
 # Pipeline Result (full run output)
 # ---------------------------------------------------------------------------
@@ -155,7 +168,7 @@ class PipelineResult(BaseModel):
     run_id: str
     timestamp: datetime = Field(default_factory=datetime.now)
     strategy_name: str | None = None
-    mode: Literal["discovery", "analysis", "combined"]
+    mode: Literal["discovery", "analysis", "combined", "prompt"]
     input_tickers: list[str] = Field(default_factory=list)
     screening: ScreeningResult | None = None
     chart_analyses: list[ChartAnalysis] = Field(default_factory=list)

@@ -70,6 +70,47 @@ def build_discovery_prompt(config: StrategyConfig) -> str:
     )
 
 
+def build_prompted_discovery_prompt(
+    user_prompt: str,
+    config: StrategyConfig | None = None,
+) -> str:
+    """Build the user prompt for prompt-driven discovery mode.
+
+    The user's free-form prompt is the primary screening instruction.
+    If a strategy is selected, its constraints and limits are layered on.
+
+    Args:
+        user_prompt: The user's free-form screening request.
+        config: Optional strategy configuration for additional context.
+
+    Returns:
+        The formatted user prompt string.
+    """
+    parts: list[str] = [f"User request:\n{user_prompt}"]
+
+    if config:
+        parts.append(f"\nStrategy context: {config.name}")
+        if config.screening_prompt:
+            parts.append(f"Additional screening criteria:\n{config.screening_prompt}")
+        constraint_instruction = (
+            "Apply strict filtering — only return tickers that strongly match ALL criteria."
+            if config.constraint_style == "tight"
+            else "Apply loose filtering — return tickers that match most criteria, even partially."
+        )
+        parts.append(constraint_instruction)
+        parts.append(
+            f"\nReturn up to {config.max_tickers} tickers as JSON. "
+            f"Include both traditional securities and crypto if the criteria apply."
+        )
+    else:
+        parts.append(
+            "\nReturn up to 10 tickers as JSON. "
+            "Include both traditional securities and crypto if the criteria apply."
+        )
+
+    return "\n".join(parts)
+
+
 def get_prompt_hash() -> str:
     """Return the version hash of the current discovery prompt."""
     return prompt_hash(DISCOVERY_SYSTEM_PROMPT)

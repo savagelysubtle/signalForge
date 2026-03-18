@@ -1,66 +1,62 @@
-"""API key management via the OS keyring (Windows Credential Manager).
+"""API key management via .env file.
 
-Keys are never stored in SQLite, config files, or logs.
+Keys are loaded from a ``.env`` file in the project root using
+``python-dotenv``. Users copy ``.env.example`` to ``.env`` and fill
+in their keys. The ``.env`` file is gitignored.
 """
 
 from __future__ import annotations
 
 import logging
+import os
+from pathlib import Path
 
-import keyring
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
-SERVICE_NAME = "signalforge"
+_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
 
-PROVIDERS = ("perplexity", "anthropic", "google", "openai", "chartimg")
+PROVIDERS: dict[str, str] = {
+    "perplexity": "PERPLEXITY_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "google": "GOOGLE_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "chartimg": "CHARTIMG_API_KEY",
+}
 
 
-def store_api_key(provider: str, key: str) -> None:
-    """Store an API key in the OS credential manager.
+def load_env() -> None:
+    """Load or reload the .env file into the process environment.
 
-    Args:
-        provider: One of the recognized provider names (e.g. "perplexity").
-        key: The API key value.
-
-    Raises:
-        ValueError: If the provider name is not recognized.
+    Called once at startup. Safe to call again to pick up changes.
     """
-    if provider not in PROVIDERS:
-        raise ValueError(f"Unknown provider '{provider}'. Must be one of {PROVIDERS}")
-    keyring.set_password(SERVICE_NAME, provider, key)
-    logger.info("Stored API key for provider '%s'", provider)
+    if _ENV_FILE.exists():
+        load_dotenv(_ENV_FILE, override=True)
+        logger.info("Loaded .env from %s", _ENV_FILE)
+    else:
+        logger.warning("No .env file found at %s", _ENV_FILE)
 
 
 def get_api_key(provider: str) -> str | None:
-    """Retrieve an API key from the OS credential manager.
+    """Retrieve an API key from the environment.
 
     Args:
-        provider: The provider name.
+        provider: Short provider name (e.g. "perplexity").
 
     Returns:
-        The API key string, or ``None`` if not configured.
+        The API key string, or ``None`` if not set.
     """
-    return keyring.get_password(SERVICE_NAME, provider)
-
-
-def delete_api_key(provider: str) -> None:
-    """Remove an API key from the OS credential manager.
-
-    Args:
-        provider: The provider name.
-    """
-    try:
-        keyring.delete_password(SERVICE_NAME, provider)
-        logger.info("Deleted API key for provider '%s'", provider)
-    except keyring.errors.PasswordDeleteError:
-        logger.warning("No API key found for provider '%s' to delete", provider)
+    env_var = PROVIDERS.get(provider)
+    if not env_var:
+        return None
+    return os.environ.get(env_var) or None
 
 
 def get_key_status() -> dict[str, bool]:
-    """Check which API keys are configured (no values returned).
+    """Check which API keys are configured (values are never returned).
 
     Returns:
-        Dict mapping provider name to ``True`` if a key exists.
+        Dict mapping provider name to ``True`` if the key is set.
     """
     return {provider: get_api_key(provider) is not None for provider in PROVIDERS}

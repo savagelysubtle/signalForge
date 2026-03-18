@@ -21,6 +21,7 @@ from pipeline.prompts.perplexity_analysis import get_prompt_hash as analysis_has
 from pipeline.prompts.perplexity_discovery import (
     DISCOVERY_SYSTEM_PROMPT,
     build_discovery_prompt,
+    build_prompted_discovery_prompt,
 )
 from pipeline.prompts.perplexity_discovery import get_prompt_hash as discovery_hash
 from pipeline.schemas import ScreeningResult, StrategyConfig
@@ -40,7 +41,8 @@ def _get_client() -> AsyncOpenAI:
     api_key = get_api_key("perplexity")
     if not api_key:
         raise RuntimeError(
-            "Perplexity API key not configured. Set it via POST /api/settings/api-keys."
+            "Perplexity API key not configured. "
+            "Set PERPLEXITY_API_KEY in .env (see .env.example)."
         )
     return AsyncOpenAI(api_key=api_key, base_url=PERPLEXITY_BASE_URL)
 
@@ -64,12 +66,14 @@ async def _call_perplexity(
     """
     client = _get_client()
 
+    full_user_prompt = user_prompt
+    if error_context:
+        full_user_prompt = f"{user_prompt}\n\n---\nCORRECTION: {error_context}"
+
     messages = [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
+        {"role": "user", "content": full_user_prompt},
     ]
-    if error_context:
-        messages.append({"role": "user", "content": error_context})
 
     async with _semaphore:
         response = await client.chat.completions.create(
@@ -106,12 +110,55 @@ async def run_discovery(
         result = await _call_perplexity(DISCOVERY_SYSTEM_PROMPT, user_prompt)
         metadata["duration_ms"] = int((time.perf_counter() - start) * 1000)
         metadata["status"] = "success" if result else "validation_failed"
+        if result is not None:
+            metadata["raw_response"] = result.model_dump_json()
         return result, metadata
     except Exception as exc:
         metadata["duration_ms"] = int((time.perf_counter() - start) * 1000)
         metadata["status"] = "api_error"
         metadata["error"] = str(exc)
         logger.exception("Perplexity discovery failed")
+        return None, metadata
+
+
+async def run_prompted_discovery(
+    user_prompt: str,
+    config: StrategyConfig | None = None,
+) -> tuple[ScreeningResult | None, dict]:
+    """Run Perplexity in prompt-driven discovery mode.
+
+    The user's free-form text drives the screening. If a strategy is
+    selected its constraints and limits are layered on top.
+
+    Args:
+        user_prompt: The user's free-form screening request.
+        config: Optional strategy configuration for additional context.
+
+    Returns:
+        Tuple of (validated ScreeningResult or None, metadata dict).
+    """
+    prompt = build_prompted_discovery_prompt(user_prompt, config)
+    metadata: dict = {
+        "stage": "perplexity",
+        "mode": "prompt",
+        "model": PERPLEXITY_MODEL,
+        "prompt_hash": discovery_hash(),
+        "prompt_text": f"{DISCOVERY_SYSTEM_PROMPT}\n---\n{prompt}",
+    }
+
+    start = time.perf_counter()
+    try:
+        result = await _call_perplexity(DISCOVERY_SYSTEM_PROMPT, prompt)
+        metadata["duration_ms"] = int((time.perf_counter() - start) * 1000)
+        metadata["status"] = "success" if result else "validation_failed"
+        if result is not None:
+            metadata["raw_response"] = result.model_dump_json()
+        return result, metadata
+    except Exception as exc:
+        metadata["duration_ms"] = int((time.perf_counter() - start) * 1000)
+        metadata["status"] = "api_error"
+        metadata["error"] = str(exc)
+        logger.exception("Perplexity prompted discovery failed")
         return None, metadata
 
 
@@ -142,6 +189,8 @@ async def run_analysis(
         result = await _call_perplexity(ANALYSIS_SYSTEM_PROMPT, user_prompt)
         metadata["duration_ms"] = int((time.perf_counter() - start) * 1000)
         metadata["status"] = "success" if result else "validation_failed"
+        if result is not None:
+            metadata["raw_response"] = result.model_dump_json()
         return result, metadata
     except Exception as exc:
         metadata["duration_ms"] = int((time.perf_counter() - start) * 1000)

@@ -9,7 +9,7 @@
 
 SignalForge is a desktop stock analysis platform that chains four AI models (Perplexity, Claude, Gemini, GPT) into a pipeline that produces structured trading recommendations. It does NOT execute trades — the user reviews recommendations and trades manually in TradingView (connected to Questrade).
 
-The core loop: User triggers analysis → Perplexity screens stocks → Claude reads charts + Gemini reads news (parallel) → GPT synthesizes via bull/bear/judge debate → Dashboard displays recommendations → User decides to follow or pass → Logs outcome → System learns.
+The core loop: User triggers analysis → Perplexity screens stocks → Gemini gathers news/sentiment → Claude reads charts with news context → GPT synthesizes via bull/bear/judge debate → Dashboard displays recommendations → User decides to follow or pass → Logs outcome → System learns.
 
 ---
 
@@ -137,22 +137,30 @@ async def call_claude_chart_analysis(prompt: str, image: bytes) -> ChartAnalysis
     ...
 ```
 
-### Parallel Execution
+### Sequential Stages & Parallel Execution
 
-Claude + Gemini stages run concurrently. Bull + Bear GPT calls run concurrently. Use `asyncio.gather()` with `return_exceptions=True` to handle partial failures:
+Gemini runs before Claude so that Claude receives news context for chart analysis. Bull + Bear GPT calls run concurrently. Use `asyncio.gather()` with `return_exceptions=True` for the GPT parallel calls:
 
 ```python
-claude_result, gemini_result = await asyncio.gather(
-    run_claude_stage(tickers, config),
-    run_gemini_stage(tickers, config),
+# Gemini runs first, then Claude receives its output
+sentiment_analyses = await run_gemini_stage(tickers, config)
+chart_analyses = await run_claude_stage(tickers, config, sentiment_analyses)
+
+# Bull + Bear are parallel, Judge is sequential
+bull_cases, bear_cases = await asyncio.gather(
+    run_gpt_bull(tickers, screening, chart_analyses, sentiment_analyses, config),
+    run_gpt_bear(tickers, screening, chart_analyses, sentiment_analyses, config),
     return_exceptions=True,
 )
-# Check if either is an Exception and handle degraded state
 ```
 
 ### Degraded Pipeline
 
-If a non-critical stage fails (Gemini sentiment, for example), the pipeline continues. The GPT judge prompt explicitly notes what data is missing. The `PipelineResult.stage_errors` list tracks all failures.
+If a non-critical stage fails, the pipeline continues. The `PipelineResult.stage_errors` list tracks all failures.
+
+- If **Gemini** fails, Claude proceeds without news context (the prompt omits the "Recent News Context" section). GPT judge is told sentiment data is unavailable.
+- If **Claude** fails after receiving news, GPT proceeds with Perplexity fundamentals + Gemini sentiment only (no chart analysis).
+- The GPT judge prompt explicitly notes which data is missing so it can adjust confidence accordingly.
 
 ### Prompt Versioning
 
@@ -178,7 +186,7 @@ SQLite with WAL mode. The schema is defined in `database/migrations/`. All table
 
 See `docs/ARCHITECTURE.md` section 4 for full schema.
 
-**Important:** Never store API keys in SQLite. They go in Windows Credential Manager via the `keyring` library (`services/keyring.py`).
+**Important:** Never store API keys in SQLite. They go in the `.env` file at the project root (gitignored). See `.env.example` for the template. Keys are loaded at startup by `services/keyring_service.py` using `python-dotenv`.
 
 ---
 
@@ -240,7 +248,7 @@ cargo tauri dev
 
 1. **This app never executes trades.** If you find yourself writing code that places orders, stop. The user executes in TradingView manually.
 
-2. **API keys go in OS keyring, never SQLite or config files.** Check `services/keyring.py`.
+2. **API keys go in `.env`, never SQLite or committed config files.** See `.env.example` and `services/keyring_service.py`.
 
 3. **Every LLM output must be Pydantic-validated.** No raw JSON dicts flowing through the pipeline. If it's not a validated model, it's a bug.
 

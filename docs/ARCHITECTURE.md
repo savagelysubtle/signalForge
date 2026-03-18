@@ -120,54 +120,65 @@ Application Startup Sequence:
                      Validated ticker list
                      + fundamentals (JSON)
                              │
-                    ┌────────┴────────┐
+                             ▼
+                    ┌─────────────────┐
+                    │   STAGE 2       │
+                    │   Gemini News   │
                     │                 │
-                    ▼                 ▼
-           ┌──────────────┐  ┌──────────────┐
-           │   STAGE 2a   │  │   STAGE 2b   │
-           │   Claude     │  │   Gemini     │
-           │   Vision     │  │   News       │
-           │              │  │              │
-           │  Fetch chart │  │  Search news │
-           │  images,     │  │  for each    │
-           │  analyze TA  │  │  ticker,     │
-           │  patterns    │  │  score       │
-           │              │  │  sentiment   │
-           └──────┬───────┘  └──────┬───────┘
-                  │                 │
-           TA data (JSON)    Sentiment (JSON)
-                  │                 │
-                  └────────┬────────┘
-                           │
-                           ▼
-                  ┌─────────────────┐
-                  │   STAGE 3       │
-                  │   GPT Debate    │
-                  │                 │
-                  │  ┌───────────┐  │
-                  │  │   Bull    │──┐
-                  │  └───────────┘  │
-                  │  ┌───────────┐  │ (parallel)
-                  │  │   Bear    │──┘
-                  │  └───────────┘  │
-                  │        │        │
-                  │        ▼        │
-                  │  ┌───────────┐  │
-                  │  │   Judge   │  │
-                  │  │ + History │  │
-                  │  │ + Reflect │  │
-                  │  └───────────┘  │
-                  └────────┬────────┘
-                           │
-                    Recommendations
-                       (JSON)
-                           │
-                           ▼
-                  ┌─────────────────┐
-                  │   Store in DB   │
-                  │   + Send to     │
-                  │   Frontend      │
-                  └─────────────────┘
+                    │  Search news    │
+                    │  for each       │
+                    │  ticker, score  │
+                    │  sentiment      │
+                    └────────┬────────┘
+                             │
+                     Sentiment + catalysts
+                             (JSON)
+                             │
+                             ▼
+                    ┌─────────────────┐
+                    │   STAGE 3       │
+                    │   Claude Vision │
+                    │                 │
+                    │  Fetch chart    │
+                    │  images,        │
+                    │  analyze TA     │
+                    │  patterns WITH  │
+                    │  news context   │
+                    │  from Stage 2   │
+                    └────────┬────────┘
+                             │
+                     News-aware TA data
+                             (JSON)
+                             │
+                             ▼
+                    ┌─────────────────┐
+                    │   STAGE 4       │
+                    │   GPT Debate    │
+                    │                 │
+                    │  ┌───────────┐  │
+                    │  │   Bull    │──┐
+                    │  └───────────┘  │
+                    │  ┌───────────┐  │ (parallel)
+                    │  │   Bear    │──┘
+                    │  └───────────┘  │
+                    │        │        │
+                    │        ▼        │
+                    │  ┌───────────┐  │
+                    │  │   Judge   │  │
+                    │  │ + History │  │
+                    │  │ + Reflect │  │
+                    │  └───────────┘  │
+                    └────────┬────────┘
+                             │
+                      Recommendations
+                         (JSON)
+                             │
+                             ▼
+                    ┌─────────────────┐
+                    │   Store in DB   │
+                    │   + Send to     │
+                    │   Frontend      │
+                    └─────────────────┘
 ```
 
 ### 3.2 Stage Contracts (Pydantic Models)
@@ -333,26 +344,28 @@ Call LLM
       → GPT judge prompt notes which data is missing
 ```
 
-### 3.4 Parallel Execution
+### 3.4 Sequential Stages & Parallel Execution
 
-Stages 2a (Claude) and 2b (Gemini) are independent and run concurrently via `asyncio.gather()`. Within each stage, individual ticker analyses can also run in parallel (with rate limiting to respect API quotas).
+Stages 1 through 3 run sequentially: Perplexity screens, then Gemini gathers news, then Claude analyzes charts with the news context from Gemini. This sequential ordering allows Claude to produce news-aware technical analysis (e.g., interpreting a price gap as earnings-driven when Gemini found an earnings catalyst). Within each stage, individual ticker analyses can run in parallel (with rate limiting to respect API quotas).
 
-The GPT stage's bull and bear calls are also parallel. Only the judge call is sequential (it requires bull + bear outputs).
+The GPT stage's bull and bear calls are parallel. Only the judge call is sequential (it requires bull + bear outputs).
+
+If Gemini fails, Claude still runs but without news context — the Claude prompt omits the "Recent News Context" section and proceeds with chart-only analysis.
 
 ```python
 # Pseudocode for pipeline orchestration
 async def run_pipeline(config: PipelineConfig) -> PipelineResult:
-    # Stage 1: Sequential
+    # Stage 1: Perplexity screening/research
     screening = await run_perplexity_stage(config)
     tickers = extract_tickers(screening, config.manual_tickers)
 
-    # Stage 2: Parallel (Claude + Gemini)
-    chart_analyses, sentiment_analyses = await asyncio.gather(
-        run_claude_stage(tickers, config),
-        run_gemini_stage(tickers, config),
-    )
+    # Stage 2: Gemini news gathering
+    sentiment_analyses = await run_gemini_stage(tickers, config)
 
-    # Stage 3: GPT Debate
+    # Stage 3: Claude chart analysis (receives Gemini's news context)
+    chart_analyses = await run_claude_stage(tickers, config, sentiment_analyses)
+
+    # Stage 4: GPT Debate
     # Bull and Bear are parallel, Judge is sequential
     reflection = await load_reflection_context()
     bull_cases, bear_cases = await asyncio.gather(

@@ -56,8 +56,9 @@ The user opens SignalForge and initiates an analysis in one of two ways:
 Once triggered, the pipeline runs through four stages:
 
 1. **Perplexity (Screening/Research):** Returns a list of tickers with fundamental data as structured JSON
-2. **Claude Vision + Gemini (Parallel):** Claude analyzes chart images for technical patterns; Gemini analyzes recent news sentiment. These run concurrently.
-3. **GPT (Bull/Bear/Judge Debate):** Three GPT calls — a bull case, a bear case, and a judge synthesis. The judge also receives historical self-learning context. Outputs a final BUY/HOLD/SELL recommendation with confidence score, entry/stop/target levels, position sizing, and reasoning.
+2. **Gemini (News Sentiment):** Gathers recent news for each ticker, scores sentiment, and extracts key catalysts. This runs before chart analysis so downstream stages have news context.
+3. **Claude Vision (Chart Analysis):** Analyzes chart images for technical patterns. Claude receives Gemini's news/sentiment data alongside the chart, enabling news-aware technical analysis (e.g., interpreting a price gap as earnings-driven rather than a breakout pattern).
+4. **GPT (Bull/Bear/Judge Debate):** Three GPT calls — a bull case, a bear case, and a judge synthesis. The judge also receives historical self-learning context. Outputs a final BUY/HOLD/SELL recommendation with confidence score, entry/stop/target levels, position sizing, and reasoning.
 
 The user sees real-time pipeline status in the command bar (which stage is running, estimated time remaining).
 
@@ -219,20 +220,21 @@ Periodically (or on-demand), the system analyzes the accumulated data — recomm
 - No chart analysis, no sentiment, no GPT synthesis
 - **Value:** Usable stock screener with AI-powered research
 
-### Phase 2: Chart Analysis
-
-- Claude Vision integration
-- Chart-Img API integration
-- Chart display in detail view (static images)
-- Configurable indicators per strategy
-- **Value:** AI-powered screening + technical analysis
-
-### Phase 3: News Sentiment
+### Phase 2: News Sentiment
 
 - Gemini integration with Google Search grounding
 - Sentiment scoring and catalyst extraction
 - Sentiment tab in detail view
-- **Value:** Full data pipeline (fundamentals + technicals + sentiment)
+- **Value:** AI-powered screening + real-time news context for downstream stages
+
+### Phase 3: Chart Analysis
+
+- Claude Vision integration
+- Chart-Img API integration
+- Claude receives Gemini's news/sentiment data as context for chart interpretation
+- Chart display in detail view (static images)
+- Configurable indicators per strategy
+- **Value:** Full data pipeline (fundamentals + sentiment + news-aware technicals)
 
 ### Phase 4: GPT Synthesis + Decision Engine
 
