@@ -1,6 +1,6 @@
 """SignalForge FastAPI backend entry point.
 
-Start with::
+Start locally with::
 
     uv run uvicorn main:app --reload --port 8420
 """
@@ -12,21 +12,24 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-
-logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(name)s - %(message)s")
 from fastapi.middleware.cors import CORSMiddleware
 
-from config import APP_NAME, APP_VERSION, paths
+from config import APP_NAME, APP_VERSION, settings
 from database.connection import close_db, init_db
 from services.keyring_service import load_env
 from services.strategy import ensure_defaults
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(name)s - %(message)s")
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Manage startup and shutdown lifecycle events."""
     load_env()
-    paths.ensure_directories()
+    if settings.environment == "development" and not settings.database_url:
+        from config import paths
+
+        paths.ensure_directories()
     await init_db()
     await ensure_defaults()
     yield
@@ -41,7 +44,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -50,10 +53,8 @@ app.add_middleware(
 
 @app.get("/health")
 async def health_check() -> dict[str, str]:
-    """Health check endpoint."""
+    """Health check endpoint (no auth required)."""
     return {"status": "ok", "version": APP_VERSION}
-
-
 
 
 # --- Route registration (imported after app creation) ---

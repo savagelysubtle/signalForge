@@ -1,11 +1,13 @@
--- SignalForge initial schema
+-- SignalForge initial schema (PostgreSQL with multi-tenancy)
 -- All tables use TEXT UUIDs as primary keys (uuid.uuid4().hex)
--- WAL mode and foreign keys are set in connection.py, not here.
+-- Multi-tenant: user_id added to top-level tables for data isolation
+-- System templates use user_id = 'system'
 
 -- Strategy definitions
-CREATE TABLE IF NOT EXISTS strategies (
+CREATE TABLE strategies (
     id              TEXT PRIMARY KEY,
-    name            TEXT NOT NULL UNIQUE,
+    user_id         TEXT NOT NULL,
+    name            TEXT NOT NULL,
     description     TEXT,
 
     -- Perplexity config
@@ -28,22 +30,26 @@ CREATE TABLE IF NOT EXISTS strategies (
     enable_debate       BOOLEAN DEFAULT TRUE,
 
     -- Metadata
-    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ DEFAULT NOW(),
     run_count       INTEGER DEFAULT 0,
-    is_template     BOOLEAN DEFAULT FALSE
+    is_template     BOOLEAN DEFAULT FALSE,
+
+    -- Unique constraint per user (templates can share names across users)
+    UNIQUE (user_id, name)
 );
 
 -- Pipeline run history
-CREATE TABLE IF NOT EXISTS pipeline_runs (
+CREATE TABLE pipeline_runs (
     id              TEXT PRIMARY KEY,
+    user_id         TEXT NOT NULL,
     strategy_id     TEXT REFERENCES strategies(id),
-    mode            TEXT NOT NULL CHECK (mode IN ('discovery', 'analysis', 'combined')),
+    mode            TEXT NOT NULL CHECK (mode IN ('discovery', 'analysis', 'combined', 'prompt')),
     manual_tickers  TEXT,                   -- JSON array
     status          TEXT NOT NULL DEFAULT 'running',
 
-    started_at      DATETIME NOT NULL,
-    completed_at    DATETIME,
+    started_at      TIMESTAMPTZ NOT NULL,
+    completed_at    TIMESTAMPTZ,
     duration_seconds REAL,
 
     prompt_versions TEXT,                   -- JSON: {"perplexity": "abc123", ...}
@@ -51,7 +57,8 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
 );
 
 -- Raw LLM stage outputs (debugging and replay)
-CREATE TABLE IF NOT EXISTS stage_outputs (
+-- Inherits user scope through pipeline_runs foreign key
+CREATE TABLE stage_outputs (
     id              TEXT PRIMARY KEY,
     run_id          TEXT NOT NULL REFERENCES pipeline_runs(id),
     stage           TEXT NOT NULL,
@@ -69,11 +76,12 @@ CREATE TABLE IF NOT EXISTS stage_outputs (
     status          TEXT NOT NULL,
     retry_count     INTEGER DEFAULT 0,
 
-    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Chart images
-CREATE TABLE IF NOT EXISTS chart_images (
+-- Inherits user scope through pipeline_runs foreign key
+CREATE TABLE chart_images (
     id              TEXT PRIMARY KEY,
     run_id          TEXT NOT NULL REFERENCES pipeline_runs(id),
     ticker          TEXT NOT NULL,
@@ -82,13 +90,14 @@ CREATE TABLE IF NOT EXISTS chart_images (
     image_path      TEXT NOT NULL,
     image_hash      TEXT,
     source_url      TEXT,
-    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Final recommendations
-CREATE TABLE IF NOT EXISTS recommendations (
+CREATE TABLE recommendations (
     id              TEXT PRIMARY KEY,
     run_id          TEXT NOT NULL REFERENCES pipeline_runs(id),
+    user_id         TEXT NOT NULL,
     ticker          TEXT NOT NULL,
 
     action          TEXT NOT NULL CHECK (action IN ('BUY', 'SELL', 'HOLD')),
@@ -106,22 +115,24 @@ CREATE TABLE IF NOT EXISTS recommendations (
     key_factors     TEXT NOT NULL,           -- JSON array
     warnings        TEXT,                    -- JSON array
 
-    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- User decisions on recommendations
-CREATE TABLE IF NOT EXISTS decisions (
+CREATE TABLE decisions (
     id              TEXT PRIMARY KEY,
+    user_id         TEXT NOT NULL,
     recommendation_id TEXT NOT NULL REFERENCES recommendations(id),
     decision        TEXT NOT NULL CHECK (decision IN ('following', 'passing')),
     reason          TEXT,
     reason_category TEXT,
-    decided_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+    decided_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Trade outcomes (manually entered)
-CREATE TABLE IF NOT EXISTS outcomes (
+CREATE TABLE outcomes (
     id              TEXT PRIMARY KEY,
+    user_id         TEXT NOT NULL,
     decision_id     TEXT NOT NULL REFERENCES decisions(id),
     recommendation_id TEXT NOT NULL REFERENCES recommendations(id),
     ticker          TEXT NOT NULL,
@@ -135,31 +146,39 @@ CREATE TABLE IF NOT EXISTS outcomes (
     exit_reason     TEXT,
 
     notes           TEXT,
-    logged_at       DATETIME DEFAULT CURRENT_TIMESTAMP
+    logged_at       TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Reflection summaries for self-learning
-CREATE TABLE IF NOT EXISTS reflections (
+-- Inherits user scope through outcomes/decisions foreign keys
+CREATE TABLE reflections (
     id              TEXT PRIMARY KEY,
-    generated_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+    generated_at    TIMESTAMPTZ DEFAULT NOW(),
 
     recommendations_analyzed INTEGER,
     decisions_analyzed      INTEGER,
     outcomes_analyzed       INTEGER,
-    date_range_start        DATETIME,
-    date_range_end          DATETIME,
+    date_range_start        TIMESTAMPTZ,
+    date_range_end          TIMESTAMPTZ,
 
     summary_text    TEXT NOT NULL,
     injection_prompt TEXT NOT NULL,
     metrics         TEXT NOT NULL            -- JSON
 );
 
--- Indexes
-CREATE INDEX IF NOT EXISTS idx_pipeline_runs_strategy ON pipeline_runs(strategy_id);
-CREATE INDEX IF NOT EXISTS idx_stage_outputs_run ON stage_outputs(run_id);
-CREATE INDEX IF NOT EXISTS idx_stage_outputs_stage ON stage_outputs(stage);
-CREATE INDEX IF NOT EXISTS idx_recommendations_run ON recommendations(run_id);
-CREATE INDEX IF NOT EXISTS idx_recommendations_ticker ON recommendations(ticker);
-CREATE INDEX IF NOT EXISTS idx_decisions_recommendation ON decisions(recommendation_id);
-CREATE INDEX IF NOT EXISTS idx_outcomes_recommendation ON outcomes(recommendation_id);
-CREATE INDEX IF NOT EXISTS idx_outcomes_ticker ON outcomes(ticker);
+-- Indexes for foreign key relationships
+CREATE INDEX idx_pipeline_runs_strategy ON pipeline_runs(strategy_id);
+CREATE INDEX idx_stage_outputs_run ON stage_outputs(run_id);
+CREATE INDEX idx_stage_outputs_stage ON stage_outputs(stage);
+CREATE INDEX idx_recommendations_run ON recommendations(run_id);
+CREATE INDEX idx_recommendations_ticker ON recommendations(ticker);
+CREATE INDEX idx_decisions_recommendation ON decisions(recommendation_id);
+CREATE INDEX idx_outcomes_recommendation ON outcomes(recommendation_id);
+CREATE INDEX idx_outcomes_ticker ON outcomes(ticker);
+
+-- Indexes for multi-tenancy (user_id filtering)
+CREATE INDEX idx_strategies_user ON strategies(user_id);
+CREATE INDEX idx_pipeline_runs_user ON pipeline_runs(user_id);
+CREATE INDEX idx_recommendations_user ON recommendations(user_id);
+CREATE INDEX idx_decisions_user ON decisions(user_id);
+CREATE INDEX idx_outcomes_user ON outcomes(user_id);

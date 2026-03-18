@@ -5,7 +5,8 @@ from __future__ import annotations
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from services.keyring_service import get_key_status, load_env
+from middleware.auth import CurrentUser
+from services.keyring_service import get_key_status
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -17,19 +18,10 @@ class ApiKeyStatusResponse(BaseModel):
 
 
 @router.get("/api-keys/status", response_model=ApiKeyStatusResponse)
-async def check_api_key_status() -> ApiKeyStatusResponse:
+async def check_api_key_status(user_id: CurrentUser) -> ApiKeyStatusResponse:
     """Check which API keys are configured (values are never returned).
 
-    Keys are read from the ``.env`` file in the project root.
+    Requires authentication but user_id is not used in logic.
+    Keys are read from environment variables in production.
     """
     return ApiKeyStatusResponse(keys=get_key_status())
-
-
-@router.post("/api-keys/reload")
-async def reload_api_keys() -> dict[str, str]:
-    """Reload API keys from the .env file.
-
-    Call this after editing .env without restarting the server.
-    """
-    load_env()
-    return {"status": "ok"}

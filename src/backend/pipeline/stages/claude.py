@@ -107,6 +107,7 @@ async def _analyze_ticker(
     config: StrategyConfig,
     sentiment: SentimentAnalysis | None,
     run_id: str,
+    user_id: str = "",
 ) -> tuple[ChartAnalysis | None, dict]:
     """Run chart analysis for a single ticker.
 
@@ -135,7 +136,7 @@ async def _analyze_ticker(
 
     try:
         image_bytes, image_path = await fetch_chart_image(
-            ticker, config.chart_timeframe, config.chart_indicators, run_id,
+            ticker, config.chart_timeframe, config.chart_indicators, run_id, user_id,
         )
     except Exception as exc:
         metadata["duration_ms"] = int((time.perf_counter() - start) * 1000)
@@ -169,6 +170,7 @@ async def run_chart_analysis(
     config: StrategyConfig,
     sentiments: list[SentimentAnalysis],
     run_id: str,
+    user_id: str = "",
 ) -> tuple[list[ChartAnalysis], list[dict]]:
     """Run chart analysis for all tickers in parallel.
 
@@ -189,7 +191,7 @@ async def run_chart_analysis(
     sentiment_map: dict[str, SentimentAnalysis] = {s.ticker: s for s in sentiments}
 
     tasks = [
-        _analyze_ticker(ticker, config, sentiment_map.get(ticker), run_id)
+        _analyze_ticker(ticker, config, sentiment_map.get(ticker), run_id, user_id)
         for ticker in tickers
     ]
     results = await asyncio.gather(*tasks, return_exceptions=True)

@@ -1,8 +1,7 @@
-"""API key management via .env file.
+"""API key management via environment variables.
 
-Keys are loaded from a ``.env`` file in the project root using
-``python-dotenv``. Users copy ``.env.example`` to ``.env`` and fill
-in their keys. The ``.env`` file is gitignored.
+In production (Railway), API keys are set as environment variables directly.
+In development, keys are loaded from a ``.env`` file using ``python-dotenv``.
 """
 
 from __future__ import annotations
@@ -15,8 +14,6 @@ from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
-_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
-
 PROVIDERS: dict[str, str] = {
     "perplexity": "PERPLEXITY_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
@@ -27,15 +24,25 @@ PROVIDERS: dict[str, str] = {
 
 
 def load_env() -> None:
-    """Load or reload the .env file into the process environment.
+    """Load the .env file into the process environment if it exists.
 
-    Called once at startup. Safe to call again to pick up changes.
+    In production, environment variables are pre-set by the hosting platform
+    (Railway) and this function is effectively a no-op. In development, it
+    loads from the .env file at the project root.
+
+    Called once at startup.
     """
-    if _ENV_FILE.exists():
-        load_dotenv(_ENV_FILE, override=True)
-        logger.info("Loaded .env from %s", _ENV_FILE)
-    else:
-        logger.warning("No .env file found at %s", _ENV_FILE)
+    env_candidates = [
+        Path.cwd() / ".env",
+        Path(__file__).resolve().parents[3] / ".env",
+    ]
+    for env_file in env_candidates:
+        if env_file.exists():
+            load_dotenv(env_file, override=True)
+            logger.info("Loaded .env from %s", env_file)
+            return
+
+    logger.info("No .env file found — using existing environment variables")
 
 
 def get_api_key(provider: str) -> str | None:

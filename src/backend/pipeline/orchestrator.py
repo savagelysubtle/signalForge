@@ -32,26 +32,13 @@ from services.strategy import get_strategy
 
 logger = logging.getLogger(__name__)
 
-_active_runs: dict[str, PipelineResult] = {}
-
-
-def get_run_status(run_id: str) -> PipelineResult | None:
-    """Return the current state of an in-progress or completed pipeline run.
-
-    Args:
-        run_id: The pipeline run UUID.
-
-    Returns:
-        The PipelineResult if found, else None.
-    """
-    return _active_runs.get(run_id)
-
 
 async def run_pipeline(
     *,
     strategy_id: str | None = None,
     manual_tickers: list[str] | None = None,
     user_prompt: str | None = None,
+    user_id: str,
 ) -> PipelineResult:
     """Execute the analysis pipeline.
 
@@ -66,6 +53,7 @@ async def run_pipeline(
         strategy_id: Optional strategy UUID for discovery screening.
         manual_tickers: Optional list of ticker symbols.
         user_prompt: Optional free-form prompt for Perplexity screening.
+        user_id: User UUID for multi-tenant data isolation.
 
     Returns:
         Completed PipelineResult with screening and sentiment data.
@@ -79,7 +67,7 @@ async def run_pipeline(
 
     config: StrategyConfig | None = None
     if strategy_id:
-        config = await get_strategy(strategy_id)
+        config = await get_strategy(strategy_id, user_id)
         if not config:
             raise ValueError(f"Strategy '{strategy_id}' not found")
 
@@ -90,17 +78,21 @@ async def run_pipeline(
         mode=mode,
         input_tickers=manual_tickers or [],
     )
-    _active_runs[run_id] = result
 
-    db = await get_db()
-    await db.execute(
+    pool = await get_db()
+    await pool.execute(
         """
-        INSERT INTO pipeline_runs (id, strategy_id, mode, manual_tickers, status, started_at)
-        VALUES (?, ?, ?, ?, 'running', ?)
+        INSERT INTO pipeline_runs
+        (id, user_id, strategy_id, mode, manual_tickers, status, started_at)
+        VALUES ($1, $2, $3, $4, $5, 'running', $6)
         """,
-        (run_id, strategy_id, mode, json.dumps(manual_tickers or []), result.timestamp.isoformat()),
+        run_id,
+        user_id,
+        strategy_id,
+        mode,
+        json.dumps(manual_tickers or []),
+        result.timestamp.isoformat(),
     )
-    await db.commit()
 
     screening = None
     stage_metadata: dict = {}
@@ -179,7 +171,11 @@ async def run_pipeline(
         ticker_symbols = [t.ticker for t in screening.tickers]
         try:
             charts, claude_metadata_list = await run_chart_analysis(
-                ticker_symbols, effective_config, result.sentiment_analyses, run_id,
+                ticker_symbols,
+                effective_config,
+                result.sentiment_analyses,
+                run_id,
+                user_id,
             )
             result.chart_analyses = charts
             for cm in claude_metadata_list:
@@ -218,7 +214,7 @@ async def run_pipeline(
             result.recommendations = recommendations
             for gm in gpt_metadata_list:
                 await _save_stage_output(run_id, gm)
-            await _save_recommendations(run_id, recommendations)
+            await _save_recommendations(run_id, recommendations, user_id)
         except Exception as exc:
             result.stage_errors.append(
                 {
@@ -242,25 +238,27 @@ async def run_pipeline(
         "gpt_judge": get_judge_hash(),
     }
 
-    has_data = screening or result.sentiment_analyses or result.chart_analyses or result.recommendations
+    has_data = (
+        screening
+        or result.sentiment_analyses
+        or result.chart_analyses
+        or result.recommendations
+    )
     status = "completed" if has_data else ("partial" if result.stage_errors else "failed")
-    await db.execute(
+    await pool.execute(
         """
         UPDATE pipeline_runs
-        SET status = ?, completed_at = ?, duration_seconds = ?,
-            prompt_versions = ?, stage_errors = ?
-        WHERE id = ?
+        SET status = $1, completed_at = $2, duration_seconds = $3,
+            prompt_versions = $4, stage_errors = $5
+        WHERE id = $6
         """,
-        (
-            status,
-            datetime.now(tz=UTC).isoformat(),
-            result.total_duration_seconds,
-            json.dumps(result.prompt_versions),
-            json.dumps(result.stage_errors) if result.stage_errors else None,
-            run_id,
-        ),
+        status,
+        datetime.now(tz=UTC).isoformat(),
+        result.total_duration_seconds,
+        json.dumps(result.prompt_versions),
+        json.dumps(result.stage_errors) if result.stage_errors else None,
+        run_id,
     )
-    await db.commit()
 
     return result
 
@@ -270,65 +268,68 @@ async def _save_stage_output(run_id: str, metadata: dict) -> None:
     if not metadata:
         return
 
-    db = await get_db()
-    await db.execute(
+    pool = await get_db()
+    await pool.execute(
         """
         INSERT INTO stage_outputs (
             id, run_id, stage, prompt_text, raw_response, model_used,
             duration_ms, status, retry_count, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, $9)
         """,
-        (
-            uuid.uuid4().hex,
-            run_id,
-            metadata.get("stage", "perplexity"),
-            metadata.get("prompt_text", ""),
-            metadata.get("raw_response", ""),
-            metadata.get("model", ""),
-            metadata.get("duration_ms", 0),
-            metadata.get("status", "unknown"),
-            datetime.now(tz=UTC).isoformat(),
-        ),
+        uuid.uuid4().hex,
+        run_id,
+        metadata.get("stage", "perplexity"),
+        metadata.get("prompt_text", ""),
+        metadata.get("raw_response", ""),
+        metadata.get("model", ""),
+        metadata.get("duration_ms", 0),
+        metadata.get("status", "unknown"),
+        datetime.now(tz=UTC).isoformat(),
     )
-    await db.commit()
 
 
-async def _save_recommendations(run_id: str, recommendations: list[Recommendation]) -> None:
-    """Persist validated recommendations to the recommendations table."""
+async def _save_recommendations(
+    run_id: str, recommendations: list[Recommendation], user_id: str
+) -> None:
+    """Persist validated recommendations to the recommendations table.
+
+    Args:
+        run_id: Pipeline run UUID.
+        recommendations: List of validated recommendation objects.
+        user_id: User UUID for multi-tenant data isolation.
+    """
     if not recommendations:
         return
 
-    db = await get_db()
+    pool = await get_db()
     for rec in recommendations:
-        await db.execute(
+        await pool.execute(
             """
             INSERT INTO recommendations (
-                id, run_id, ticker, action, confidence, entry_price,
+                id, run_id, user_id, ticker, action, confidence, entry_price,
                 stop_loss, take_profit, position_size_pct, risk_reward_ratio,
                 holding_period, bull_case, bear_case, judge_reasoning,
                 key_factors, warnings
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
             """,
-            (
-                uuid.uuid4().hex,
-                run_id,
-                rec.ticker,
-                rec.action,
-                rec.confidence,
-                rec.entry_price,
-                rec.stop_loss,
-                rec.take_profit,
-                rec.position_size_pct,
-                rec.risk_reward_ratio,
-                rec.holding_period,
-                rec.bull_case.model_dump_json() if rec.bull_case else "{}",
-                rec.bear_case.model_dump_json() if rec.bear_case else "{}",
-                rec.judge_reasoning,
-                json.dumps(rec.key_factors),
-                json.dumps(rec.warnings) if rec.warnings else None,
-            ),
+            uuid.uuid4().hex,
+            run_id,
+            user_id,
+            rec.ticker,
+            rec.action,
+            rec.confidence,
+            rec.entry_price,
+            rec.stop_loss,
+            rec.take_profit,
+            rec.position_size_pct,
+            rec.risk_reward_ratio,
+            rec.holding_period,
+            rec.bull_case.model_dump_json() if rec.bull_case else "{}",
+            rec.bear_case.model_dump_json() if rec.bear_case else "{}",
+            rec.judge_reasoning,
+            json.dumps(rec.key_factors),
+            json.dumps(rec.warnings) if rec.warnings else None,
         )
-    await db.commit()
     logger.info("Saved %d recommendations for run %s", len(recommendations), run_id)
 
 

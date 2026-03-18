@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+import asyncpg
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-import aiosqlite
-
 from database.connection import get_db
-from pipeline.orchestrator import get_run_status, run_pipeline
+from middleware.auth import CurrentUser
+from pipeline.orchestrator import run_pipeline
 from pipeline.schemas import (
     ChartAnalysis,
     DebateCase,
@@ -42,7 +42,7 @@ class PipelineRunResponse(BaseModel):
 @router.post("/run", response_model=PipelineRunResponse)
 async def trigger_pipeline_run(
     request: PipelineRunRequest,
-    background_tasks: BackgroundTasks,
+    user_id: CurrentUser,
 ) -> PipelineRunResponse:
     """Trigger a new pipeline analysis run.
 
@@ -62,31 +62,30 @@ async def trigger_pipeline_run(
         strategy_id=request.strategy_id,
         manual_tickers=tickers,
         user_prompt=user_prompt,
+        user_id=user_id,
     )
     return PipelineRunResponse(run_id=result.run_id, status="completed")
 
 
 @router.get("/status/{run_id}", response_model=PipelineResult | None)
-async def get_pipeline_status(run_id: str) -> PipelineResult | None:
-    """Poll the status of a pipeline run.
+async def get_pipeline_status(run_id: str, user_id: CurrentUser) -> PipelineResult | None:
+    """Get the status and full result of a pipeline run.
 
-    Returns the current PipelineResult if the run is in memory,
-    otherwise fetches from the database.
+    Fetches from the database. Returns 404 if not found or not owned by user.
     """
-    result = get_run_status(run_id)
-    if result:
-        return result
-
-    db = await get_db()
-    cursor = await db.execute("SELECT * FROM pipeline_runs WHERE id = ?", (run_id,))
-    row = await cursor.fetchone()
+    pool = await get_db()
+    row = await pool.fetchrow(
+        "SELECT * FROM pipeline_runs WHERE id = $1 AND user_id = $2",
+        run_id,
+        user_id,
+    )
     if not row:
         raise HTTPException(status_code=404, detail=f"Pipeline run '{run_id}' not found")
 
-    recs = await _load_recommendations(db, run_id)
-    screening = await _load_screening(db, run_id)
-    sentiments = await _load_sentiment_analyses(db, run_id)
-    charts = await _load_chart_analyses(db, run_id)
+    recs = await _load_recommendations(pool, run_id)
+    screening = await _load_screening(pool, run_id)
+    sentiments = await _load_sentiment_analyses(pool, run_id)
+    charts = await _load_chart_analyses(pool, run_id)
 
     return PipelineResult(
         run_id=row["id"],
@@ -116,24 +115,23 @@ class PipelineRunSummary(BaseModel):
 
 
 @router.get("/runs", response_model=list[PipelineRunSummary])
-async def list_pipeline_runs() -> list[PipelineRunSummary]:
+async def list_pipeline_runs(user_id: CurrentUser) -> list[PipelineRunSummary]:
     """List all past pipeline runs, most recent first."""
-    db = await get_db()
-    cursor = await db.execute(
+    pool = await get_db()
+    rows = await pool.fetch(
         "SELECT id, strategy_id, mode, status, started_at, duration_seconds, manual_tickers "
-        "FROM pipeline_runs ORDER BY started_at DESC LIMIT 100"
+        "FROM pipeline_runs WHERE user_id = $1 ORDER BY started_at DESC LIMIT 100",
+        user_id,
     )
-    rows = await cursor.fetchall()
 
     summaries: list[PipelineRunSummary] = []
     for r in rows:
         manual = json.loads(r["manual_tickers"]) if r["manual_tickers"] else []
 
-        rec_cursor = await db.execute(
-            "SELECT DISTINCT ticker FROM recommendations WHERE run_id = ?",
-            (r["id"],),
+        rec_rows = await pool.fetch(
+            "SELECT DISTINCT ticker FROM recommendations WHERE run_id = $1",
+            r["id"],
         )
-        rec_rows = await rec_cursor.fetchall()
         discovered = [rr["ticker"] for rr in rec_rows]
 
         all_tickers = list(dict.fromkeys(manual + discovered))
@@ -144,7 +142,7 @@ async def list_pipeline_runs() -> list[PipelineRunSummary]:
                 strategy_id=r["strategy_id"],
                 mode=r["mode"],
                 status=r["status"],
-                started_at=r["started_at"],
+                started_at=str(r["started_at"]),
                 duration_seconds=r["duration_seconds"],
                 tickers=all_tickers,
             )
@@ -153,21 +151,20 @@ async def list_pipeline_runs() -> list[PipelineRunSummary]:
 
 
 @router.get("/runs/{run_id}", response_model=PipelineResult | None)
-async def get_pipeline_run(run_id: str) -> PipelineResult | None:
+async def get_pipeline_run(run_id: str, user_id: CurrentUser) -> PipelineResult | None:
     """Get full pipeline result for a specific run."""
-    return await get_pipeline_status(run_id)
+    return await get_pipeline_status(run_id, user_id)
 
 
 async def _load_recommendations(
-    db: aiosqlite.Connection,
+    pool: asyncpg.Pool,
     run_id: str,
 ) -> list[Recommendation]:
     """Load saved recommendations for a pipeline run from the database."""
-    cursor = await db.execute(
-        "SELECT * FROM recommendations WHERE run_id = ? ORDER BY confidence DESC",
-        (run_id,),
+    rows = await pool.fetch(
+        "SELECT * FROM recommendations WHERE run_id = $1 ORDER BY confidence DESC",
+        run_id,
     )
-    rows = await cursor.fetchall()
     recs: list[Recommendation] = []
     for r in rows:
         bull = None
@@ -205,26 +202,24 @@ async def _load_recommendations(
 
 
 async def _load_screening(
-    db: aiosqlite.Connection,
+    pool: asyncpg.Pool,
     run_id: str,
 ) -> ScreeningResult | None:
     """Reconstruct a ScreeningResult from saved stage output and recommendations."""
-    cursor = await db.execute(
-        "SELECT raw_response FROM stage_outputs WHERE run_id = ? AND stage = 'perplexity' LIMIT 1",
-        (run_id,),
+    row = await pool.fetchrow(
+        "SELECT raw_response FROM stage_outputs WHERE run_id = $1 AND stage = 'perplexity' LIMIT 1",
+        run_id,
     )
-    row = await cursor.fetchone()
     if row and row["raw_response"]:
         try:
             return ScreeningResult.model_validate_json(row["raw_response"])
         except Exception:
             pass
 
-    rec_cursor = await db.execute(
-        "SELECT DISTINCT ticker FROM recommendations WHERE run_id = ?",
-        (run_id,),
+    rec_rows = await pool.fetch(
+        "SELECT DISTINCT ticker FROM recommendations WHERE run_id = $1",
+        run_id,
     )
-    rec_rows = await rec_cursor.fetchall()
     if not rec_rows:
         return None
 
@@ -237,15 +232,15 @@ async def _load_screening(
 
 
 async def _load_sentiment_analyses(
-    db: aiosqlite.Connection,
+    pool: asyncpg.Pool,
     run_id: str,
 ) -> list[SentimentAnalysis]:
     """Load saved Gemini sentiment analyses for a pipeline run."""
-    cursor = await db.execute(
-        "SELECT raw_response FROM stage_outputs WHERE run_id = ? AND stage = 'gemini' AND status = 'success'",
-        (run_id,),
+    rows = await pool.fetch(
+        "SELECT raw_response FROM stage_outputs "
+        "WHERE run_id = $1 AND stage = 'gemini' AND status = 'success'",
+        run_id,
     )
-    rows = await cursor.fetchall()
     sentiments: list[SentimentAnalysis] = []
     for r in rows:
         if r["raw_response"]:
@@ -257,15 +252,15 @@ async def _load_sentiment_analyses(
 
 
 async def _load_chart_analyses(
-    db: aiosqlite.Connection,
+    pool: asyncpg.Pool,
     run_id: str,
 ) -> list[ChartAnalysis]:
     """Load saved Claude chart analyses for a pipeline run."""
-    cursor = await db.execute(
-        "SELECT raw_response FROM stage_outputs WHERE run_id = ? AND stage = 'claude' AND status = 'success'",
-        (run_id,),
+    rows = await pool.fetch(
+        "SELECT raw_response FROM stage_outputs "
+        "WHERE run_id = $1 AND stage = 'claude' AND status = 'success'",
+        run_id,
     )
-    rows = await cursor.fetchall()
     charts: list[ChartAnalysis] = []
     for r in rows:
         if r["raw_response"]:
