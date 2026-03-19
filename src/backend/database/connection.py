@@ -1,112 +1,56 @@
-"""Async PostgreSQL database connection management using asyncpg."""
+"""Supabase async client management for database operations.
+
+Replaces the previous asyncpg connection pool with the Supabase Python
+client, which connects via PostgREST (HTTPS) instead of the PostgreSQL
+wire protocol. This eliminates all IPv6/pooler/DNS connectivity issues
+when deploying to Railway.
+"""
 
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
-import asyncpg
+from supabase import AsyncClient, create_async_client
 
 from config import settings
 
 logger = logging.getLogger(__name__)
 
-_pool: asyncpg.Pool | None = None
-
-MIGRATIONS_DIR = Path(__file__).parent / "migrations"
+_client: AsyncClient | None = None
 
 
-async def get_db() -> asyncpg.Pool:
-    """Get the database connection pool.
+async def get_db() -> AsyncClient:
+    """Get the Supabase async client singleton.
 
     Returns:
-        The asyncpg connection pool.
+        The initialized Supabase AsyncClient.
 
     Raises:
         RuntimeError: If database not initialized.
     """
-    if _pool is None:
+    if _client is None:
         raise RuntimeError("Database not initialized. Call init_db() first.")
-    return _pool
+    return _client
 
 
 async def init_db() -> None:
-    """Initialize the database connection pool and run migrations.
+    """Initialize the Supabase async client.
 
-    Creates a connection pool with min_size=2, max_size=10.
-    Runs all pending migrations from the migrations directory.
+    Uses SUPABASE_URL and SUPABASE_SERVICE_KEY from settings. The service
+    key bypasses Row Level Security, which is appropriate for the backend.
     """
-    global _pool
-    logger.info("Creating database connection pool for %s", settings.database_url)
-    _pool = await asyncpg.create_pool(
-        settings.database_url,
-        min_size=2,
-        max_size=10,
+    global _client
+    logger.info("Initializing Supabase client for %s", settings.supabase_url)
+    _client = await create_async_client(
+        settings.supabase_url,
+        settings.supabase_service_key,
     )
-    await _run_migrations(_pool)
+    logger.info("Supabase client initialized successfully.")
 
 
 async def close_db() -> None:
-    """Close the database connection pool."""
-    global _pool
-    if _pool is not None:
-        await _pool.close()
-        _pool = None
-        logger.info("Database connection pool closed.")
-
-
-async def _run_migrations(pool: asyncpg.Pool) -> None:
-    """Run pending database migrations.
-
-    Creates a schema_migrations table if it doesn't exist, checks which
-    migrations have already been applied, and runs only new migrations.
-
-    Args:
-        pool: The asyncpg connection pool.
-    """
-    async with pool.acquire() as conn:
-        # Create schema_migrations table if not exists
-        await conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS schema_migrations (
-                name TEXT PRIMARY KEY,
-                applied_at TIMESTAMPTZ DEFAULT NOW()
-            )
-            """
-        )
-
-        # Get list of applied migrations
-        applied = await conn.fetch("SELECT name FROM schema_migrations")
-        applied_names = {row["name"] for row in applied}
-
-        # Get all migration files
-        migration_files = sorted(MIGRATIONS_DIR.glob("*.sql"))
-
-        for migration in migration_files:
-            migration_name = migration.name
-
-            # Skip if already applied
-            if migration_name in applied_names:
-                logger.debug("Skipping already applied migration: %s", migration_name)
-                continue
-
-            logger.info("Running migration: %s", migration_name)
-
-            # Read migration file
-            sql = migration.read_text(encoding="utf-8")
-
-            # Split on semicolons and execute each statement
-            # asyncpg doesn't have executescript, so we split manually
-            statements = [stmt.strip() for stmt in sql.split(";") if stmt.strip()]
-
-            async with conn.transaction():
-                for stmt in statements:
-                    await conn.execute(stmt)
-
-                # Record migration as applied
-                await conn.execute(
-                    "INSERT INTO schema_migrations (name) VALUES ($1)",
-                    migration_name,
-                )
-
-            logger.info("Migration completed: %s", migration_name)
+    """Release the Supabase client reference."""
+    global _client
+    if _client is not None:
+        _client = None
+        logger.info("Supabase client released.")

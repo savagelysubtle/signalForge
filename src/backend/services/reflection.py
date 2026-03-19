@@ -26,13 +26,19 @@ async def load_reflection_context() -> str:
         The injection prompt text, or empty string if no reflections exist.
     """
     try:
-        pool = await get_db()
-        row = await pool.fetchrow(
-            "SELECT injection_prompt FROM reflections ORDER BY generated_at DESC LIMIT 1"
+        client = await get_db()
+        response = await (
+            client.table("reflections")
+            .select("injection_prompt")
+            .order("generated_at", desc=True)
+            .limit(1)
+            .maybe_single()
+            .execute()
         )
-        if row and row["injection_prompt"]:
-            logger.info("Loaded reflection context (%d chars)", len(row["injection_prompt"]))
-            return row["injection_prompt"]
+        if response.data and response.data.get("injection_prompt"):
+            prompt = response.data["injection_prompt"]
+            logger.info("Loaded reflection context (%d chars)", len(prompt))
+            return prompt
     except Exception:
         logger.exception("Failed to load reflection context")
 

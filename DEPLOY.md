@@ -42,20 +42,11 @@ Email/password auth is enabled by default -- no extra configuration needed.
 2. Choose **Deploy from GitHub repo** and select `signalForge`
 3. Railway will auto-detect the `Dockerfile` at the project root
 
-### Enable IPv6 (Required for Supabase)
-
-Supabase direct database connections use IPv6. Railway blocks IPv6 by default.
-
-1. Go to https://railway.com/account/feature-flags
-2. Enable **IPv6 outbound**
-3. Redeploy after enabling
-
 ### Set Environment Variables
 
 In the Railway service settings, go to **Variables** and add:
 
 ```
-DATABASE_URL=postgresql://postgres:<password>@db.<project-ref>.supabase.co:5432/postgres
 ENVIRONMENT=production
 PERPLEXITY_API_KEY=<your key>
 ANTHROPIC_API_KEY=<your key>
@@ -70,7 +61,7 @@ ALLOWED_ORIGINS=https://your-app.vercel.app
 ```
 
 Notes:
-- `DATABASE_URL` points to Supabase PostgreSQL (not a Railway addon)
+- No `DATABASE_URL` needed -- the backend connects to Supabase via its REST API using `SUPABASE_URL` + `SUPABASE_SERVICE_KEY`
 - `PORT` is set automatically by Railway
 - Set `ALLOWED_ORIGINS` to your Vercel domain (update after Vercel deploy)
 

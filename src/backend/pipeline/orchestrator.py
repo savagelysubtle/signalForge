@@ -79,20 +79,18 @@ async def run_pipeline(
         input_tickers=manual_tickers or [],
     )
 
-    pool = await get_db()
-    await pool.execute(
-        """
-        INSERT INTO pipeline_runs
-        (id, user_id, strategy_id, mode, manual_tickers, status, started_at)
-        VALUES ($1, $2, $3, $4, $5, 'running', $6)
-        """,
-        run_id,
-        user_id,
-        strategy_id,
-        mode,
-        json.dumps(manual_tickers or []),
-        result.timestamp.isoformat(),
-    )
+    client = await get_db()
+    await client.table("pipeline_runs").insert(
+        {
+            "id": run_id,
+            "user_id": user_id,
+            "strategy_id": strategy_id,
+            "mode": mode,
+            "manual_tickers": json.dumps(manual_tickers or []),
+            "status": "running",
+            "started_at": result.timestamp.isoformat(),
+        }
+    ).execute()
 
     screening = None
     stage_metadata: dict = {}
@@ -136,9 +134,7 @@ async def run_pipeline(
 
     await _save_stage_output(run_id, stage_metadata)
 
-    # ------------------------------------------------------------------
-    # Stage 2: Gemini news sentiment (runs after Perplexity)
-    # ------------------------------------------------------------------
+    # Stage 2: Gemini news sentiment
     effective_config = config or StrategyConfig(id="default", name="default", screening_prompt="")
 
     if screening and screening.tickers:
@@ -158,9 +154,7 @@ async def run_pipeline(
             )
             logger.exception("Pipeline Gemini stage failed")
 
-    # ------------------------------------------------------------------
-    # Stage 3: Claude chart analysis (with news context from Gemini)
-    # ------------------------------------------------------------------
+    # Stage 3: Claude chart analysis
     if screening and screening.tickers:
         ticker_symbols = [t.ticker for t in screening.tickers]
         try:
@@ -184,9 +178,7 @@ async def run_pipeline(
             )
             logger.exception("Pipeline Claude stage failed")
 
-    # ------------------------------------------------------------------
     # Stage 4: GPT debate / synthesis
-    # ------------------------------------------------------------------
     ticker_symbols = (
         [t.ticker for t in screening.tickers]
         if screening and screening.tickers
@@ -236,20 +228,15 @@ async def run_pipeline(
         screening or result.sentiment_analyses or result.chart_analyses or result.recommendations
     )
     status = "completed" if has_data else ("partial" if result.stage_errors else "failed")
-    await pool.execute(
-        """
-        UPDATE pipeline_runs
-        SET status = $1, completed_at = $2, duration_seconds = $3,
-            prompt_versions = $4, stage_errors = $5
-        WHERE id = $6
-        """,
-        status,
-        datetime.now(tz=UTC).isoformat(),
-        result.total_duration_seconds,
-        json.dumps(result.prompt_versions),
-        json.dumps(result.stage_errors) if result.stage_errors else None,
-        run_id,
-    )
+    await client.table("pipeline_runs").update(
+        {
+            "status": status,
+            "completed_at": datetime.now(tz=UTC).isoformat(),
+            "duration_seconds": result.total_duration_seconds,
+            "prompt_versions": json.dumps(result.prompt_versions),
+            "stage_errors": json.dumps(result.stage_errors) if result.stage_errors else None,
+        }
+    ).eq("id", run_id).execute()
 
     return result
 
@@ -259,68 +246,54 @@ async def _save_stage_output(run_id: str, metadata: dict) -> None:
     if not metadata:
         return
 
-    pool = await get_db()
-    await pool.execute(
-        """
-        INSERT INTO stage_outputs (
-            id, run_id, stage, prompt_text, raw_response, model_used,
-            duration_ms, status, retry_count, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, $9)
-        """,
-        uuid.uuid4().hex,
-        run_id,
-        metadata.get("stage", "perplexity"),
-        metadata.get("prompt_text", ""),
-        metadata.get("raw_response", ""),
-        metadata.get("model", ""),
-        metadata.get("duration_ms", 0),
-        metadata.get("status", "unknown"),
-        datetime.now(tz=UTC).isoformat(),
-    )
+    client = await get_db()
+    await client.table("stage_outputs").insert(
+        {
+            "id": uuid.uuid4().hex,
+            "run_id": run_id,
+            "stage": metadata.get("stage", "perplexity"),
+            "prompt_text": metadata.get("prompt_text", ""),
+            "raw_response": metadata.get("raw_response", ""),
+            "model_used": metadata.get("model", ""),
+            "duration_ms": metadata.get("duration_ms", 0),
+            "status": metadata.get("status", "unknown"),
+            "retry_count": 0,
+            "created_at": datetime.now(tz=UTC).isoformat(),
+        }
+    ).execute()
 
 
 async def _save_recommendations(
     run_id: str, recommendations: list[Recommendation], user_id: str
 ) -> None:
-    """Persist validated recommendations to the recommendations table.
-
-    Args:
-        run_id: Pipeline run UUID.
-        recommendations: List of validated recommendation objects.
-        user_id: User UUID for multi-tenant data isolation.
-    """
+    """Persist validated recommendations to the recommendations table."""
     if not recommendations:
         return
 
-    pool = await get_db()
-    for rec in recommendations:
-        await pool.execute(
-            """
-            INSERT INTO recommendations (
-                id, run_id, user_id, ticker, action, confidence, entry_price,
-                stop_loss, take_profit, position_size_pct, risk_reward_ratio,
-                holding_period, bull_case, bear_case, judge_reasoning,
-                key_factors, warnings
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
-            """,
-            uuid.uuid4().hex,
-            run_id,
-            user_id,
-            rec.ticker,
-            rec.action,
-            rec.confidence,
-            rec.entry_price,
-            rec.stop_loss,
-            rec.take_profit,
-            rec.position_size_pct,
-            rec.risk_reward_ratio,
-            rec.holding_period,
-            rec.bull_case.model_dump_json() if rec.bull_case else "{}",
-            rec.bear_case.model_dump_json() if rec.bear_case else "{}",
-            rec.judge_reasoning,
-            json.dumps(rec.key_factors),
-            json.dumps(rec.warnings) if rec.warnings else None,
-        )
+    client = await get_db()
+    rows = [
+        {
+            "id": uuid.uuid4().hex,
+            "run_id": run_id,
+            "user_id": user_id,
+            "ticker": rec.ticker,
+            "action": rec.action,
+            "confidence": rec.confidence,
+            "entry_price": rec.entry_price,
+            "stop_loss": rec.stop_loss,
+            "take_profit": rec.take_profit,
+            "position_size_pct": rec.position_size_pct,
+            "risk_reward_ratio": rec.risk_reward_ratio,
+            "holding_period": rec.holding_period,
+            "bull_case": rec.bull_case.model_dump_json() if rec.bull_case else "{}",
+            "bear_case": rec.bear_case.model_dump_json() if rec.bear_case else "{}",
+            "judge_reasoning": rec.judge_reasoning,
+            "key_factors": json.dumps(rec.key_factors),
+            "warnings": json.dumps(rec.warnings) if rec.warnings else None,
+        }
+        for rec in recommendations
+    ]
+    await client.table("recommendations").insert(rows).execute()
     logger.info("Saved %d recommendations for run %s", len(recommendations), run_id)
 
 
@@ -329,12 +302,7 @@ def _determine_mode(
     manual_tickers: list[str] | None,
     user_prompt: str | None = None,
 ) -> Literal["discovery", "analysis", "combined", "prompt"]:
-    """Determine pipeline mode from inputs.
-
-    A user_prompt takes priority — when provided the pipeline uses
-    Perplexity to find stocks based on the free-form prompt (optionally
-    augmented by a selected strategy's configuration).
-    """
+    """Determine pipeline mode from inputs."""
     has_strategy = strategy_id is not None
     has_tickers = bool(manual_tickers)
     has_prompt = bool(user_prompt)

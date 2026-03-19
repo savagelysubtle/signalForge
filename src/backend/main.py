@@ -62,10 +62,6 @@ logger = logging.getLogger(__name__)
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Manage startup and shutdown lifecycle events."""
     load_env()
-    if settings.environment == "development" and not settings.database_url:
-        from config import paths
-
-        paths.ensure_directories()
     await init_db()
     await ensure_defaults()
     yield
@@ -100,8 +96,9 @@ async def health_check() -> dict[str, str]:
     database is unreachable. Railway uses this for zero-downtime deploys.
     """
     try:
-        pool = await get_db()
-        await pool.fetchval("SELECT 1")
+        client = await get_db()
+        response = await client.table("strategies").select("id").limit(1).execute()
+        _ = response.data
         return {"status": "ok", "version": APP_VERSION}
     except Exception:
         logger.warning("Health check: database unreachable")
