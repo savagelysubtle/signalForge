@@ -15,8 +15,16 @@ import os
 from pathlib import Path
 from typing import Literal
 
+from dotenv import load_dotenv
 from platformdirs import user_data_dir
 from pydantic import BaseModel, Field
+
+# Load .env before settings are created so env vars are available at import time.
+_env_candidates = [Path.cwd() / ".env", Path(__file__).resolve().parents[2] / ".env"]
+for _env_path in _env_candidates:
+    if _env_path.exists():
+        load_dotenv(_env_path, override=True)
+        break
 
 APP_NAME = "SignalForge"
 APP_VERSION = "0.1.0"

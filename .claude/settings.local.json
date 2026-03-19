@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git pull:*)",
+      "Bash(git stash:*)",
+      "Bash(git checkout:*)",
+      "Bash(git restore:*)",
+      "Read(//c/Users/nseni/Downloads/**)",
+      "Bash(ls:*)",
+      "Bash(uv run:*)",
+      "Bash(uv pip:*)",
+      "Bash(taskkill //F //IM uvicorn.exe)",
+      "Bash(taskkill //F //IM python.exe)",
+      "Bash(tasklist)",
+      "Bash(taskkill //F //PID 26848)",
+      "Bash(taskkill //F //IM python3.14t.exe)",
+      "Bash(git config:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}
