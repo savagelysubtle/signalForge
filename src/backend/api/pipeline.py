@@ -42,22 +42,22 @@ class PipelineRunResponse(BaseModel):
 @router.post("/run", response_model=PipelineRunResponse)
 @limiter.limit("5/minute")
 async def trigger_pipeline_run(
-    request: PipelineRunRequest,
+    request: Request,
+    body: PipelineRunRequest,
     user_id: CurrentUser,
-    _rate_limit_request: Request = None,
 ) -> PipelineRunResponse:
     """Trigger a new pipeline analysis run."""
-    if not request.strategy_id and not request.manual_tickers and not request.user_prompt:
+    if not body.strategy_id and not body.manual_tickers and not body.user_prompt:
         raise HTTPException(
             status_code=400,
             detail="Provide a strategy, tickers, or a prompt",
         )
 
-    tickers = request.manual_tickers if request.manual_tickers else None
-    user_prompt = request.user_prompt.strip() if request.user_prompt else None
+    tickers = body.manual_tickers if body.manual_tickers else None
+    user_prompt = body.user_prompt.strip() if body.user_prompt else None
 
     result = await run_pipeline(
-        strategy_id=request.strategy_id,
+        strategy_id=body.strategy_id,
         manual_tickers=tickers,
         user_prompt=user_prompt,
         user_id=user_id,
