@@ -243,6 +243,35 @@ Vercel (frontend) ──JWT──→ Railway (FastAPI backend) ──SQL──�
 
 ---
 
+## Git Workflow
+
+**Branch model:** `main` is production (auto-deploys to Railway). `dev` is the integration branch. All work happens on feature branches off `dev`.
+
+- **`main`** — Protected. Requires a PR with 1 approving review. No direct pushes, no force pushes, no deletions. Merging to `main` triggers Railway deployment.
+- **`dev`** — Integration branch. Feature branches merge here via PR. Test and stabilize before promoting to `main`.
+- **Feature branches** — Named `feature/<short-description>` (e.g. `feature/chart-improvements`). Branch off `dev`, PR back into `dev`.
+
+```bash
+# Start new work
+git checkout dev
+git pull origin dev
+git checkout -b feature/my-feature
+
+# When done, push and open PR into dev
+git push -u origin feature/my-feature
+# Then open PR: base=dev, compare=feature/my-feature
+
+# To promote dev to production
+# Open PR: base=main, compare=dev (requires 1 approval)
+```
+
+**Rules for AI agents:**
+- NEVER push directly to `main`. Always use PRs.
+- ALWAYS branch from `dev` for new work, not from `main`.
+- When committing, commit to the current feature branch or `dev` — never to `main`.
+
+---
+
 ## Development Workflow
 
 ```bash
