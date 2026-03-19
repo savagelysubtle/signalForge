@@ -2,6 +2,9 @@
 
 Provides a dependency function that extracts and validates JWT tokens from
 the Authorization header, returning the authenticated user ID.
+
+Supabase uses ES256 (ECDSA) JWTs. Verification keys are fetched from the
+project's JWKS endpoint and cached automatically by PyJWKClient.
 """
 
 from __future__ import annotations
@@ -10,21 +13,31 @@ import logging
 from typing import Annotated
 
 import jwt
+from jwt import PyJWKClient
 from fastapi import Depends, Header, HTTPException
 
 from config import settings
 
 logger = logging.getLogger(__name__)
 
+_jwks_client: PyJWKClient | None = None
+
+
+def _get_jwks_client() -> PyJWKClient:
+    """Return a cached PyJWKClient for the Supabase JWKS endpoint."""
+    global _jwks_client
+    if _jwks_client is None:
+        jwks_url = f"{settings.supabase_url}/auth/v1/.well-known/jwks.json"
+        _jwks_client = PyJWKClient(jwks_url, cache_keys=True, lifespan=3600)
+        logger.info("JWKS client initialized for %s", jwks_url)
+    return _jwks_client
+
 
 async def get_current_user(authorization: Annotated[str | None, Header()] = None) -> str:
     """Extract and validate JWT token from Authorization header.
 
-    This dependency function reads the Bearer token from the Authorization header,
-    decodes it using the Supabase JWT secret, and returns the user ID (sub claim).
-
-    In development mode (when SUPABASE_JWT_SECRET is empty), returns a hardcoded
-    dev user ID and logs a warning.
+    Decodes the Bearer token using Supabase's JWKS endpoint (ES256).
+    Falls back to a dev user ID when SUPABASE_URL is not configured.
 
     Args:
         authorization: Authorization header value (injected by FastAPI).
@@ -34,39 +47,30 @@ async def get_current_user(authorization: Annotated[str | None, Header()] = None
 
     Raises:
         HTTPException: 401 if token is missing, invalid, or expired.
-
-    Example:
-        ```python
-        @app.get("/protected")
-        async def protected_route(user_id: CurrentUser):
-            return {"user_id": user_id}
-        ```
     """
-    # Development mode fallback
-    if not settings.supabase_jwt_secret:
+    if not settings.supabase_url:
         logger.warning(
-            "SUPABASE_JWT_SECRET not configured — using dev user ID. "
+            "SUPABASE_URL not configured — using dev user ID. "
             "This should NEVER happen in production!"
         )
         return "dev-user-local"
 
-    # Check for Authorization header
     if not authorization:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    # Extract Bearer token
     parts = authorization.split()
     if len(parts) != 2 or parts[0].lower() != "bearer":
         raise HTTPException(status_code=401, detail="Invalid authorization header format")
 
     token = parts[1]
 
-    # Decode and validate JWT
     try:
+        jwks_client = _get_jwks_client()
+        signing_key = jwks_client.get_signing_key_from_jwt(token)
         payload = jwt.decode(
             token,
-            settings.supabase_jwt_secret,
-            algorithms=["HS256"],
+            signing_key.key,
+            algorithms=["ES256"],
             audience="authenticated",
         )
         user_id = payload.get("sub")
@@ -75,12 +79,12 @@ async def get_current_user(authorization: Annotated[str | None, Header()] = None
         return str(user_id)
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Invalid or expired token") from None
-    except jwt.InvalidTokenError:
+    except jwt.InvalidTokenError as exc:
+        logger.warning("JWT validation failed: %s", exc)
         raise HTTPException(status_code=401, detail="Invalid or expired token") from None
     except Exception:
         logger.exception("Unexpected error during JWT validation")
         raise HTTPException(status_code=401, detail="Invalid or expired token") from None
 
 
-# Type alias for easy use in route handlers
 CurrentUser = Annotated[str, Depends(get_current_user)]
