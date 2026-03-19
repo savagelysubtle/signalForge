@@ -247,20 +247,22 @@ async def _save_stage_output(run_id: str, metadata: dict) -> None:
         return
 
     client = await get_db()
-    await client.table("stage_outputs").insert(
-        {
-            "id": uuid.uuid4().hex,
-            "run_id": run_id,
-            "stage": metadata.get("stage", "perplexity"),
-            "prompt_text": metadata.get("prompt_text", ""),
-            "raw_response": metadata.get("raw_response", ""),
-            "model_used": metadata.get("model", ""),
-            "duration_ms": metadata.get("duration_ms", 0),
-            "status": metadata.get("status", "unknown"),
-            "retry_count": 0,
-            "created_at": datetime.now(tz=UTC).isoformat(),
-        }
-    ).execute()
+    row: dict = {
+        "id": uuid.uuid4().hex,
+        "run_id": run_id,
+        "stage": metadata.get("stage", "perplexity"),
+        "ticker": metadata.get("ticker"),
+        "prompt_text": metadata.get("prompt_text", ""),
+        "raw_response": metadata.get("raw_response", ""),
+        "model_used": metadata.get("model", ""),
+        "duration_ms": metadata.get("duration_ms", 0),
+        "status": metadata.get("status", "unknown"),
+        "retry_count": 0,
+        "created_at": datetime.now(tz=UTC).isoformat(),
+    }
+    if metadata.get("error"):
+        row["parsed_output"] = metadata["error"]
+    await client.table("stage_outputs").insert(row).execute()
 
 
 async def _save_recommendations(

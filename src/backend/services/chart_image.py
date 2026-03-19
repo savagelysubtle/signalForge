@@ -42,6 +42,42 @@ TIMEFRAME_MAP: dict[str, str] = {
     "M": "1M",
 }
 
+EXCHANGE_SUFFIX_MAP: dict[str, str] = {
+    ".TO": "TSX",
+    ".V": "TSXV",
+    ".L": "LSE",
+    ".AX": "ASX",
+    ".HK": "HKEX",
+    ".T": "TSE",
+    ".DE": "XETR",
+    ".PA": "EURONEXT",
+    ".AS": "EURONEXT",
+    ".MI": "MIL",
+    ".SW": "SIX",
+    ".SA": "BMFBOVESPA",
+    ".NS": "NSE",
+    ".BO": "BSE",
+    ".SS": "SSE",
+    ".SZ": "SZSE",
+    ".KS": "KRX",
+}
+
+
+def _to_tradingview_symbol(ticker: str) -> str:
+    """Convert Yahoo Finance ticker format to TradingView format.
+
+    Examples:
+        AC.TO  -> TSX:AC
+        RY.TO  -> TSX:RY
+        SHOP.V -> TSXV:SHOP
+        AAPL   -> AAPL  (unchanged)
+    """
+    for suffix, exchange in EXCHANGE_SUFFIX_MAP.items():
+        if ticker.endswith(suffix):
+            base = ticker[: -len(suffix)]
+            return f"{exchange}:{base}"
+    return ticker
+
 _supabase_client: Client | None = None
 
 
@@ -121,8 +157,10 @@ async def fetch_chart_image(
     interval = TIMEFRAME_MAP.get(timeframe, "1D")
     studies = _map_indicators(indicators)
 
+    tv_symbol = _to_tradingview_symbol(ticker)
+
     params: dict[str, str | int] = {
-        "symbol": ticker,
+        "symbol": tv_symbol,
         "interval": interval,
         "theme": "dark",
         "width": 800,
