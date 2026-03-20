@@ -96,6 +96,7 @@ def _to_tradingview_symbol(ticker: str) -> str:
             return f"{exchange}:{base}"
     return ticker
 
+
 _supabase_client: Client | None = None
 
 
@@ -250,36 +251,44 @@ def _build_drawings(
     drawings: list[dict] = []
 
     if entry_price is not None:
-        drawings.append({
-            "name": "Horizontal Line",
-            "input": {"price": entry_price},
-            "override": {"lineWidth": 2, "lineColor": "rgb(59,130,246)"},
-        })
+        drawings.append(
+            {
+                "name": "Horizontal Line",
+                "input": {"price": entry_price},
+                "override": {"lineWidth": 2, "lineColor": "rgb(59,130,246)"},
+            }
+        )
 
     if stop_loss is not None:
-        drawings.append({
-            "name": "Horizontal Line",
-            "input": {"price": stop_loss},
-            "override": {"lineWidth": 2, "lineColor": "rgb(239,68,68)"},
-        })
+        drawings.append(
+            {
+                "name": "Horizontal Line",
+                "input": {"price": stop_loss},
+                "override": {"lineWidth": 2, "lineColor": "rgb(239,68,68)"},
+            }
+        )
 
     if take_profit is not None:
-        drawings.append({
-            "name": "Horizontal Line",
-            "input": {"price": take_profit},
-            "override": {"lineWidth": 2, "lineColor": "rgb(34,197,94)"},
-        })
+        drawings.append(
+            {
+                "name": "Horizontal Line",
+                "input": {"price": take_profit},
+                "override": {"lineWidth": 2, "lineColor": "rgb(34,197,94)"},
+            }
+        )
 
     remaining = MAX_DRAWINGS - len(drawings)
     if remaining > 0:
         ranked = sorted(key_levels, key=lambda lv: STRENGTH_RANK.get(lv.strength, 9))
         for lv in ranked[:remaining]:
             color = "rgb(34,197,94)" if lv.level_type == "support" else "rgb(239,68,68)"
-            drawings.append({
-                "name": "Horizontal Line",
-                "input": {"price": lv.price},
-                "override": {"lineWidth": 1, "lineColor": color},
-            })
+            drawings.append(
+                {
+                    "name": "Horizontal Line",
+                    "input": {"price": lv.price},
+                    "override": {"lineWidth": 1, "lineColor": color},
+                }
+            )
 
     return drawings
 
@@ -320,13 +329,13 @@ async def fetch_annotated_chart(
     """
     api_key = get_api_key("chartimg")
     if not api_key:
-        raise RuntimeError(
-            "Chart-Img API key not configured. Set CHARTIMG_API_KEY in .env."
-        )
+        raise RuntimeError("Chart-Img API key not configured. Set CHARTIMG_API_KEY in .env.")
 
     drawings = _build_drawings(key_levels, entry_price, stop_loss, take_profit)
     if not drawings:
-        logger.info("No drawings to overlay for %s %s — skipping annotated chart", ticker, timeframe)
+        logger.info(
+            "No drawings to overlay for %s %s — skipping annotated chart", ticker, timeframe
+        )
         return ""
 
     interval = TIMEFRAME_MAP.get(timeframe, "1D")
