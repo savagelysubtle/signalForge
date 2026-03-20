@@ -153,6 +153,7 @@ async def _analyze_ticker(
         metadata["duration_ms"] = int((time.perf_counter() - start) * 1000)
 
         if result is not None:
+            result.ticker = ticker
             result.chart_image_path = image_path
             metadata["status"] = "success"
             metadata["raw_response"] = result.model_dump_json()

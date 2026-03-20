@@ -10,7 +10,7 @@ from __future__ import annotations
 from pipeline.schemas import StrategyConfig
 from utils.hashing import prompt_hash
 
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v3"
 
 DISCOVERY_SYSTEM_PROMPT = """\
 You are a financial research analyst specializing in market screening.
@@ -43,6 +43,17 @@ Return a JSON object with this exact structure:
 For crypto assets, use the common trading symbol (e.g. BTC, ETH, SOL).
 Set pe_ratio, revenue_growth, and free_cash_flow to null for crypto.
 Use sector for the crypto category (e.g. "Layer 1", "DeFi", "Meme").
+
+Ticker format rules (CRITICAL -- use TradingView format):
+- US stocks/ETFs: plain ticker (e.g. AAPL, SPY, TSLA)
+- Canadian TSX: prefix TSX: (e.g. TSX:ENB, TSX:CNQ, TSX:SHOP)
+- Canadian TSXV: prefix TSXV: (e.g. TSXV:ZDC)
+- London LSE: prefix LSE: (e.g. LSE:SHEL)
+- Australian ASX: prefix ASX: (e.g. ASX:BHP)
+- German XETR: prefix XETR: (e.g. XETR:SAP)
+- Other international: use EXCHANGE:SYMBOL format per TradingView conventions
+- Crypto: plain symbol (e.g. BTC, ETH, SOL)
+- NEVER return Yahoo Finance format with suffixes like .TO, .V, .L
 """
 
 
