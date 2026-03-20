@@ -54,11 +54,12 @@ def _row_to_config(row: dict[str, Any]) -> StrategyConfig:
 
 
 async def list_strategies(user_id: str) -> list[StrategyConfig]:
-    """List all strategies for a user, including system templates."""
+    """List all user-created strategies (excludes templates)."""
     client = await get_db()
     response = await (
         client.table("strategies")
         .select("*")
+        .eq("is_template", False)
         .or_(f"user_id.eq.{user_id},user_id.eq.system")
         .order("name")
         .execute()

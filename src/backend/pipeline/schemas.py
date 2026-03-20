@@ -81,6 +81,7 @@ class ChartAnalysis(BaseModel):
     confidence: Literal["high", "medium", "low"]
     summary: str
     chart_image_path: str = ""
+    annotated_chart_path: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +180,9 @@ class PipelineResult(BaseModel):
     stage_errors: list[dict] = Field(default_factory=list)
     total_duration_seconds: float = 0.0
     prompt_versions: dict[str, str] = Field(default_factory=dict)
+    chart_indicators: list[str] = Field(
+        default_factory=lambda: ["RSI", "MACD", "Volume"]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +213,7 @@ class StrategyConfig(BaseModel):
     # Claude Stage
     chart_indicators: list[str] = Field(default_factory=lambda: ["RSI", "MACD", "Volume"])
     chart_timeframe: str = "D"
+    secondary_timeframe: str = "4H"
     ta_focus: str | None = None
 
     # Gemini Stage

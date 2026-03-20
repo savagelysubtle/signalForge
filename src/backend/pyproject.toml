@@ -71,3 +71,9 @@ python-version = "3.14"
 [tool.ty.terminal]
 output-format = "full"
 error-on-warning = false
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.7",
+    "ty>=0.0.24",
+]

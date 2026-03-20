@@ -107,8 +107,9 @@ async def _analyze_ticker(
     sentiment: SentimentAnalysis | None,
     run_id: str,
     user_id: str = "",
+    timeframe_override: str | None = None,
 ) -> tuple[ChartAnalysis | None, dict]:
-    """Run chart analysis for a single ticker.
+    """Run chart analysis for a single ticker and timeframe.
 
     Fetches the chart image, sends it to Claude Vision with news context,
     and returns a validated ChartAnalysis.
@@ -118,11 +119,15 @@ async def _analyze_ticker(
         config: Strategy configuration with chart params.
         sentiment: Gemini's sentiment result for this ticker, or None.
         run_id: Pipeline run UUID for chart image filenames.
+        user_id: User UUID for storage path isolation.
+        timeframe_override: If set, use this timeframe instead of the
+            strategy's ``chart_timeframe``.
 
     Returns:
         Tuple of (validated ChartAnalysis or None, metadata dict).
     """
-    user_prompt = build_chart_prompt(ticker, config, sentiment)
+    effective_timeframe = timeframe_override or config.chart_timeframe
+    user_prompt = build_chart_prompt(ticker, config, sentiment, timeframe_override=timeframe_override)
     metadata: dict = {
         "stage": "claude",
         "ticker": ticker,
@@ -136,7 +141,7 @@ async def _analyze_ticker(
     try:
         image_bytes, image_path = await fetch_chart_image(
             ticker,
-            config.chart_timeframe,
+            effective_timeframe,
             config.chart_indicators,
             run_id,
             user_id,
@@ -194,10 +199,21 @@ async def run_chart_analysis(
     """
     sentiment_map: dict[str, SentimentAnalysis] = {s.ticker: s for s in sentiments}
 
-    tasks = [
-        _analyze_ticker(ticker, config, sentiment_map.get(ticker), run_id, user_id)
-        for ticker in tickers
-    ]
+    tasks = []
+    for ticker in tickers:
+        sentiment = sentiment_map.get(ticker)
+        tasks.append(_analyze_ticker(ticker, config, sentiment, run_id, user_id))
+        if config.secondary_timeframe:
+            tasks.append(
+                _analyze_ticker(
+                    ticker,
+                    config,
+                    sentiment,
+                    run_id,
+                    user_id,
+                    timeframe_override=config.secondary_timeframe,
+                )
+            )
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     charts: list[ChartAnalysis] = []
