@@ -82,17 +82,19 @@ async def _call_gemini(
 async def _analyze_ticker(
     ticker: str,
     config: StrategyConfig,
+    news_urls: list[str] | None = None,
 ) -> tuple[SentimentAnalysis | None, dict]:
     """Run sentiment analysis for a single ticker.
 
     Args:
         ticker: Stock/crypto ticker symbol.
         config: Strategy configuration with news_recency and news_scope.
+        news_urls: Pre-researched article URLs from Perplexity.
 
     Returns:
         Tuple of (validated SentimentAnalysis or None, metadata dict).
     """
-    user_prompt = build_sentiment_prompt(ticker, config)
+    user_prompt = build_sentiment_prompt(ticker, config, news_urls=news_urls)
     metadata: dict = {
         "stage": "gemini",
         "ticker": ticker,
@@ -120,6 +122,7 @@ async def _analyze_ticker(
 async def run_sentiment(
     tickers: list[str],
     config: StrategyConfig,
+    ticker_news: dict[str, list[str]] | None = None,
 ) -> tuple[list[SentimentAnalysis], list[dict]]:
     """Run news sentiment analysis for all tickers in parallel.
 
@@ -129,12 +132,19 @@ async def run_sentiment(
     Args:
         tickers: List of ticker symbols from Perplexity screening.
         config: Strategy configuration with news_recency and news_scope.
+        ticker_news: Mapping of ticker -> pre-researched article URLs
+            from Perplexity. If None or missing for a ticker, Gemini
+            falls back to its own Google Search.
 
     Returns:
         Tuple of (list of successful SentimentAnalysis results,
         list of per-ticker metadata dicts).
     """
-    tasks = [_analyze_ticker(ticker, config) for ticker in tickers]
+    news_map = ticker_news or {}
+    tasks = [
+        _analyze_ticker(ticker, config, news_urls=news_map.get(ticker))
+        for ticker in tickers
+    ]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     sentiments: list[SentimentAnalysis] = []

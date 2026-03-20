@@ -9,7 +9,7 @@ from __future__ import annotations
 from pipeline.schemas import StrategyConfig
 from utils.hashing import prompt_hash
 
-PROMPT_VERSION = "v2"
+PROMPT_VERSION = "v3"
 
 ANALYSIS_SYSTEM_PROMPT = """\
 You are a financial research analyst. You will be given a list of ticker
@@ -33,11 +33,19 @@ Return a JSON object with this exact structure:
       "free_cash_flow": "<e.g. $2.3B or null>",
       "key_highlights": ["<highlight 1>", "<highlight 2>"],
       "risk_factors": ["<risk 1>", "<risk 2>"],
-      "sources": ["<url or source name>"]
+      "sources": ["<url or source name>"],
+      "news_urls": ["<recent article url 1>", "<recent article url 2>", "<recent article url 3>"]
     }
   ],
   "screening_summary": "<brief summary of the research findings>"
 }
+
+For each ticker, include at least 3 recent news article URLs in the news_urls
+array. These should be from the past week covering earnings, analyst actions,
+company developments, or sector-relevant trends. Prefer reputable financial
+sources (Reuters, Bloomberg, CNBC, Barron's, Seeking Alpha, Yahoo Finance,
+Globe and Mail, Financial Post, etc.). These URLs will be passed to a downstream
+sentiment analysis model, so quality and recency matter.
 
 For crypto assets, use the common trading symbol (e.g. BTC, ETH, SOL).
 Set pe_ratio, revenue_growth, and free_cash_flow to null for crypto.

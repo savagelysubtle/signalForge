@@ -30,6 +30,7 @@ class FundamentalData(BaseModel):
     key_highlights: list[str] = Field(default_factory=list)
     risk_factors: list[str] = Field(default_factory=list)
     sources: list[str] = Field(default_factory=list)
+    news_urls: list[str] = Field(default_factory=list)
 
 
 class ScreeningResult(BaseModel):
@@ -92,6 +93,7 @@ class NewsCatalyst(BaseModel):
 
     headline: str
     source: str
+    url: str = ""
     impact: Literal["positive", "negative", "neutral"]
     significance: Literal["high", "medium", "low"]
 

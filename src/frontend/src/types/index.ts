@@ -14,6 +14,7 @@ export interface FundamentalData {
   key_highlights: string[];
   risk_factors: string[];
   sources: string[];
+  news_urls: string[];
 }
 
 export interface ScreeningResult {
@@ -63,6 +64,7 @@ export interface ChartAnalysis {
 export interface NewsCatalyst {
   headline: string;
   source: string;
+  url: string;
   impact: "positive" | "negative" | "neutral";
   significance: "high" | "medium" | "low";
 }

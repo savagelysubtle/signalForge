@@ -27,18 +27,19 @@ async def load_reflection_context() -> str:
     """
     try:
         client = await get_db()
-        response = await (
-            client.table("reflections")
+        response = (
+            await client.table("reflections")
             .select("injection_prompt")
             .order("generated_at", desc=True)
             .limit(1)
-            .maybe_single()
             .execute()
         )
-        if response.data and response.data.get("injection_prompt"):
-            prompt = response.data["injection_prompt"]
-            logger.info("Loaded reflection context (%d chars)", len(prompt))
-            return prompt
+        if response and response.data and len(response.data) > 0:
+            row = response.data[0]
+            if row.get("injection_prompt"):
+                prompt = row["injection_prompt"]
+                logger.info("Loaded reflection context (%d chars)", len(prompt))
+                return prompt
     except Exception:
         logger.exception("Failed to load reflection context")
 

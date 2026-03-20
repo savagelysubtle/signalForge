@@ -10,13 +10,24 @@ from __future__ import annotations
 from pipeline.schemas import StrategyConfig
 from utils.hashing import prompt_hash
 
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"
 
 SENTIMENT_SYSTEM_PROMPT = """\
 You are a financial news analyst specializing in sentiment analysis.
-Your job is to research recent news for a given stock, ETF, or cryptocurrency
-ticker and produce a structured sentiment assessment. You have access to
-Google Search to find real-time news — use it.
+You will be given a stock ticker along with specific news article URLs that
+have been pre-researched. Your job is to read and analyze those articles using
+Google Search grounding, then produce a structured sentiment assessment.
+
+Workflow:
+1. Use Google Search to access and read EACH of the provided article URLs.
+2. Extract sentiment-relevant information from each article.
+3. After analyzing the provided articles, do ONE additional Google Search for
+   any breaking news about this ticker that may not be covered by the provided
+   URLs (e.g. after-hours developments, analyst upgrades/downgrades).
+4. Synthesize all findings into a single sentiment assessment.
+
+If no article URLs are provided, fall back to searching for recent news about
+the ticker yourself using Google Search.
 
 You must return ONLY valid JSON — no commentary outside the JSON structure.
 
@@ -29,6 +40,7 @@ Return a JSON object with this exact structure:
     {
       "headline": "<news headline or event description>",
       "source": "<publication or source name>",
+      "url": "<article URL if available, otherwise empty string>",
       "impact": "positive" | "negative" | "neutral",
       "significance": "high" | "medium" | "low"
     }
@@ -45,9 +57,10 @@ Scoring guide for sentiment_score:
 - 0.2 to 0.6: bullish (positive earnings, upgrades, favorable macro)
 - 0.6 to 1.0: strongly_bullish (breakout catalysts, major contracts, sector tailwinds)
 
-Include at least 3 key catalysts when available. For each catalyst, assess
-both its directional impact and its significance to the stock's near-term
-price action.
+You MUST include at least 3 key catalysts. Each catalyst should reference a
+specific article or news event. Include the article URL in the "url" field
+whenever possible. For each catalyst, assess both its directional impact and
+its significance to the stock's near-term price action.
 """
 
 _RECENCY_MAP = {
@@ -69,12 +82,17 @@ _SCOPE_MAP = {
 }
 
 
-def build_sentiment_prompt(ticker: str, config: StrategyConfig) -> str:
+def build_sentiment_prompt(
+    ticker: str,
+    config: StrategyConfig,
+    news_urls: list[str] | None = None,
+) -> str:
     """Build the user prompt for per-ticker sentiment analysis.
 
     Args:
         ticker: Stock/crypto ticker symbol (e.g. "AAPL", "BTC").
         config: The active strategy configuration.
+        news_urls: Pre-researched article URLs from Perplexity to analyze.
 
     Returns:
         The formatted user prompt string.
@@ -82,12 +100,20 @@ def build_sentiment_prompt(ticker: str, config: StrategyConfig) -> str:
     recency = _RECENCY_MAP.get(config.news_recency, "the past 7 days")
     scope = _SCOPE_MAP.get(config.news_scope, _SCOPE_MAP["company"])
 
-    return (
-        f"Analyze the news sentiment for ticker: {ticker}\n\n"
-        f"Time window: Search for news from {recency}.\n"
-        f"Scope: {scope}\n\n"
-        f"Return your analysis as JSON matching the schema in your instructions."
-    )
+    parts: list[str] = [
+        f"Analyze the news sentiment for ticker: {ticker}\n",
+        f"Time window: Search for news from {recency}.",
+        f"Scope: {scope}\n",
+    ]
+
+    if news_urls:
+        parts.append("Pre-researched article URLs to analyze (read each one):")
+        for i, url in enumerate(news_urls, 1):
+            parts.append(f"  {i}. {url}")
+        parts.append("")
+
+    parts.append("Return your analysis as JSON matching the schema in your instructions.")
+    return "\n".join(parts)
 
 
 def get_prompt_hash() -> str:

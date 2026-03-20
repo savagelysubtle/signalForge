@@ -46,7 +46,18 @@ function CatalystRow({ catalyst }: { catalyst: NewsCatalyst }) {
         'bg-accent-yellow': catalyst.impact === 'neutral',
       })} />
       <div className="flex-1 min-w-0">
-        <p className="text-sm text-text-primary leading-snug">{catalyst.headline}</p>
+        {catalyst.url ? (
+          <a
+            href={catalyst.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-sm text-accent-blue hover:underline leading-snug"
+          >
+            {catalyst.headline}
+          </a>
+        ) : (
+          <p className="text-sm text-text-primary leading-snug">{catalyst.headline}</p>
+        )}
         <div className="flex items-center gap-2 mt-1.5">
           <span className="text-xs text-text-secondary truncate max-w-[200px]">{catalyst.source}</span>
           <span className={clsx('text-xs capitalize', IMPACT_COLORS[catalyst.impact])}>
