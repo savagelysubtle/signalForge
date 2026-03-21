@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { ChartAnalysis, Recommendation, TechnicalLevel } from '../../types';
+import type { ChartAnalysis, Recommendation } from '../../types';
 import clsx from 'clsx';
 
 interface PriceLevelMapProps {
@@ -159,7 +159,7 @@ function PriceLineRow({
 export function PriceLevelMap({ analysis, recommendation }: PriceLevelMapProps) {
   const lines = useMemo(() => buildPriceLines(analysis, recommendation), [analysis, recommendation]);
 
-  const { minPrice, maxPrice, priceRange } = useMemo(() => {
+  const { minPrice, maxPrice } = useMemo(() => {
     if (lines.length === 0) return { minPrice: 0, maxPrice: 100, priceRange: 100 };
     const prices = lines.map(l => l.price);
     const min = Math.min(...prices);

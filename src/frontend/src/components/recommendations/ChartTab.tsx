@@ -302,7 +302,7 @@ function CompactLevelLegend({
   );
 }
 
-export function ChartTab({ ticker, chartAnalyses, chartIndicators, recommendation }: ChartTabProps) {
+export function ChartTab({ chartAnalyses, recommendation }: ChartTabProps) {
   const [activeTimeframe, setActiveTimeframe] = useState(0);
   const activeAnalysis = chartAnalyses[activeTimeframe] ?? null;
 
