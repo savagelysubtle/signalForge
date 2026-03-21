@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,27 @@ from database.connection import get_db
 from pipeline.schemas import RiskParams, StrategyConfig
 
 logger = logging.getLogger(__name__)
+
+_UUID_HEX_RE = re.compile(r"^[0-9a-f]{32}$")
+_UUID_DASHED_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def _validate_user_id(user_id: str) -> str:
+    """Validate that a user_id is a safe UUID before using it in filters.
+
+    Args:
+        user_id: The user ID from JWT claims.
+
+    Returns:
+        The validated user_id string.
+
+    Raises:
+        ValueError: If user_id does not match a UUID pattern.
+    """
+    if _UUID_HEX_RE.match(user_id) or _UUID_DASHED_RE.match(user_id) or user_id == "dev-user-local":
+        return user_id
+    raise ValueError(f"Invalid user_id format: {user_id!r}")
+
 
 TEMPLATES_PATH = (
     Path(__file__).resolve().parent.parent.parent.parent / "templates" / "strategies.json"
@@ -55,12 +77,13 @@ def _row_to_config(row: dict[str, Any]) -> StrategyConfig:
 
 async def list_strategies(user_id: str) -> list[StrategyConfig]:
     """List all user-created strategies (excludes templates)."""
+    safe_id = _validate_user_id(user_id)
     client = await get_db()
     response = await (
         client.table("strategies")
         .select("*")
         .eq("is_template", False)
-        .or_(f"user_id.eq.{user_id},user_id.eq.system")
+        .in_("user_id", [safe_id, "system"])
         .order("name")
         .execute()
     )
@@ -72,11 +95,7 @@ async def list_templates() -> list[StrategyConfig]:
     """List all strategy templates."""
     client = await get_db()
     response = await (
-        client.table("strategies")
-        .select("*")
-        .eq("is_template", True)
-        .order("name")
-        .execute()
+        client.table("strategies").select("*").eq("is_template", True).order("name").execute()
     )
     rows = response.data or []
     return [_row_to_config(r) for r in rows]
@@ -84,12 +103,13 @@ async def list_templates() -> list[StrategyConfig]:
 
 async def get_strategy(strategy_id: str, user_id: str) -> StrategyConfig | None:
     """Get a strategy by ID if it belongs to the user or is a system template."""
+    safe_id = _validate_user_id(user_id)
     client = await get_db()
     response = await (
         client.table("strategies")
         .select("*")
         .eq("id", strategy_id)
-        .or_(f"user_id.eq.{user_id},user_id.eq.system")
+        .in_("user_id", [safe_id, "system"])
         .maybe_single()
         .execute()
     )
@@ -128,12 +148,7 @@ async def create_strategy(config: StrategyConfig, user_id: str) -> StrategyConfi
 async def ensure_defaults() -> None:
     """Load strategy templates if the strategies table is empty."""
     client = await get_db()
-    response = await (
-        client.table("strategies")
-        .select("*", count="exact")
-        .limit(0)
-        .execute()
-    )
+    response = await client.table("strategies").select("*", count="exact").limit(0).execute()
     if response.count and response.count > 0:
         return
 

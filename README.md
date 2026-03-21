@@ -231,4 +231,4 @@ This repository does **not** ship a `.vscode/tasks.json`. You can add your own l
 
 ## 📄 License
 
-Private project — not open source.
+This project is licensed under the [GNU Affero General Public License v3.0](LICENSE). You are free to use, modify, and distribute this software, but any derivative work or network service using it must also be open-sourced under the same license.
