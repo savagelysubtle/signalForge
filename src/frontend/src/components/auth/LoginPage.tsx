@@ -1,7 +1,9 @@
 import { useState } from "react";
-import { useAuth } from "../../context/AuthContext";
 import { Navigate } from "react-router-dom";
-import { Loader2, Zap } from "lucide-react";
+import { Loader2 } from "lucide-react";
+import { useAuth } from "../../context/AuthContext";
+import heroArtwork from "../../assets/signalforge-hero.svg";
+import logoHorizontal from "../../assets/signalforge-logo-horizontal.svg";
 
 export function LoginPage() {
   const { user, isLoading: authLoading, signIn, signUp } = useAuth();
@@ -43,100 +45,115 @@ export function LoginPage() {
   };
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-bg-primary">
-      <div className="w-full max-w-sm">
-        <div className="flex items-center justify-center gap-2 mb-8">
-          <Zap className="w-8 h-8 text-accent-blue" />
-          <h1 className="text-3xl font-bold text-text-primary">SignalForge</h1>
-        </div>
-
-        <div className="bg-bg-secondary border border-border rounded-lg p-6">
-          <h2 className="text-lg font-semibold text-text-primary mb-1">
-            {isSignUp ? "Create account" : "Sign in"}
-          </h2>
-          <p className="text-sm text-text-secondary mb-6">
-            {isSignUp
-              ? "Enter your email to get started"
-              : "Enter your credentials to continue"}
+    <div className="min-h-screen bg-bg-primary">
+      <div className="mx-auto grid min-h-screen max-w-7xl gap-10 px-6 py-8 lg:grid-cols-[minmax(0,420px)_minmax(0,1fr)] lg:items-center lg:px-8">
+        <div className="mx-auto flex w-full max-w-sm flex-col justify-center">
+          <img
+            src={logoHorizontal}
+            alt="SignalForge"
+            className="mb-4 w-full max-w-[280px]"
+          />
+          <p className="mb-8 text-sm text-text-secondary">
+            Precision signals forged from market structure, sentiment, and AI
+            synthesis.
           </p>
 
-          {signUpSuccess ? (
-            <div className="bg-accent-green/10 text-accent-green p-4 rounded-lg border border-accent-green/20 text-sm">
-              Account created. Check your email to confirm, then sign in.
-            </div>
-          ) : (
-            <form onSubmit={handleSubmit} className="space-y-4">
-              {error && (
-                <div className="bg-accent-red/10 text-accent-red p-3 rounded-lg border border-accent-red/20 text-sm">
-                  {error}
-                </div>
-              )}
-
-              <div>
-                <label
-                  htmlFor="email"
-                  className="block text-sm font-medium text-text-secondary mb-1.5"
-                >
-                  Email
-                </label>
-                <input
-                  id="email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  required
-                  autoComplete="email"
-                  className="w-full px-3 py-2 bg-bg-tertiary border border-border rounded-lg text-text-primary placeholder-text-secondary focus:outline-none focus:ring-2 focus:ring-accent-blue/50 focus:border-accent-blue text-sm"
-                  placeholder="you@example.com"
-                />
-              </div>
-
-              <div>
-                <label
-                  htmlFor="password"
-                  className="block text-sm font-medium text-text-secondary mb-1.5"
-                >
-                  Password
-                </label>
-                <input
-                  id="password"
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  minLength={6}
-                  autoComplete={isSignUp ? "new-password" : "current-password"}
-                  className="w-full px-3 py-2 bg-bg-tertiary border border-border rounded-lg text-text-primary placeholder-text-secondary focus:outline-none focus:ring-2 focus:ring-accent-blue/50 focus:border-accent-blue text-sm"
-                  placeholder="At least 6 characters"
-                />
-              </div>
-
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                className="w-full py-2.5 bg-accent-blue hover:bg-accent-blue/90 text-white font-medium rounded-lg text-sm transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
-              >
-                {isSubmitting && (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                )}
-                {isSignUp ? "Create account" : "Sign in"}
-              </button>
-            </form>
-          )}
-
-          <div className="mt-4 text-center">
-            <button
-              onClick={() => {
-                setIsSignUp(!isSignUp);
-                setError(null);
-                setSignUpSuccess(false);
-              }}
-              className="text-sm text-accent-blue hover:underline"
-            >
+          <div className="rounded-2xl border border-border bg-bg-secondary p-6 shadow-lg shadow-black/20">
+            <h2 className="mb-1 text-lg font-semibold text-text-primary">
+              {isSignUp ? "Create account" : "Sign in"}
+            </h2>
+            <p className="mb-6 text-sm text-text-secondary">
               {isSignUp
-                ? "Already have an account? Sign in"
-                : "Need an account? Sign up"}
-            </button>
+                ? "Enter your email to get started"
+                : "Enter your credentials to continue"}
+            </p>
+
+            {signUpSuccess ? (
+              <div className="rounded-lg border border-accent-green/20 bg-accent-green/10 p-4 text-sm text-accent-green">
+                Account created. Check your email to confirm, then sign in.
+              </div>
+            ) : (
+              <form onSubmit={handleSubmit} className="space-y-4">
+                {error && (
+                  <div className="rounded-lg border border-accent-red/20 bg-accent-red/10 p-3 text-sm text-accent-red">
+                    {error}
+                  </div>
+                )}
+
+                <div>
+                  <label
+                    htmlFor="email"
+                    className="mb-1.5 block text-sm font-medium text-text-secondary"
+                  >
+                    Email
+                  </label>
+                  <input
+                    id="email"
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    required
+                    autoComplete="email"
+                    className="w-full rounded-lg border border-border bg-bg-tertiary px-3 py-2 text-sm text-text-primary placeholder-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/50 focus-visible:border-accent-blue"
+                    placeholder="you@example.com"
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="password"
+                    className="mb-1.5 block text-sm font-medium text-text-secondary"
+                  >
+                    Password
+                  </label>
+                  <input
+                    id="password"
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                    minLength={6}
+                    autoComplete={isSignUp ? "new-password" : "current-password"}
+                    className="w-full rounded-lg border border-border bg-bg-tertiary px-3 py-2 text-sm text-text-primary placeholder-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/50 focus-visible:border-accent-blue"
+                    placeholder="At least 6 characters"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg bg-accent-blue py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-blue/90 disabled:opacity-50"
+                >
+                  {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
+                  {isSignUp ? "Create account" : "Sign in"}
+                </button>
+              </form>
+            )}
+
+            <div className="mt-4 text-center">
+              <button
+                onClick={() => {
+                  setIsSignUp(!isSignUp);
+                  setError(null);
+                  setSignUpSuccess(false);
+                }}
+                className="text-sm text-accent-blue hover:underline"
+              >
+                {isSignUp
+                  ? "Already have an account? Sign in"
+                  : "Need an account? Sign up"}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="hidden lg:block">
+          <div className="overflow-hidden rounded-[28px] border border-border bg-bg-secondary/60 p-4 shadow-2xl shadow-black/20">
+            <img
+              src={heroArtwork}
+              alt="SignalForge brand hero showing forged market signals"
+              className="w-full rounded-3xl border border-border/60 bg-bg-primary"
+            />
           </div>
         </div>
       </div>

@@ -27,6 +27,9 @@ from pipeline.stages.claude import run_chart_analysis
 from pipeline.stages.gemini import run_sentiment
 from pipeline.stages.gpt import run_debate
 from pipeline.stages.perplexity import run_analysis, run_discovery, run_prompted_discovery
+import asyncio
+
+from services.chart_image import fetch_annotated_chart
 from services.reflection import load_reflection_context
 from services.strategy import get_strategy
 
@@ -136,6 +139,7 @@ async def run_pipeline(
 
     # Stage 2: Gemini news sentiment
     effective_config = config or StrategyConfig(id="default", name="default", screening_prompt="")
+    result.chart_indicators = effective_config.chart_indicators
 
     if screening and screening.tickers:
         ticker_symbols = [t.ticker for t in screening.tickers]
@@ -219,6 +223,39 @@ async def run_pipeline(
             logger.exception("Pipeline GPT stage failed")
 
     logger.info("Stage 4 GPT complete: %d recommendations", len(result.recommendations))
+
+    # Stage 4.5: Generate annotated charts with key-level overlays
+    if result.chart_analyses:
+        rec_map = {r.ticker: r for r in result.recommendations}
+
+        async def _annotate(ca_index: int) -> None:
+            ca = result.chart_analyses[ca_index]
+            rec = rec_map.get(ca.ticker)
+            try:
+                url = await fetch_annotated_chart(
+                    ticker=ca.ticker,
+                    timeframe=ca.timeframe,
+                    key_levels=ca.key_levels,
+                    run_id=run_id,
+                    user_id=user_id,
+                    entry_price=rec.entry_price if rec else None,
+                    stop_loss=rec.stop_loss if rec else None,
+                    take_profit=rec.take_profit if rec else None,
+                )
+                result.chart_analyses[ca_index].annotated_chart_path = url
+            except Exception as exc:
+                logger.warning(
+                    "Annotated chart failed for %s %s: %s",
+                    ca.ticker,
+                    ca.timeframe,
+                    exc,
+                )
+
+        await asyncio.gather(
+            *(_annotate(i) for i in range(len(result.chart_analyses))),
+            return_exceptions=True,
+        )
+        logger.info("Stage 4.5 annotated charts complete")
 
     elapsed = time.perf_counter() - start
     result.total_duration_seconds = round(elapsed, 2)

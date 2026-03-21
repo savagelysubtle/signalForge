@@ -11,6 +11,7 @@ export function RecommendationsView() {
   const { getResult, currentResult, isRunning } = usePipeline();
   
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -68,7 +69,9 @@ export function RecommendationsView() {
       <TickerCardList 
         tickers={tickers} 
         selectedTicker={selectedTicker} 
-        onSelect={setSelectedTicker} 
+        onSelect={setSelectedTicker}
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={() => setSidebarCollapsed(prev => !prev)}
       />
       
       {selectedTickerData ? (

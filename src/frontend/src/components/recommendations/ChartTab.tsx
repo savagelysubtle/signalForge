@@ -1,10 +1,14 @@
-import type { ChartAnalysis, TechnicalLevel, IndicatorReading } from '../../types';
-import { TradingViewWidget } from '../shared/TradingViewWidget';
+import { useState, useCallback } from 'react';
+import type { ChartAnalysis, Recommendation, TechnicalLevel, IndicatorReading } from '../../types';
+import { PriceLevelMap } from './PriceLevelMap';
+import { Maximize2, X } from 'lucide-react';
 import clsx from 'clsx';
 
 interface ChartTabProps {
   ticker: string;
-  chartAnalysis: ChartAnalysis | null;
+  chartAnalyses: ChartAnalysis[];
+  chartIndicators: string[];
+  recommendation: Recommendation | null;
 }
 
 const BIAS_CONFIG: Record<string, { text: string; color: string; bg: string }> = {
@@ -79,6 +83,48 @@ function IndicatorRow({ reading }: { reading: IndicatorReading }) {
   );
 }
 
+function ExpandableChartImage({ src, alt }: { src: string; alt: string }) {
+  const [expanded, setExpanded] = useState(false);
+
+  const close = useCallback(() => setExpanded(false), []);
+
+  return (
+    <>
+      <div className="relative rounded-lg border border-border overflow-hidden bg-bg-tertiary group">
+        <img src={src} alt={alt} className="w-full h-auto" />
+        <button
+          onClick={() => setExpanded(true)}
+          className="absolute top-2 right-2 p-1.5 rounded-md bg-bg-primary/80 border border-border text-text-secondary opacity-0 group-hover:opacity-100 transition-opacity hover:text-text-primary hover:bg-bg-primary"
+          title="Expand chart"
+        >
+          <Maximize2 className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      {expanded && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+          onClick={close}
+        >
+          <div
+            className="relative w-[80vw] max-h-[90vh] rounded-xl border border-border bg-bg-secondary shadow-2xl overflow-hidden"
+            onClick={e => e.stopPropagation()}
+          >
+            <button
+              onClick={close}
+              className="absolute top-3 right-3 z-10 p-1.5 rounded-md bg-bg-primary/80 border border-border text-text-secondary hover:text-text-primary hover:bg-bg-primary transition-colors"
+              title="Close"
+            >
+              <X className="w-4 h-4" />
+            </button>
+            <img src={src} alt={alt} className="w-full h-auto" />
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 function AnalysisPanel({ analysis }: { analysis: ChartAnalysis }) {
   const bias = BIAS_CONFIG[analysis.overall_bias] ?? BIAS_CONFIG.neutral;
   const confidence = CONFIDENCE_STYLES[analysis.confidence] ?? CONFIDENCE_STYLES.medium;
@@ -90,13 +136,7 @@ function AnalysisPanel({ analysis }: { analysis: ChartAnalysis }) {
     <div className="p-4 overflow-y-auto h-full space-y-5">
       {/* Chart Image */}
       {chartImageUrl && (
-        <div className="rounded-lg border border-border overflow-hidden bg-bg-tertiary">
-          <img
-            src={chartImageUrl}
-            alt={`${analysis.ticker} chart`}
-            className="w-full h-auto"
-          />
-        </div>
+        <ExpandableChartImage src={chartImageUrl} alt={`${analysis.ticker} chart`} />
       )}
 
       {/* Trend + Bias Header */}
@@ -203,13 +243,96 @@ function AnalysisPanel({ analysis }: { analysis: ChartAnalysis }) {
   );
 }
 
-export function ChartTab({ ticker, chartAnalysis }: ChartTabProps) {
+const TIMEFRAME_LABELS: Record<string, string> = {
+  "D": "Daily",
+  "1D": "Daily",
+  "W": "Weekly",
+  "1W": "Weekly",
+  "M": "Monthly",
+  "1M": "Monthly",
+  "4H": "4 Hour",
+  "4h": "4 Hour",
+  "1H": "1 Hour",
+  "1h": "1 Hour",
+  "2H": "2 Hour",
+  "2h": "2 Hour",
+};
+
+function getTimeframeLabel(tf: string): string {
+  return TIMEFRAME_LABELS[tf] ?? tf;
+}
+
+function CompactLevelLegend({
+  analysis,
+  recommendation,
+}: {
+  analysis: ChartAnalysis;
+  recommendation: Recommendation | null;
+}) {
+  const items: { label: string; price: number; color: string }[] = [];
+
+  if (recommendation?.entry_price != null)
+    items.push({ label: 'Entry', price: recommendation.entry_price, color: 'text-accent-blue' });
+  if (recommendation?.stop_loss != null)
+    items.push({ label: 'Stop', price: recommendation.stop_loss, color: 'text-accent-red' });
+  if (recommendation?.take_profit != null)
+    items.push({ label: 'Target', price: recommendation.take_profit, color: 'text-accent-green' });
+
+  for (const lv of analysis.key_levels.slice(0, 4)) {
+    const color = lv.level_type === 'support' ? 'text-accent-green' : 'text-accent-red';
+    items.push({ label: `${lv.level_type} (${lv.strength[0]})`, price: lv.price, color });
+  }
+
+  if (items.length === 0) return null;
+
+  return (
+    <div className="flex flex-wrap gap-x-4 gap-y-1 px-4 py-2 border-t border-border text-[11px] shrink-0">
+      {items.map((item, i) => (
+        <span key={i} className="flex items-center gap-1">
+          <span className={clsx('font-medium capitalize', item.color)}>{item.label}</span>
+          <span className="text-text-secondary font-mono">${item.price.toFixed(2)}</span>
+        </span>
+      ))}
+      {recommendation?.risk_reward_ratio != null && (
+        <span className="text-text-secondary font-mono ml-auto">
+          R:R {recommendation.risk_reward_ratio.toFixed(1)}:1
+        </span>
+      )}
+    </div>
+  );
+}
+
+export function ChartTab({ ticker, chartAnalyses, chartIndicators, recommendation }: ChartTabProps) {
+  const [activeTimeframe, setActiveTimeframe] = useState(0);
+  const activeAnalysis = chartAnalyses[activeTimeframe] ?? null;
+
   return (
     <div className="flex h-full w-full gap-4 p-4">
       {/* Left: Claude Analysis */}
-      <div className="w-1/2 overflow-hidden border border-border rounded-lg bg-bg-secondary">
-        {chartAnalysis ? (
-          <AnalysisPanel analysis={chartAnalysis} />
+      <div className="w-1/2 overflow-hidden border border-border rounded-lg bg-bg-secondary flex flex-col">
+        {chartAnalyses.length > 1 && (
+          <div className="flex border-b border-border px-3 shrink-0">
+            {chartAnalyses.map((analysis, i) => (
+              <button
+                key={`${analysis.timeframe}-${i}`}
+                onClick={() => setActiveTimeframe(i)}
+                className={clsx(
+                  "px-3 py-2.5 text-xs font-medium border-b-2 transition-colors",
+                  activeTimeframe === i
+                    ? "border-accent-blue text-accent-blue"
+                    : "border-transparent text-text-secondary hover:text-text-primary"
+                )}
+              >
+                {getTimeframeLabel(analysis.timeframe)}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {activeAnalysis ? (
+          <div className="flex-1 overflow-hidden">
+            <AnalysisPanel analysis={activeAnalysis} />
+          </div>
         ) : (
           <div className="flex items-center justify-center h-full text-text-secondary flex-col gap-2">
             <span className="text-sm">Claude Vision Analysis</span>
@@ -218,9 +341,26 @@ export function ChartTab({ ticker, chartAnalysis }: ChartTabProps) {
         )}
       </div>
 
-      {/* Right: TradingView Live Widget */}
-      <div className="w-1/2 border border-border rounded-lg overflow-hidden bg-bg-secondary">
-        <TradingViewWidget symbol={ticker} />
+      {/* Right: Annotated Chart / Price Level Map */}
+      <div className="w-1/2 border border-border rounded-lg overflow-hidden bg-bg-secondary flex flex-col">
+        {activeAnalysis?.annotated_chart_path ? (
+          <>
+            <div className="flex-1 overflow-auto">
+              <ExpandableChartImage
+                src={activeAnalysis.annotated_chart_path}
+                alt={`${activeAnalysis.ticker} ${activeAnalysis.timeframe} annotated`}
+              />
+            </div>
+            <CompactLevelLegend analysis={activeAnalysis} recommendation={recommendation} />
+          </>
+        ) : activeAnalysis ? (
+          <PriceLevelMap analysis={activeAnalysis} recommendation={recommendation} />
+        ) : (
+          <div className="flex items-center justify-center h-full text-text-secondary flex-col gap-2">
+            <span className="text-sm">Price Level Map</span>
+            <span className="text-xs opacity-50">No analysis data available</span>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -166,6 +166,19 @@ CREATE TABLE reflections (
     metrics         TEXT NOT NULL            -- JSON
 );
 
+-- Row Level Security: block direct access via the public anon key.
+-- The Python backend uses the service_role key which bypasses RLS,
+-- so no policies are needed — RLS-on with zero policies = full deny
+-- for any client using the anon key (i.e. the frontend JS client).
+ALTER TABLE strategies ENABLE ROW LEVEL SECURITY;
+ALTER TABLE pipeline_runs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE stage_outputs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE chart_images ENABLE ROW LEVEL SECURITY;
+ALTER TABLE recommendations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE decisions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE outcomes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE reflections ENABLE ROW LEVEL SECURITY;
+
 -- Indexes for foreign key relationships
 CREATE INDEX idx_pipeline_runs_strategy ON pipeline_runs(strategy_id);
 CREATE INDEX idx_stage_outputs_run ON stage_outputs(run_id);

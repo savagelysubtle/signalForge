@@ -174,16 +174,21 @@ def _format_data_availability(
     sentiments: list[SentimentAnalysis],
 ) -> str:
     """Build a DATA AVAILABILITY section listing present/missing data per ticker."""
-    chart_tickers = {c.ticker for c in charts}
+    chart_counts: dict[str, list[str]] = {}
+    for c in charts:
+        chart_counts.setdefault(c.ticker, []).append(c.timeframe)
     sentiment_tickers = {s.ticker for s in sentiments}
 
     lines = ["--- DATA AVAILABILITY ---"]
     lines.append(f"Screening data: {'AVAILABLE' if screening else 'MISSING'}")
 
-    chart_available = [t for t in tickers if t in chart_tickers]
-    chart_missing = [t for t in tickers if t not in chart_tickers]
+    chart_available = [t for t in tickers if t in chart_counts]
+    chart_missing = [t for t in tickers if t not in chart_counts]
     if chart_available:
-        lines.append(f"Chart analysis: AVAILABLE for {', '.join(chart_available)}")
+        detail = ", ".join(
+            f"{t} ({'/'.join(chart_counts[t])})" for t in chart_available
+        )
+        lines.append(f"Chart analysis: AVAILABLE for {detail}")
     if chart_missing:
         lines.append(f"Chart analysis: MISSING for {', '.join(chart_missing)}")
 
@@ -234,46 +239,60 @@ def _format_screening_data(screening: ScreeningResult | None, tickers: list[str]
     return "\n".join(parts)
 
 
+def _format_single_chart(ca: ChartAnalysis) -> str:
+    """Format a single ChartAnalysis into text for GPT."""
+    lines = [
+        f"\n#### {ca.ticker} ({ca.timeframe} timeframe)",
+    ]
+    if ca.current_price is not None:
+        lines.append(f"**Current/Last Price: ${ca.current_price:.2f}**")
+    lines.extend(
+        [
+            f"Trend: {ca.trend_direction} ({ca.trend_strength})",
+            f"Overall bias: {ca.overall_bias} | Confidence: {ca.confidence}",
+        ]
+    )
+    if ca.key_levels:
+        level_strs = [
+            f"  ${lv.price:.2f} ({lv.level_type}, {lv.strength})" for lv in ca.key_levels
+        ]
+        lines.append("Key levels:\n" + "\n".join(level_strs))
+    if ca.patterns_detected:
+        lines.append(f"Patterns: {', '.join(ca.patterns_detected)}")
+    if ca.indicator_readings:
+        ind_strs = [
+            f"  {ir.indicator}: {ir.value} ({ir.signal})" for ir in ca.indicator_readings
+        ]
+        lines.append("Indicators:\n" + "\n".join(ind_strs))
+    if ca.volume_analysis:
+        lines.append(f"Volume: {ca.volume_analysis}")
+    lines.append(f"Summary: {ca.summary}")
+    return "\n".join(lines)
+
+
 def _format_chart_data(charts: list[ChartAnalysis], tickers: list[str]) -> str:
-    """Format Claude chart analysis results for GPT prompts."""
+    """Format Claude chart analysis results for GPT prompts.
+
+    Handles multiple chart analyses per ticker (e.g. Daily + 4H) by
+    grouping them under the ticker header.
+    """
     if not charts:
         return "No chart analysis data available."
 
-    chart_map = {c.ticker: c for c in charts}
+    chart_map: dict[str, list[ChartAnalysis]] = {}
+    for c in charts:
+        chart_map.setdefault(c.ticker, []).append(c)
+
     parts: list[str] = []
     for ticker in tickers:
-        ca = chart_map.get(ticker)
-        if not ca:
+        ticker_charts = chart_map.get(ticker)
+        if not ticker_charts:
             parts.append(f"\n### {ticker}\nNo chart analysis available.")
             continue
 
-        lines = [
-            f"\n### {ca.ticker} ({ca.timeframe} timeframe)",
-        ]
-        if ca.current_price is not None:
-            lines.append(f"**Current/Last Price: ${ca.current_price:.2f}**")
-        lines.extend(
-            [
-                f"Trend: {ca.trend_direction} ({ca.trend_strength})",
-                f"Overall bias: {ca.overall_bias} | Confidence: {ca.confidence}",
-            ]
-        )
-        if ca.key_levels:
-            level_strs = [
-                f"  ${lv.price:.2f} ({lv.level_type}, {lv.strength})" for lv in ca.key_levels
-            ]
-            lines.append("Key levels:\n" + "\n".join(level_strs))
-        if ca.patterns_detected:
-            lines.append(f"Patterns: {', '.join(ca.patterns_detected)}")
-        if ca.indicator_readings:
-            ind_strs = [
-                f"  {ir.indicator}: {ir.value} ({ir.signal})" for ir in ca.indicator_readings
-            ]
-            lines.append("Indicators:\n" + "\n".join(ind_strs))
-        if ca.volume_analysis:
-            lines.append(f"Volume: {ca.volume_analysis}")
-        lines.append(f"Summary: {ca.summary}")
-        parts.append("\n".join(lines))
+        parts.append(f"\n### {ticker}")
+        for ca in ticker_charts:
+            parts.append(_format_single_chart(ca))
 
     return "\n".join(parts)
 

@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1080" viewBox="0 0 1600 1080" fill="none">
+  <defs>
+    <linearGradient id="bgGradient" x1="260" y1="122" x2="1327" y2="948" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#151B28" />
+      <stop offset="0.5" stop-color="#0D1117" />
+      <stop offset="1" stop-color="#080C13" />
+    </linearGradient>
+    <radialGradient id="violetGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(514 331) rotate(37.53) scale(664 452)">
+      <stop stop-color="#9B5CFF" stop-opacity="0.28" />
+      <stop offset="1" stop-color="#9B5CFF" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="cyanGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1180 315) rotate(126.35) scale(508 411)">
+      <stop stop-color="#7CEBFF" stop-opacity="0.2" />
+      <stop offset="1" stop-color="#7CEBFF" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="brandGradient" x1="436" y1="702" x2="974" y2="241" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#9B5CFF" />
+      <stop offset="0.55" stop-color="#7C8DFF" />
+      <stop offset="1" stop-color="#7CEBFF" />
+    </linearGradient>
+    <linearGradient id="metalGradient" x1="487" y1="690" x2="956" y2="261" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#AAB9D8" />
+      <stop offset="0.35" stop-color="#F3F7FF" />
+      <stop offset="0.7" stop-color="#B8C6E0" />
+      <stop offset="1" stop-color="#7CEBFF" />
+    </linearGradient>
+    <linearGradient id="titleGradient" x1="480" y1="736" x2="1128" y2="812" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F3F7FF" />
+      <stop offset="0.55" stop-color="#D7E0F1" />
+      <stop offset="1" stop-color="#7CEBFF" />
+    </linearGradient>
+    <filter id="softGlow" x="0" y="0" width="1600" height="1080" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse">
+      <feFlood flood-opacity="0" result="BackgroundImageFix" />
+      <feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape" />
+      <feGaussianBlur result="effect1_foregroundBlur_0_1" stdDeviation="0.6" />
+    </filter>
+  </defs>
+
+  <rect width="1600" height="1080" fill="url(#bgGradient)" />
+  <rect width="1600" height="1080" fill="url(#violetGlow)" />
+  <rect width="1600" height="1080" fill="url(#cyanGlow)" />
+
+  <g opacity="0.16">
+    <path d="M140 892H1460" stroke="#8B949E" />
+    <path d="M140 788H1460" stroke="#8B949E" />
+    <path d="M140 684H1460" stroke="#8B949E" />
+    <path d="M140 580H1460" stroke="#8B949E" />
+    <path d="M140 476H1460" stroke="#8B949E" />
+    <path d="M140 372H1460" stroke="#8B949E" />
+    <path d="M140 268H1460" stroke="#8B949E" />
+    <path d="M270 170V930" stroke="#8B949E" />
+    <path d="M470 170V930" stroke="#8B949E" />
+    <path d="M670 170V930" stroke="#8B949E" />
+    <path d="M870 170V930" stroke="#8B949E" />
+    <path d="M1070 170V930" stroke="#8B949E" />
+    <path d="M1270 170V930" stroke="#8B949E" />
+  </g>
+
+  <g opacity="0.85">
+    <path d="M104 802C233 797 291 696 390 666C479 639 564 681 634 622C695 571 726 431 841 416C956 401 1014 532 1114 542C1240 554 1295 434 1496 458" stroke="url(#brandGradient)" stroke-width="7" stroke-linecap="round" />
+    <path d="M104 845C227 835 315 784 400 750C486 716 580 736 670 690C790 629 826 472 941 473C1027 474 1096 617 1212 626C1317 635 1371 548 1496 554" stroke="url(#metalGradient)" stroke-opacity="0.6" stroke-width="5" stroke-linecap="round" />
+  </g>
+
+  <g opacity="0.6">
+    <path d="M274 792V724" stroke="#9B5CFF" stroke-width="12" stroke-linecap="round" />
+    <path d="M337 760V668" stroke="#BCA0FF" stroke-width="12" stroke-linecap="round" />
+    <path d="M399 708V620" stroke="#7C8DFF" stroke-width="12" stroke-linecap="round" />
+    <path d="M462 730V590" stroke="#7CEBFF" stroke-width="12" stroke-linecap="round" />
+    <path d="M1166 466V354" stroke="#7CEBFF" stroke-width="12" stroke-linecap="round" />
+    <path d="M1228 438V298" stroke="#BCEEFF" stroke-width="12" stroke-linecap="round" />
+    <path d="M1292 392V246" stroke="#7CEBFF" stroke-width="12" stroke-linecap="round" />
+  </g>
+
+  <g filter="url(#softGlow)">
+    <rect x="451" y="259" width="700" height="520" rx="52" fill="#0D1117" fill-opacity="0.36" stroke="url(#brandGradient)" stroke-opacity="0.16" />
+
+    <path d="M617 637H726L757 583H809L840 637H949L896 690H670L617 637Z" fill="#111827" stroke="url(#metalGradient)" stroke-width="12" stroke-linejoin="round" />
+    <path d="M715 561L789 487L837 534L980 388" stroke="url(#metalGradient)" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" />
+    <path d="M935 388H982V434" stroke="url(#metalGradient)" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" />
+    <path d="M664 585V500" stroke="url(#brandGradient)" stroke-width="18" stroke-linecap="round" />
+    <path d="M740 548V416" stroke="url(#brandGradient)" stroke-width="18" stroke-linecap="round" />
+    <path d="M817 519V349" stroke="url(#brandGradient)" stroke-width="18" stroke-linecap="round" />
+    <path d="M893 451V323" stroke="url(#brandGradient)" stroke-width="18" stroke-linecap="round" />
+
+    <text x="800" y="818" fill="url(#titleGradient)" font-family="'Segoe UI', Arial, sans-serif" font-size="112" font-weight="700" letter-spacing="-3.6" text-anchor="middle">
+      SignalForge
+    </text>
+    <text x="800" y="885" fill="#8B949E" font-family="'Segoe UI', Arial, sans-serif" font-size="29" font-weight="600" letter-spacing="10.5" text-anchor="middle">
+      AI-POWERED MARKET INTELLIGENCE
+    </text>
+  </g>
+</svg>

@@ -45,6 +45,7 @@ export interface IndicatorReading {
 export interface ChartAnalysis {
   ticker: string;
   timeframe: string;
+  current_price: number | null;
   trend_direction: "bullish" | "bearish" | "neutral" | "transitioning";
   trend_strength: "strong" | "moderate" | "weak";
   key_levels: TechnicalLevel[];
@@ -55,6 +56,7 @@ export interface ChartAnalysis {
   confidence: "high" | "medium" | "low";
   summary: string;
   chart_image_path: string;
+  annotated_chart_path: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -126,6 +128,7 @@ export interface PipelineResult {
   stage_errors: StageError[];
   total_duration_seconds: number;
   prompt_versions: Record<string, string>;
+  chart_indicators: string[];
 }
 
 export interface StageError {
@@ -167,6 +170,7 @@ export interface StrategyConfig {
   max_tickers: number;
   chart_indicators: string[];
   chart_timeframe: string;
+  secondary_timeframe: string;
   ta_focus: string | null;
   news_recency: "today" | "week" | "month";
   news_scope: "company" | "sector" | "macro";

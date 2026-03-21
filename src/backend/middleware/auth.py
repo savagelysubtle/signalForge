@@ -13,8 +13,8 @@ import logging
 from typing import Annotated
 
 import jwt
-from jwt import PyJWKClient
 from fastapi import Depends, Header, HTTPException
+from jwt import PyJWKClient
 
 from config import settings
 
@@ -49,9 +49,13 @@ async def get_current_user(authorization: Annotated[str | None, Header()] = None
         HTTPException: 401 if token is missing, invalid, or expired.
     """
     if not settings.supabase_url:
+        if settings.environment == "production":
+            raise RuntimeError(
+                "SUPABASE_URL is required in production. Set the SUPABASE_URL environment variable."
+            )
         logger.warning(
             "SUPABASE_URL not configured — using dev user ID. "
-            "This should NEVER happen in production!"
+            "This is only allowed in development mode."
         )
         return "dev-user-local"
 

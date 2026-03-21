@@ -1,8 +1,11 @@
-"""Chart-Img API client for TradingView chart screenshots.
+"""Chart-Img v2 API client for TradingView chart screenshots.
 
-Fetches chart images via the Chart-Img Advanced Chart API for Claude Vision
-to analyze. In production, images are uploaded to Supabase Storage. In local
-development (when SUPABASE_URL is empty), images fall back to local filesystem.
+Fetches chart images via the Chart-Img v2 Advanced Chart API (POST with
+JSON body, real-time US data) for Claude Vision to analyze. Also generates
+annotated charts with Horizontal Line drawings for key levels and trade
+parameters. In production, images are uploaded to Supabase Storage. In
+local development (when SUPABASE_URL is empty), images fall back to local
+filesystem.
 
 API Reference: https://doc.chart-img.com/
 """
@@ -15,27 +18,42 @@ import httpx
 from supabase import Client, create_client
 
 from config import paths, settings
+from pipeline.schemas import TechnicalLevel
 from services.keyring_service import get_api_key
 
 logger = logging.getLogger(__name__)
 
-CHART_IMG_BASE = "https://api.chart-img.com/v1/tradingview/advanced-chart"
+CHART_IMG_V2_URL = "https://api.chart-img.com/v2/tradingview/advanced-chart"
 
 INDICATOR_MAP: dict[str, str] = {
-    "RSI": "RSI",
+    "RSI": "Relative Strength Index",
     "MACD": "MACD",
-    "Bollinger Bands": "BB",
-    "Stochastic": "Stoch",
-    "ATR": "ATR",
-    "EMA_20": "EMA:20",
-    "EMA_50": "EMA:50",
-    "SMA_50": "SMA:50",
-    "SMA_200": "SMA:200",
+    "Bollinger Bands": "Bollinger Bands",
+    "Stochastic": "Stochastic",
+    "ATR": "Average True Range",
+    "EMA_20": "Exponential Moving Average",
+    "EMA_50": "Exponential Moving Average",
+    "SMA_50": "Moving Average",
+    "SMA_200": "Moving Average",
     "VWAP": "VWAP",
+    "Volume": "Volume",
+    "OBV": "On Balance Volume",
+    "CCI": "Commodity Channel Index",
+    "Ichimoku": "Ichimoku Cloud",
+    "DMI": "Directional Movement Index",
+    "Parabolic SAR": "Parabolic SAR",
+}
+
+INDICATOR_INPUTS: dict[str, dict] = {
+    "EMA_20": {"length": 20},
+    "EMA_50": {"length": 50},
+    "SMA_50": {"length": 50},
+    "SMA_200": {"length": 200},
 }
 
 TIMEFRAME_MAP: dict[str, str] = {
     "1H": "1h",
+    "2H": "2h",
     "4H": "4h",
     "D": "1D",
     "W": "1W",
@@ -101,23 +119,33 @@ def _get_supabase() -> Client:
     return _supabase_client
 
 
-def _map_indicators(config_indicators: list[str]) -> list[str]:
-    """Map strategy indicator names to Chart-Img study parameter values.
+def _map_indicators(config_indicators: list[str]) -> list[dict]:
+    """Map strategy indicator names to Chart-Img v2 study objects.
 
     Args:
         config_indicators: Indicator names from StrategyConfig.chart_indicators.
 
     Returns:
-        List of Chart-Img compatible study strings. Unknown indicators and
-        "Volume" (built-in) are silently skipped.
+        List of Chart-Img v2 study objects (dicts with ``name`` and optional
+        ``input``/``forceOverlay``). Unknown indicators are logged and skipped.
     """
-    studies: list[str] = []
+    studies: list[dict] = []
     for ind in config_indicators:
-        mapped = INDICATOR_MAP.get(ind)
-        if mapped:
-            studies.append(mapped)
-        elif ind.lower() != "volume":
+        study_name = INDICATOR_MAP.get(ind)
+        if not study_name:
             logger.warning("Unknown indicator '%s' — skipping in chart request", ind)
+            continue
+
+        study: dict = {"name": study_name}
+
+        custom_inputs = INDICATOR_INPUTS.get(ind)
+        if custom_inputs:
+            study["input"] = custom_inputs
+
+        if ind == "Volume":
+            study["forceOverlay"] = True
+
+        studies.append(study)
     return studies
 
 
@@ -128,14 +156,17 @@ async def fetch_chart_image(
     run_id: str,
     user_id: str,
 ) -> tuple[bytes, str]:
-    """Fetch a TradingView chart screenshot from Chart-Img API and store it.
+    """Fetch a TradingView chart screenshot from Chart-Img v2 API and store it.
+
+    Uses the v2 POST API with JSON body for real-time data and full
+    customization. PRO plan supports up to 5 studies at 1920x1080.
 
     In production mode (SUPABASE_URL configured), uploads to Supabase Storage
     and returns a public URL. In local development mode, falls back to saving
     to local filesystem and returns the local path as a string.
 
     Args:
-        ticker: Stock/crypto ticker symbol (e.g. "AAPL").
+        ticker: Stock/crypto ticker symbol (e.g. "AAPL", "TSX:ENB").
         timeframe: Strategy timeframe code (e.g. "D", "4H", "W").
         indicators: List of indicator names from strategy config.
         run_id: Pipeline run UUID for unique filenames.
@@ -156,28 +187,29 @@ async def fetch_chart_image(
 
     interval = TIMEFRAME_MAP.get(timeframe, "1D")
     studies = _map_indicators(indicators)
-
     tv_symbol = _to_tradingview_symbol(ticker)
 
-    params: dict[str, str | int] = {
+    body: dict = {
         "symbol": tv_symbol,
         "interval": interval,
         "theme": "dark",
-        "width": 800,
-        "height": 600,
+        "width": 1920,
+        "height": 1080,
     }
     if studies:
-        params["studies"] = ",".join(studies)
+        body["studies"] = studies
 
-    headers = {"Authorization": f"Bearer {api_key}"}
+    headers = {
+        "x-api-key": api_key,
+        "content-type": "application/json",
+    }
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.get(CHART_IMG_BASE, params=params, headers=headers)
+        response = await client.post(CHART_IMG_V2_URL, json=body, headers=headers)
         response.raise_for_status()
 
     image_bytes = response.content
 
-    # Production: Upload to Supabase Storage
     if settings.supabase_url:
         supabase = _get_supabase()
         upload_path = f"{user_id}/{run_id}/{ticker}_{timeframe}.png"
@@ -192,9 +224,150 @@ async def fetch_chart_image(
         logger.info("Chart image uploaded to Supabase: %s (%d bytes)", public_url, len(image_bytes))
         return image_bytes, public_url
 
-    # Local development: Save to filesystem
     filename = f"{ticker}_{timeframe}_{run_id}.png"
     save_path = paths.charts_dir / filename
     save_path.write_bytes(image_bytes)
     logger.info("Chart image saved locally: %s (%d bytes)", save_path, len(image_bytes))
     return image_bytes, str(save_path)
+
+
+STRENGTH_RANK = {"strong": 0, "moderate": 1, "weak": 2}
+
+MAX_DRAWINGS = 5
+
+
+def _build_drawings(
+    key_levels: list[TechnicalLevel],
+    entry_price: float | None = None,
+    stop_loss: float | None = None,
+    take_profit: float | None = None,
+) -> list[dict]:
+    """Build a prioritised list of Horizontal Line drawing objects.
+
+    Trade parameters (entry, stop, target) take priority, then key levels
+    ranked by strength. Total capped at ``MAX_DRAWINGS`` (PRO plan limit).
+    """
+    drawings: list[dict] = []
+
+    if entry_price is not None:
+        drawings.append({
+            "name": "Horizontal Line",
+            "input": {"price": entry_price},
+            "override": {"lineWidth": 2, "lineColor": "rgb(59,130,246)"},
+        })
+
+    if stop_loss is not None:
+        drawings.append({
+            "name": "Horizontal Line",
+            "input": {"price": stop_loss},
+            "override": {"lineWidth": 2, "lineColor": "rgb(239,68,68)"},
+        })
+
+    if take_profit is not None:
+        drawings.append({
+            "name": "Horizontal Line",
+            "input": {"price": take_profit},
+            "override": {"lineWidth": 2, "lineColor": "rgb(34,197,94)"},
+        })
+
+    remaining = MAX_DRAWINGS - len(drawings)
+    if remaining > 0:
+        ranked = sorted(key_levels, key=lambda lv: STRENGTH_RANK.get(lv.strength, 9))
+        for lv in ranked[:remaining]:
+            color = "rgb(34,197,94)" if lv.level_type == "support" else "rgb(239,68,68)"
+            drawings.append({
+                "name": "Horizontal Line",
+                "input": {"price": lv.price},
+                "override": {"lineWidth": 1, "lineColor": color},
+            })
+
+    return drawings
+
+
+async def fetch_annotated_chart(
+    ticker: str,
+    timeframe: str,
+    key_levels: list[TechnicalLevel],
+    run_id: str,
+    user_id: str,
+    entry_price: float | None = None,
+    stop_loss: float | None = None,
+    take_profit: float | None = None,
+) -> str:
+    """Generate a chart image with key-level and trade-parameter overlays.
+
+    Calls Chart-Img v2 POST with only ``drawings[]`` (no studies) to render
+    Horizontal Lines for support/resistance levels and trade parameters
+    directly on the TradingView chart. PRO plan allows up to 5 combined
+    studies + drawings; we use 0 studies and up to 5 drawings.
+
+    Args:
+        ticker: Stock ticker symbol (e.g. "TSX:WCP", "AAPL").
+        timeframe: Strategy timeframe code (e.g. "D", "4H").
+        key_levels: Support/resistance levels from Claude's analysis.
+        run_id: Pipeline run UUID for unique storage path.
+        user_id: User UUID for storage path isolation.
+        entry_price: GPT-recommended entry price (optional).
+        stop_loss: GPT-recommended stop loss (optional).
+        take_profit: GPT-recommended take profit (optional).
+
+    Returns:
+        Public URL (Supabase) or local file path of the annotated chart PNG.
+
+    Raises:
+        RuntimeError: If CHARTIMG_API_KEY is not configured.
+        httpx.HTTPStatusError: If the API returns a non-2xx response.
+    """
+    api_key = get_api_key("chartimg")
+    if not api_key:
+        raise RuntimeError(
+            "Chart-Img API key not configured. Set CHARTIMG_API_KEY in .env."
+        )
+
+    drawings = _build_drawings(key_levels, entry_price, stop_loss, take_profit)
+    if not drawings:
+        logger.info("No drawings to overlay for %s %s — skipping annotated chart", ticker, timeframe)
+        return ""
+
+    interval = TIMEFRAME_MAP.get(timeframe, "1D")
+    tv_symbol = _to_tradingview_symbol(ticker)
+
+    body: dict = {
+        "symbol": tv_symbol,
+        "interval": interval,
+        "theme": "dark",
+        "width": 1920,
+        "height": 1080,
+        "drawings": drawings,
+    }
+
+    headers = {
+        "x-api-key": api_key,
+        "content-type": "application/json",
+    }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(CHART_IMG_V2_URL, json=body, headers=headers)
+        response.raise_for_status()
+
+    image_bytes = response.content
+
+    if settings.supabase_url:
+        supabase = _get_supabase()
+        upload_path = f"{user_id}/{run_id}/annotated/{ticker}_{timeframe}.png"
+
+        supabase.storage.from_("charts").upload(
+            path=upload_path,
+            file=image_bytes,
+            file_options={"content-type": "image/png"},
+        )
+
+        public_url = f"{settings.supabase_url}/storage/v1/object/public/charts/{upload_path}"
+        logger.info("Annotated chart uploaded: %s (%d bytes)", public_url, len(image_bytes))
+        return public_url
+
+    filename = f"annotated_{ticker}_{timeframe}_{run_id}.png"
+    save_path = paths.charts_dir / filename
+    save_path.write_bytes(image_bytes)
+    logger.info("Annotated chart saved locally: %s (%d bytes)", save_path, len(image_bytes))
+    return str(save_path)

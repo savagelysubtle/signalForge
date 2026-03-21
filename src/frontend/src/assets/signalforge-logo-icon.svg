@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" fill="none">
+  <defs>
+    <linearGradient id="bgGlow" x1="18" y1="16" x2="110" y2="112" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1A2030" />
+      <stop offset="1" stop-color="#0D1117" />
+    </linearGradient>
+    <linearGradient id="brandGradient" x1="24" y1="96" x2="103" y2="27" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#9B5CFF" />
+      <stop offset="0.55" stop-color="#7C8DFF" />
+      <stop offset="1" stop-color="#7CEBFF" />
+    </linearGradient>
+    <linearGradient id="metalGradient" x1="30" y1="94" x2="97" y2="32" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#AAB9D8" />
+      <stop offset="0.35" stop-color="#F3F7FF" />
+      <stop offset="0.7" stop-color="#A8BCDC" />
+      <stop offset="1" stop-color="#7CEBFF" />
+    </linearGradient>
+    <radialGradient id="coreGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(64 47) rotate(90) scale(44)">
+      <stop stop-color="#9B5CFF" stop-opacity="0.35" />
+      <stop offset="1" stop-color="#9B5CFF" stop-opacity="0" />
+    </radialGradient>
+    <filter id="shadow" x="10" y="11" width="108" height="111" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse">
+      <feFlood flood-opacity="0" result="BackgroundImageFix" />
+      <feColorMatrix in="SourceAlpha" result="hardAlpha" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" />
+      <feOffset dy="8" />
+      <feGaussianBlur stdDeviation="8" />
+      <feComposite in2="hardAlpha" operator="out" />
+      <feColorMatrix values="0 0 0 0 0.0353 0 0 0 0 0.0627 0 0 0 0 0.1137 0 0 0 0.55 0" />
+      <feBlend in2="BackgroundImageFix" result="effect1_dropShadow_0_1" />
+      <feBlend in="SourceGraphic" in2="effect1_dropShadow_0_1" result="shape" />
+    </filter>
+  </defs>
+
+  <rect x="12" y="12" width="104" height="104" rx="28" fill="url(#bgGlow)" />
+  <rect x="12.5" y="12.5" width="103" height="103" rx="27.5" stroke="url(#brandGradient)" stroke-opacity="0.25" />
+  <circle cx="64" cy="48" r="42" fill="url(#coreGlow)" />
+
+  <g opacity="0.35">
+    <path d="M26 88H102" stroke="url(#brandGradient)" stroke-linecap="round" />
+    <path d="M26 77H102" stroke="url(#brandGradient)" stroke-linecap="round" />
+    <path d="M26 66H102" stroke="url(#brandGradient)" stroke-linecap="round" />
+    <path d="M26 55H102" stroke="url(#brandGradient)" stroke-linecap="round" />
+    <path d="M38 28V100" stroke="url(#brandGradient)" stroke-linecap="round" />
+    <path d="M58 28V100" stroke="url(#brandGradient)" stroke-linecap="round" />
+    <path d="M78 28V100" stroke="url(#brandGradient)" stroke-linecap="round" />
+    <path d="M98 28V100" stroke="url(#brandGradient)" stroke-linecap="round" />
+  </g>
+
+  <g filter="url(#shadow)">
+    <path d="M42 82H56L60 74H68L72 82H86L78 90H50L42 82Z" fill="#111827" />
+    <path d="M42 82H56L60 74H68L72 82H86L78 90H50L42 82Z" stroke="url(#metalGradient)" stroke-width="3" stroke-linejoin="round" />
+    <path d="M53 72L64 59L72 67L92 44" stroke="url(#metalGradient)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" />
+    <path d="M84 44H93V53" stroke="url(#metalGradient)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" />
+    <path d="M38 76L56 58L64 66L79 51" stroke="url(#brandGradient)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+    <path d="M45 72V61" stroke="url(#brandGradient)" stroke-width="4" stroke-linecap="round" />
+    <path d="M58 66V49" stroke="url(#brandGradient)" stroke-width="4" stroke-linecap="round" />
+    <path d="M71 62V41" stroke="url(#brandGradient)" stroke-width="4" stroke-linecap="round" />
+    <path d="M84 52V36" stroke="url(#brandGradient)" stroke-width="4" stroke-linecap="round" />
+  </g>
+</svg>

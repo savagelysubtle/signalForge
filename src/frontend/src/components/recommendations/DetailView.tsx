@@ -17,7 +17,7 @@ type TabType = 'overview' | 'chart' | 'sentiment' | 'synthesis' | 'raw';
 export function DetailView({ tickerData, fullResult }: DetailViewProps) {
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const sentiment = fullResult.sentiment_analyses.find(s => s.ticker === tickerData.ticker) ?? null;
-  const chartAnalysis = fullResult.chart_analyses.find(c => c.ticker === tickerData.ticker) ?? null;
+  const chartAnalyses = fullResult.chart_analyses.filter(c => c.ticker === tickerData.ticker);
   const recommendation = fullResult.recommendations.find(r => r.ticker === tickerData.ticker) ?? null;
 
   const tabs: { id: TabType; label: string }[] = [
@@ -57,7 +57,14 @@ export function DetailView({ tickerData, fullResult }: DetailViewProps) {
       {/* Content */}
       <div className="flex-1 overflow-hidden relative">
         {activeTab === 'overview' && <OverviewTab data={tickerData} />}
-        {activeTab === 'chart' && <ChartTab ticker={tickerData.ticker} chartAnalysis={chartAnalysis} />}
+        {activeTab === 'chart' && (
+          <ChartTab
+            ticker={tickerData.ticker}
+            chartAnalyses={chartAnalyses}
+            chartIndicators={fullResult.chart_indicators ?? []}
+            recommendation={recommendation}
+          />
+        )}
         {activeTab === 'sentiment' && <SentimentTab sentiment={sentiment} />}
         {activeTab === 'raw' && <RawTab data={fullResult} />}
         

@@ -11,7 +11,7 @@ from __future__ import annotations
 from pipeline.schemas import SentimentAnalysis, StrategyConfig
 from utils.hashing import prompt_hash
 
-PROMPT_VERSION = "v2"
+PROMPT_VERSION = "v3"
 
 CHART_SYSTEM_PROMPT = """\
 You are an expert technical analyst reviewing a TradingView chart screenshot.
@@ -90,6 +90,7 @@ def build_chart_prompt(
     ticker: str,
     config: StrategyConfig,
     sentiment: SentimentAnalysis | None = None,
+    timeframe_override: str | None = None,
 ) -> str:
     """Build the user prompt for per-ticker chart analysis.
 
@@ -100,13 +101,16 @@ def build_chart_prompt(
         ticker: Stock/crypto ticker symbol.
         config: The active strategy configuration.
         sentiment: Gemini's sentiment result for this ticker, or None.
+        timeframe_override: If set, use this timeframe instead of the
+            strategy's ``chart_timeframe``.
 
     Returns:
         The formatted user prompt string.
     """
+    effective_timeframe = timeframe_override or config.chart_timeframe
     parts: list[str] = [
         f"Analyze the attached TradingView chart for: {ticker}",
-        f"\nTimeframe: {config.chart_timeframe}",
+        f"\nTimeframe: {effective_timeframe}",
         f"Indicators on chart: {', '.join(config.chart_indicators)}",
     ]
 

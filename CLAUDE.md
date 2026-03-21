@@ -13,6 +13,104 @@ The core loop: User triggers analysis → Perplexity screens stocks → Gemini g
 
 ---
 
+## Agent Rules (READ FIRST)
+
+1. **Use subagents aggressively.** Delegate exploration, research, debugging, and implementation to subagents whenever possible. Keep the main conversation context clean and focused on orchestration and user communication. If a task can be handed to a subagent, it should be.
+
+2. **Use skills wherever they fit.** Before starting work, check available skills and apply any that match the current task (code quality, task workflow, dispatch routing, etc.). Skills encode proven workflows — use them instead of improvising.
+
+3. **Subagent delegation guidelines:**
+   - **Explorer** — codebase search, tracing data flows, understanding features, mapping dependencies
+   - **Researcher** — web research on packages, APIs, docs, code examples, version compatibility
+   - **Debugger** — errors, test failures, unexpected behavior
+   - **Implementer** — focused code changes on a single task
+   - **Quality** — formatting, linting, type checking after code changes
+   - **Git** — commits, branches, PRs, all version control operations
+   - **Strategist** — planning and architecture before large changes
+
+4. **Parallel subagents.** Launch multiple subagents concurrently when their tasks are independent (e.g., explorer + researcher, or multiple implementers on unrelated files).
+
+5. **Context hygiene.** The main agent should summarize subagent results for the user rather than dumping raw output. Keep the main thread readable.
+
+6. **Use Plan mode for anything beyond trivial changes.** If a task touches more than one file, involves architectural decisions, or has multiple valid approaches, switch to Plan mode first. Design the approach collaboratively before writing code. Only skip planning for single-file, obvious fixes. **Write every plan to a `.plan.md` file in `.cursor/plans/`** using the format described below.
+
+7. **Ask questions — more than you think you should.** Before implementing, clarify requirements, edge cases, and preferences with the user. Do not assume intent. Ask about scope, expected behavior, error handling, naming preferences, and trade-offs. Better to ask one extra question than to build the wrong thing and rework it.
+
+---
+
+## Plan File Format
+
+All non-trivial plans MUST be persisted as `.plan.md` files in `.cursor/plans/`. This keeps plans discoverable, trackable, and resumable across sessions.
+
+**Filename:** `<short-snake-case-description>_<8-char-hex>.plan.md`
+(e.g., `fix_chart_ticker_mismatch_49e0ca2c.plan.md`)
+
+**Structure:**
+
+```markdown
+---
+name: Human-readable plan title
+overview:
+  2-3 sentence summary of the problem and the chosen approach.
+  Should be enough context for someone unfamiliar to understand the plan.
+todos:
+  - id: step-1-short-id
+    content: Description of what this step does
+    status: pending
+  - id: step-2-short-id
+    content: Description of what this step does
+    status: pending
+  - id: step-3-short-id
+    content: Description of what this step does
+    status: pending
+isProject: false
+---
+
+# Plan Title
+
+## Problem
+
+What is broken, missing, or being improved? Include concrete symptoms or user impact.
+
+## Solution
+
+High-level approach. Why this approach over alternatives?
+Include diagrams (mermaid) if the data flow or architecture is non-obvious.
+
+## Implementation Steps
+
+### Step 1: <step-1-short-id>
+
+What to change, which files, and how. Include code snippets showing the intended diff
+when helpful. Reference files with markdown links:
+`[path/to/file.py](path/to/file.py)`
+
+### Step 2: <step-2-short-id>
+
+(repeat for each step)
+
+## Risks / Open Questions
+
+- Anything uncertain or requiring user input before proceeding
+- Edge cases to watch for
+- Breaking change potential
+
+## Branch
+
+Which branch this work happens on (e.g., `feature/my-feature` off `dev`).
+```
+
+**Rules for plan files:**
+
+- **Create the plan file BEFORE writing any code.** The plan is the first artifact.
+- **Update todo statuses** in the frontmatter as steps are completed (`pending` → `completed`).
+- **One plan per feature/task.** Don't combine unrelated work into a single plan.
+- **Keep steps atomic.** Each todo should be completable and verifiable independently.
+- **Include file references.** Every step should name the files it touches.
+- **Generate the hex suffix** from any 8 hex characters (e.g., first 8 of a UUID).
+
+---
+
 ## Tech Stack
 
 | Layer | Technology |
@@ -28,7 +126,8 @@ The core loop: User triggers analysis → Perplexity screens stocks → Gemini g
 | LLM SDKs | `openai`, `anthropic`, `google-generativeai` |
 | Validation | Pydantic v2 |
 | Async | `asyncio` + `httpx` |
-| Linting | `ruff` (Black rules) |
+| Linting / Formatting | `ruff` (Black-compatible) |
+| Type checking | `ty` (Astral's type checker) |
 
 ---
 
@@ -36,14 +135,16 @@ The core loop: User triggers analysis → Perplexity screens stocks → Gemini g
 
 These rules are non-negotiable. Every Python file must follow them.
 
-```python
-# Linting: ruff with Black formatting rules
-# Line length: 88 (Black default)
-# String formatting: f-strings ONLY (no .format(), no %)
-# Type hints: REQUIRED on all function signatures
-# Docstrings: Google style, REQUIRED on all public functions/classes
-# Imports: sorted by ruff (isort-compatible)
+- **Formatter:** `ruff format` (Black-compatible — double quotes, spaces, magic trailing commas)
+- **Linter:** `ruff check` (pycodestyle, pyflakes, isort, bugbear, pyupgrade, simplify)
+- **Type checker:** `ty check` (Astral's type checker — same team as ruff/uv)
+- **Line length:** 100
+- **String formatting:** f-strings ONLY (no `.format()`, no `%`)
+- **Type hints:** REQUIRED on all function signatures
+- **Docstrings:** Google style, REQUIRED on all public functions/classes
+- **Imports:** sorted by ruff (isort-compatible)
 
+```python
 # Example of correct style:
 from __future__ import annotations
 
@@ -91,11 +192,39 @@ async def analyze_chart(
     return ChartAnalysis.model_validate_json(raw_response)
 ```
 
-**Ruff configuration** (`pyproject.toml`):
+---
+
+## Code Quality Tooling (MANDATORY)
+
+All Python code MUST pass `ruff` and `ty` before committing. Both tools are installed as dev dependencies (`uv sync` installs them). The authoritative configuration lives in `src/backend/pyproject.toml`.
+
+### Running the tools
+
+```bash
+cd src/backend
+
+# Format (Black-compatible)
+uv run ruff format
+
+# Lint (auto-fix what it can)
+uv run ruff check --fix
+
+# Type check
+uv run ty check
+```
+
+### Rules for AI agents
+
+1. **After writing or editing Python files**, run `uv run ruff format` and `uv run ruff check --fix` from `src/backend/`.
+2. **Before considering a task complete**, run `uv run ty check` and fix any type errors you introduced.
+3. **Never disable ruff rules inline** (`# noqa`) without explaining why in a code comment.
+4. **Never use `# type: ignore`** without a specific error code and explanation (e.g., `# type: ignore[override] — Pydantic model_validate signature`).
+
+### Ruff configuration (`pyproject.toml`)
 
 ```toml
 [tool.ruff]
-line-length = 88
+line-length = 100
 target-version = "py314"
 
 [tool.ruff.lint]
@@ -103,16 +232,36 @@ select = [
     "E",   # pycodestyle errors
     "W",   # pycodestyle warnings
     "F",   # pyflakes
-    "I",   # isort
-    "N",   # pep8-naming
-    "UP",  # pyupgrade
-    "B",   # flake8-bugbear
+    "I",   # isort (import sorting)
+    "B",   # flake8-bugbear (common bugs)
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade (modern syntax)
     "SIM", # flake8-simplify
-    "TCH", # flake8-type-checking
+    "RUF", # Ruff-specific rules
 ]
+ignore = ["E501", "B008", "C901", "B905"]
+fixable = ["ALL"]
 
 [tool.ruff.format]
 quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.ruff.lint.isort]
+known-first-party = ["database", "pipeline", "services", "api", "utils", "middleware", "config"]
+```
+
+### ty configuration (`pyproject.toml`)
+
+```toml
+[tool.ty.environment]
+root = ["."]
+python-version = "3.14"
+
+[tool.ty.terminal]
+output-format = "full"
+error-on-warning = false
 ```
 
 ---
@@ -142,11 +291,16 @@ async def call_claude_chart_analysis(prompt: str, image: bytes) -> ChartAnalysis
 
 ### Sequential Stages & Parallel Execution
 
-Gemini runs before Claude so that Claude receives news context for chart analysis. Bull + Bear GPT calls run concurrently. Use `asyncio.gather()` with `return_exceptions=True` for the GPT parallel calls:
+Perplexity gathers news article URLs alongside fundamentals and passes them to Gemini for grounded sentiment analysis. Gemini runs before Claude so that Claude receives news context for chart analysis. Claude analyzes **two timeframes** per ticker (primary + `secondary_timeframe` from strategy config, e.g. Daily + 4H) concurrently. Bull + Bear GPT calls run concurrently. After GPT, Stage 4.5 generates annotated chart images with key-level overlays via Chart-Img v2 drawings.
 
 ```python
-# Gemini runs first, then Claude receives its output
-sentiment_analyses = await run_gemini_stage(tickers, config)
+# Perplexity screens + gathers news URLs
+screening = await run_perplexity(config)
+
+# Gemini uses Perplexity-provided article URLs for grounded sentiment
+sentiment_analyses = await run_gemini_stage(tickers, config, ticker_news)
+
+# Claude runs both timeframes per ticker concurrently
 chart_analyses = await run_claude_stage(tickers, config, sentiment_analyses)
 
 # Bull + Bear are parallel, Judge is sequential
@@ -155,6 +309,10 @@ bull_cases, bear_cases = await asyncio.gather(
     run_gpt_bear(tickers, screening, chart_analyses, sentiment_analyses, config),
     return_exceptions=True,
 )
+
+# Stage 4.5: Annotated charts with horizontal lines (support/resistance/entry/stop/target)
+# Runs after GPT so trade parameters are available for overlay
+await asyncio.gather(*[annotate(ca) for ca in chart_analyses])
 ```
 
 ### Degraded Pipeline
@@ -215,7 +373,7 @@ src/backend/                 # Python — ALL business logic
     orchestrator.py          # Pipeline execution engine
   services/                  # Business logic services
   api/                       # FastAPI route handlers
-  database/                  # SQLite schema and queries
+  database/                  # PostgreSQL connection and queries
 
 src/frontend/                # React + TypeScript
   components/                # UI components grouped by view
@@ -282,6 +440,11 @@ uv run uvicorn main:app --reload --port 8420
 # Start frontend (dev server)
 cd src/frontend
 bun run dev
+
+# Code quality (run from src/backend/)
+uv run ruff format            # format all Python files (Black-compatible)
+uv run ruff check --fix       # lint and auto-fix
+uv run ty check               # type check
 ```
 
 ---
@@ -290,7 +453,7 @@ bun run dev
 
 1. **This app never executes trades.** If you find yourself writing code that places orders, stop. The user executes in TradingView manually.
 
-2. **API keys go in `.env`, never SQLite or committed config files.** See `.env.example` and `services/keyring_service.py`.
+2. **API keys go in `.env` (dev) or environment variables (production), never in the database or committed config files.** See `.env.example` and `services/keyring_service.py`.
 
 3. **Every LLM output must be Pydantic-validated.** No raw JSON dicts flowing through the pipeline. If it's not a validated model, it's a bug.
 
@@ -300,7 +463,7 @@ bun run dev
 
 6. **The bull/bear debate is optional per strategy.** Check `strategy.enable_debate` before making 3 GPT calls. If disabled, make a single synthesis call.
 
-7. **Chart images are stored in Supabase Storage** in the `charts` bucket, organized as `{user_id}/{run_id}/{ticker}_{timeframe}.png`. The public URL is stored in the database. In local development, images can fall back to local filesystem storage. Never store data files in the project/repo tree.
+7. **Chart images are stored in Supabase Storage** in the `charts` bucket, organized as `{user_id}/{run_id}/{ticker}_{timeframe}.png`. Annotated charts (with key-level overlays) go under `{user_id}/{run_id}/annotated/{ticker}_{timeframe}.png`. The public URLs are stored on the `ChartAnalysis` model (`chart_image_path` and `annotated_chart_path`). In local development, images can fall back to local filesystem storage. Never store data files in the project/repo tree.
 
 8. **The frontend never calls LLM APIs directly.** All API communication goes through the Python backend. The frontend only talks to FastAPI.
 
@@ -341,7 +504,7 @@ Reflections are triggered manually or after N outcome entries (configurable in s
 ### Adding a new chart indicator option
 
 1. Add the indicator name to the allowed values in `schemas.py` (`ChartAnalysis.indicator_readings`)
-2. Update the Chart-Img API URL builder in `services/chart_image.py` to include the indicator
+2. Add the indicator to `INDICATOR_MAP` (and `INDICATOR_INPUTS` if it needs custom params) in `services/chart_image.py` — these map to Chart-Img v2 `studies[]` objects in the POST body
 3. Update Claude's prompt in `pipeline/prompts/claude_chart.py` to describe how to read the indicator
 4. Add the indicator as an option in the frontend strategy editor (`StrategyEditor.tsx`)
 
