@@ -13,6 +13,104 @@ The core loop: User triggers analysis → Perplexity screens stocks → Gemini g
 
 ---
 
+## Agent Rules (READ FIRST)
+
+1. **Use subagents aggressively.** Delegate exploration, research, debugging, and implementation to subagents whenever possible. Keep the main conversation context clean and focused on orchestration and user communication. If a task can be handed to a subagent, it should be.
+
+2. **Use skills wherever they fit.** Before starting work, check available skills and apply any that match the current task (code quality, task workflow, dispatch routing, etc.). Skills encode proven workflows — use them instead of improvising.
+
+3. **Subagent delegation guidelines:**
+   - **Explorer** — codebase search, tracing data flows, understanding features, mapping dependencies
+   - **Researcher** — web research on packages, APIs, docs, code examples, version compatibility
+   - **Debugger** — errors, test failures, unexpected behavior
+   - **Implementer** — focused code changes on a single task
+   - **Quality** — formatting, linting, type checking after code changes
+   - **Git** — commits, branches, PRs, all version control operations
+   - **Strategist** — planning and architecture before large changes
+
+4. **Parallel subagents.** Launch multiple subagents concurrently when their tasks are independent (e.g., explorer + researcher, or multiple implementers on unrelated files).
+
+5. **Context hygiene.** The main agent should summarize subagent results for the user rather than dumping raw output. Keep the main thread readable.
+
+6. **Use Plan mode for anything beyond trivial changes.** If a task touches more than one file, involves architectural decisions, or has multiple valid approaches, switch to Plan mode first. Design the approach collaboratively before writing code. Only skip planning for single-file, obvious fixes. **Write every plan to a `.plan.md` file in `.cursor/plans/`** using the format described below.
+
+7. **Ask questions — more than you think you should.** Before implementing, clarify requirements, edge cases, and preferences with the user. Do not assume intent. Ask about scope, expected behavior, error handling, naming preferences, and trade-offs. Better to ask one extra question than to build the wrong thing and rework it.
+
+---
+
+## Plan File Format
+
+All non-trivial plans MUST be persisted as `.plan.md` files in `.cursor/plans/`. This keeps plans discoverable, trackable, and resumable across sessions.
+
+**Filename:** `<short-snake-case-description>_<8-char-hex>.plan.md`
+(e.g., `fix_chart_ticker_mismatch_49e0ca2c.plan.md`)
+
+**Structure:**
+
+```markdown
+---
+name: Human-readable plan title
+overview:
+  2-3 sentence summary of the problem and the chosen approach.
+  Should be enough context for someone unfamiliar to understand the plan.
+todos:
+  - id: step-1-short-id
+    content: Description of what this step does
+    status: pending
+  - id: step-2-short-id
+    content: Description of what this step does
+    status: pending
+  - id: step-3-short-id
+    content: Description of what this step does
+    status: pending
+isProject: false
+---
+
+# Plan Title
+
+## Problem
+
+What is broken, missing, or being improved? Include concrete symptoms or user impact.
+
+## Solution
+
+High-level approach. Why this approach over alternatives?
+Include diagrams (mermaid) if the data flow or architecture is non-obvious.
+
+## Implementation Steps
+
+### Step 1: <step-1-short-id>
+
+What to change, which files, and how. Include code snippets showing the intended diff
+when helpful. Reference files with markdown links:
+`[path/to/file.py](path/to/file.py)`
+
+### Step 2: <step-2-short-id>
+
+(repeat for each step)
+
+## Risks / Open Questions
+
+- Anything uncertain or requiring user input before proceeding
+- Edge cases to watch for
+- Breaking change potential
+
+## Branch
+
+Which branch this work happens on (e.g., `feature/my-feature` off `dev`).
+```
+
+**Rules for plan files:**
+
+- **Create the plan file BEFORE writing any code.** The plan is the first artifact.
+- **Update todo statuses** in the frontmatter as steps are completed (`pending` → `completed`).
+- **One plan per feature/task.** Don't combine unrelated work into a single plan.
+- **Keep steps atomic.** Each todo should be completable and verifiable independently.
+- **Include file references.** Every step should name the files it touches.
+- **Generate the hex suffix** from any 8 hex characters (e.g., first 8 of a UUID).
+
+---
+
 ## Tech Stack
 
 | Layer | Technology |

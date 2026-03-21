@@ -7,6 +7,7 @@ import {
   Settings 
 } from 'lucide-react';
 import clsx from 'clsx';
+import logoIcon from '../../assets/signalforge-logo-icon.svg';
 
 const navItems = [
   { path: '/', icon: LayoutDashboard, label: 'Recommendations' },
@@ -20,9 +21,7 @@ export function Sidebar() {
   return (
     <div className="w-16 flex flex-col items-center py-4 bg-bg-secondary border-r border-border h-full shrink-0">
       <div className="mb-8">
-        <div className="w-8 h-8 bg-accent-blue rounded-md flex items-center justify-center text-bg-primary font-bold">
-          SF
-        </div>
+        <img src={logoIcon} alt="SignalForge" className="w-9 h-9" />
       </div>
       
       <nav className="flex flex-col gap-4 w-full px-2">

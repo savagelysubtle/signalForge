@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="180" viewBox="0 0 640 180" fill="none">
+  <defs>
+    <linearGradient id="brandGradient" x1="32" y1="132" x2="119" y2="42" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#9B5CFF" />
+      <stop offset="0.55" stop-color="#7C8DFF" />
+      <stop offset="1" stop-color="#7CEBFF" />
+    </linearGradient>
+    <linearGradient id="metalGradient" x1="35" y1="132" x2="118" y2="44" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#AAB9D8" />
+      <stop offset="0.35" stop-color="#F3F7FF" />
+      <stop offset="0.7" stop-color="#A8BCDC" />
+      <stop offset="1" stop-color="#7CEBFF" />
+    </linearGradient>
+    <linearGradient id="signalText" x1="164" y1="74" x2="625" y2="124" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F3F7FF" />
+      <stop offset="0.55" stop-color="#D7E0F1" />
+      <stop offset="1" stop-color="#7CEBFF" />
+    </linearGradient>
+    <filter id="glow" x="0" y="0" width="640" height="180" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse">
+      <feFlood flood-opacity="0" result="BackgroundImageFix" />
+      <feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape" />
+      <feGaussianBlur result="effect1_foregroundBlur_0_1" stdDeviation="0.4" />
+    </filter>
+  </defs>
+
+  <g filter="url(#glow)">
+    <g transform="translate(0 5)">
+      <rect x="8" y="17" width="128" height="128" rx="30" fill="#0D1117" />
+      <rect x="8.5" y="17.5" width="127" height="127" rx="29.5" stroke="url(#brandGradient)" stroke-opacity="0.22" />
+      <path d="M39 104H56L62 95H72L78 104H105L94 115H50L39 104Z" fill="#111827" stroke="url(#metalGradient)" stroke-width="4" stroke-linejoin="round" />
+      <path d="M57 92L72 76L83 87L111 58" stroke="url(#metalGradient)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" />
+      <path d="M100 58H112V70" stroke="url(#metalGradient)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" />
+      <path d="M48 97V80" stroke="url(#brandGradient)" stroke-width="6" stroke-linecap="round" />
+      <path d="M64 88V61" stroke="url(#brandGradient)" stroke-width="6" stroke-linecap="round" />
+      <path d="M80 83V48" stroke="url(#brandGradient)" stroke-width="6" stroke-linecap="round" />
+      <path d="M96 68V40" stroke="url(#brandGradient)" stroke-width="6" stroke-linecap="round" />
+    </g>
+
+    <text x="166" y="98" fill="url(#signalText)" font-family="'Segoe UI', Arial, sans-serif" font-size="58" font-weight="700" letter-spacing="-1.8">
+      SignalForge
+    </text>
+    <text x="168" y="128" fill="#8B949E" font-family="'Segoe UI', Arial, sans-serif" font-size="19" font-weight="600" letter-spacing="5.6">
+      AI-POWERED MARKET INTELLIGENCE
+    </text>
+  </g>
+</svg>
