@@ -115,6 +115,12 @@ export interface Recommendation {
 // Pipeline Result (full run output)
 // ---------------------------------------------------------------------------
 
+export interface ChartError {
+  ticker: string;
+  status: string;
+  error: string;
+}
+
 export interface PipelineResult {
   run_id: string;
   timestamp: string; // ISO 8601
@@ -122,9 +128,10 @@ export interface PipelineResult {
   mode: "discovery" | "analysis" | "combined" | "prompt";
   input_tickers: string[];
   screening: ScreeningResult | null;
-  chart_analyses: ChartAnalysis[];       // Phase 3
-  sentiment_analyses: SentimentAnalysis[]; // Phase 2 (Gemini)
-  recommendations: Recommendation[];     // Phase 4
+  chart_analyses: ChartAnalysis[];
+  chart_errors: ChartError[];
+  sentiment_analyses: SentimentAnalysis[];
+  recommendations: Recommendation[];
   stage_errors: StageError[];
   total_duration_seconds: number;
   prompt_versions: Record<string, string>;

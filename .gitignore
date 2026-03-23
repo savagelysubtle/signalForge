@@ -18,7 +18,6 @@ ENV/
 # uv.lock is committed for reproducible Docker builds
 
 # IDE
-.vscode/
 .idea/
 *.swp
 *.swo

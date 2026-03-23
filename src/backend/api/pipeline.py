@@ -16,6 +16,7 @@ from middleware.auth import CurrentUser
 from pipeline.orchestrator import run_pipeline
 from pipeline.schemas import (
     ChartAnalysis,
+    ChartError,
     DebateCase,
     FundamentalData,
     PipelineResult,
@@ -85,6 +86,7 @@ async def get_pipeline_status(run_id: str, user_id: CurrentUser) -> PipelineResu
     screening = await _load_screening(client, run_id)
     sentiments = await _load_sentiment_analyses(client, run_id)
     charts = await _load_chart_analyses(client, run_id)
+    chart_errors = await _load_chart_errors(client, run_id)
 
     return PipelineResult(
         run_id=row["id"],
@@ -94,6 +96,7 @@ async def get_pipeline_status(run_id: str, user_id: CurrentUser) -> PipelineResu
         screening=screening,
         sentiment_analyses=sentiments,
         chart_analyses=charts,
+        chart_errors=chart_errors,
         recommendations=recs,
         stage_errors=json.loads(row["stage_errors"]) if row["stage_errors"] else [],
         total_duration_seconds=row["duration_seconds"] or 0.0,
@@ -130,10 +133,7 @@ async def list_pipeline_runs(user_id: CurrentUser) -> list[PipelineRunSummary]:
         manual = json.loads(r["manual_tickers"]) if r["manual_tickers"] else []
 
         rec_resp = (
-            await client.table("recommendations")
-            .select("ticker")
-            .eq("run_id", r["id"])
-            .execute()
+            await client.table("recommendations").select("ticker").eq("run_id", r["id"]).execute()
         )
         rec_rows = rec_resp.data
         discovered = list(dict.fromkeys(rr["ticker"] for rr in rec_rows))
@@ -226,20 +226,12 @@ async def _load_screening(
         except Exception:
             pass
 
-    rec_resp = (
-        await client.table("recommendations")
-        .select("ticker")
-        .eq("run_id", run_id)
-        .execute()
-    )
+    rec_resp = await client.table("recommendations").select("ticker").eq("run_id", run_id).execute()
     rec_rows = rec_resp.data
     if not rec_rows:
         return None
 
-    tickers = [
-        FundamentalData(ticker=t)
-        for t in dict.fromkeys(r["ticker"] for r in rec_rows)
-    ]
+    tickers = [FundamentalData(ticker=t) for t in dict.fromkeys(r["ticker"] for r in rec_rows)]
     return ScreeningResult(
         mode="discovery",
         tickers=tickers,
@@ -289,3 +281,29 @@ async def _load_chart_analyses(
             with contextlib.suppress(Exception):
                 charts.append(ChartAnalysis.model_validate_json(r["raw_response"]))
     return charts
+
+
+async def _load_chart_errors(
+    client: AsyncClient,
+    run_id: str,
+) -> list[ChartError]:
+    """Load per-ticker chart analysis errors for a pipeline run."""
+    resp = (
+        await client.table("stage_outputs")
+        .select("ticker, status, parsed_output")
+        .eq("run_id", run_id)
+        .eq("stage", "claude")
+        .neq("status", "success")
+        .execute()
+    )
+    rows = resp.data
+    errors: list[ChartError] = []
+    for r in rows:
+        errors.append(
+            ChartError(
+                ticker=r.get("ticker", "unknown"),
+                status=r.get("status", "unknown"),
+                error=r.get("parsed_output") or "",
+            )
+        )
+    return errors

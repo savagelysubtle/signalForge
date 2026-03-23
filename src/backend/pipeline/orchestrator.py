@@ -9,12 +9,15 @@ recent news catalysts.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
 import uuid
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Any, Literal, cast
+
+from supabase import AsyncClient
 
 from database.connection import get_db
 from pipeline.prompts.claude_chart import get_prompt_hash as claude_hash
@@ -22,13 +25,17 @@ from pipeline.prompts.gemini_sentiment import get_prompt_hash as gemini_hash
 from pipeline.prompts.gpt_debate import get_bear_hash, get_bull_hash, get_judge_hash
 from pipeline.prompts.perplexity_analysis import get_prompt_hash as analysis_hash
 from pipeline.prompts.perplexity_discovery import get_prompt_hash as discovery_hash
-from pipeline.schemas import PipelineResult, Recommendation, StrategyConfig
+from pipeline.schemas import (
+    ChartAnalysis,
+    ChartError,
+    PipelineResult,
+    Recommendation,
+    StrategyConfig,
+)
 from pipeline.stages.claude import run_chart_analysis
 from pipeline.stages.gemini import run_sentiment
 from pipeline.stages.gpt import run_debate
 from pipeline.stages.perplexity import run_analysis, run_discovery, run_prompted_discovery
-import asyncio
-
 from services.chart_image import fetch_annotated_chart
 from services.reflection import load_reflection_context
 from services.strategy import get_strategy
@@ -83,17 +90,21 @@ async def run_pipeline(
     )
 
     client = await get_db()
-    await client.table("pipeline_runs").insert(
-        {
-            "id": run_id,
-            "user_id": user_id,
-            "strategy_id": strategy_id,
-            "mode": mode,
-            "manual_tickers": json.dumps(manual_tickers or []),
-            "status": "running",
-            "started_at": result.timestamp.isoformat(),
-        }
-    ).execute()
+    await (
+        client.table("pipeline_runs")
+        .insert(
+            {
+                "id": run_id,
+                "user_id": user_id,
+                "strategy_id": strategy_id,
+                "mode": mode,
+                "manual_tickers": json.dumps(manual_tickers or []),
+                "status": "running",
+                "started_at": result.timestamp.isoformat(),
+            }
+        )
+        .execute()
+    )
 
     screening = None
     stage_metadata: dict = {}
@@ -143,11 +154,7 @@ async def run_pipeline(
 
     if screening and screening.tickers:
         ticker_symbols = [t.ticker for t in screening.tickers]
-        ticker_news = {
-            t.ticker: t.news_urls
-            for t in screening.tickers
-            if t.news_urls
-        }
+        ticker_news = {t.ticker: t.news_urls for t in screening.tickers if t.news_urls}
         try:
             sentiments, gemini_metadata_list = await run_sentiment(
                 ticker_symbols, effective_config, ticker_news=ticker_news or None
@@ -179,6 +186,14 @@ async def run_pipeline(
             result.chart_analyses = charts
             for cm in claude_metadata_list:
                 await _save_stage_output(run_id, cm)
+                if cm.get("status") not in ("success", None):
+                    result.chart_errors.append(
+                        ChartError(
+                            ticker=cm.get("ticker", "unknown"),
+                            status=cm.get("status", "unknown"),
+                            error=cm.get("error", ""),
+                        )
+                    )
         except Exception as exc:
             result.stage_errors.append(
                 {
@@ -257,6 +272,9 @@ async def run_pipeline(
         )
         logger.info("Stage 4.5 annotated charts complete")
 
+        # Persist annotated_chart_path back into stage_outputs so it survives reload
+        await _update_annotated_paths(client, run_id, result.chart_analyses)
+
     elapsed = time.perf_counter() - start
     result.total_duration_seconds = round(elapsed, 2)
     result.prompt_versions = {
@@ -272,15 +290,20 @@ async def run_pipeline(
         screening or result.sentiment_analyses or result.chart_analyses or result.recommendations
     )
     status = "completed" if has_data else ("partial" if result.stage_errors else "failed")
-    await client.table("pipeline_runs").update(
-        {
-            "status": status,
-            "completed_at": datetime.now(tz=UTC).isoformat(),
-            "duration_seconds": result.total_duration_seconds,
-            "prompt_versions": json.dumps(result.prompt_versions),
-            "stage_errors": json.dumps(result.stage_errors) if result.stage_errors else None,
-        }
-    ).eq("id", run_id).execute()
+    await (
+        client.table("pipeline_runs")
+        .update(
+            {
+                "status": status,
+                "completed_at": datetime.now(tz=UTC).isoformat(),
+                "duration_seconds": result.total_duration_seconds,
+                "prompt_versions": json.dumps(result.prompt_versions),
+                "stage_errors": json.dumps(result.stage_errors) if result.stage_errors else None,
+            }
+        )
+        .eq("id", run_id)
+        .execute()
+    )
 
     return result
 
@@ -307,6 +330,61 @@ async def _save_stage_output(run_id: str, metadata: dict) -> None:
     if metadata.get("error"):
         row["parsed_output"] = metadata["error"]
     await client.table("stage_outputs").insert(row).execute()
+
+
+async def _update_annotated_paths(
+    client: AsyncClient,
+    run_id: str,
+    chart_analyses: list[ChartAnalysis],
+) -> None:
+    """Persist annotated_chart_path into existing stage_outputs rows.
+
+    Stage 4.5 sets annotated_chart_path on in-memory ChartAnalysis objects
+    after Stage 3 already saved raw_response. This function updates those
+    rows so the annotated URL survives database reloads.
+    """
+    analyses_with_paths = [ca for ca in chart_analyses if ca.annotated_chart_path]
+    if not analyses_with_paths:
+        return
+
+    resp = (
+        await client.table("stage_outputs")
+        .select("id, ticker, raw_response")
+        .eq("run_id", run_id)
+        .eq("stage", "claude")
+        .eq("status", "success")
+        .execute()
+    )
+    rows = cast(list[dict[str, Any]], resp.data or [])
+
+    row_map: dict[tuple[str, str], str] = {}
+    for row in rows:
+        if not row["raw_response"]:
+            continue
+        try:
+            data = json.loads(row["raw_response"])
+            key = (data.get("ticker", ""), data.get("timeframe", ""))
+            row_map[key] = row["id"]
+        except (
+            json.JSONDecodeError,
+            KeyError,
+        ):
+            continue
+
+    for ca in analyses_with_paths:
+        row_id = row_map.get((ca.ticker, ca.timeframe))
+        if row_id:
+            await (
+                client.table("stage_outputs")
+                .update({"raw_response": ca.model_dump_json()})
+                .eq("id", row_id)
+                .execute()
+            )
+            logger.debug(
+                "Updated annotated_chart_path for %s %s in stage_outputs",
+                ca.ticker,
+                ca.timeframe,
+            )
 
 
 async def _save_recommendations(

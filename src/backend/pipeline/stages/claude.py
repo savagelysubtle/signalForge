@@ -127,7 +127,9 @@ async def _analyze_ticker(
         Tuple of (validated ChartAnalysis or None, metadata dict).
     """
     effective_timeframe = timeframe_override or config.chart_timeframe
-    user_prompt = build_chart_prompt(ticker, config, sentiment, timeframe_override=timeframe_override)
+    user_prompt = build_chart_prompt(
+        ticker, config, sentiment, timeframe_override=timeframe_override
+    )
     metadata: dict = {
         "stage": "claude",
         "ticker": ticker,
@@ -138,19 +140,29 @@ async def _analyze_ticker(
 
     start = time.perf_counter()
 
-    try:
-        image_bytes, image_path = await fetch_chart_image(
-            ticker,
-            effective_timeframe,
-            config.chart_indicators,
-            run_id,
-            user_id,
-        )
-    except Exception as exc:
+    last_fetch_error: Exception | None = None
+    for attempt in range(2):
+        try:
+            image_bytes, image_path = await fetch_chart_image(
+                ticker,
+                effective_timeframe,
+                config.chart_indicators,
+                run_id,
+                user_id,
+            )
+            last_fetch_error = None
+            break
+        except Exception as exc:
+            last_fetch_error = exc
+            if attempt == 0:
+                logger.warning("Chart fetch attempt 1 failed for %s, retrying: %s", ticker, exc)
+                await asyncio.sleep(2)
+
+    if last_fetch_error is not None:
         metadata["duration_ms"] = int((time.perf_counter() - start) * 1000)
         metadata["status"] = "chart_fetch_error"
-        metadata["error"] = str(exc)
-        logger.exception("Chart image fetch failed for %s", ticker)
+        metadata["error"] = str(last_fetch_error)
+        logger.exception("Chart image fetch failed for %s after retry", ticker)
         return None, metadata
 
     try:
@@ -200,9 +212,11 @@ async def run_chart_analysis(
     sentiment_map: dict[str, SentimentAnalysis] = {s.ticker: s for s in sentiments}
 
     tasks = []
+    task_tickers: list[str] = []
     for ticker in tickers:
         sentiment = sentiment_map.get(ticker)
         tasks.append(_analyze_ticker(ticker, config, sentiment, run_id, user_id))
+        task_tickers.append(ticker)
         if config.secondary_timeframe:
             tasks.append(
                 _analyze_ticker(
@@ -214,6 +228,7 @@ async def run_chart_analysis(
                     timeframe_override=config.secondary_timeframe,
                 )
             )
+            task_tickers.append(ticker)
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     charts: list[ChartAnalysis] = []
@@ -221,11 +236,11 @@ async def run_chart_analysis(
 
     for i, result in enumerate(results):
         if isinstance(result, Exception):
-            logger.error("Claude task failed for %s: %s", tickers[i], result)
+            logger.error("Claude task failed for %s: %s", task_tickers[i], result)
             all_metadata.append(
                 {
                     "stage": "claude",
-                    "ticker": tickers[i],
+                    "ticker": task_tickers[i],
                     "model": CLAUDE_MODEL,
                     "status": "api_error",
                     "error": str(result),
