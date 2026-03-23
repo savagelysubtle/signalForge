@@ -55,6 +55,13 @@ export const api = {
   listStrategies: () => request<StrategyConfig[]>("/api/strategies"),
   listTemplates: () => request<StrategyConfig[]>("/api/strategies/templates"),
 
+  // Charts
+  fetchChart: (body: { ticker: string; timeframe: string; indicators?: string[] }) =>
+    request<{ ticker: string; timeframe: string; image_url: string }>("/api/charts/fetch", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
   // Settings
   getApiKeyStatus: () =>
     request<ApiKeyStatus>("/api/settings/api-keys/status"),
