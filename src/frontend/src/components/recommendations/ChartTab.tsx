@@ -1,8 +1,9 @@
 import { useState, useCallback } from 'react';
 import type { ChartAnalysis, ChartError, Recommendation, TechnicalLevel, IndicatorReading } from '../../types';
 import { PriceLevelMap } from './PriceLevelMap';
-import { Maximize2, X, AlertTriangle } from 'lucide-react';
+import { Maximize2, X, AlertTriangle, Loader2 } from 'lucide-react';
 import clsx from 'clsx';
+import { api } from '../../api/client';
 
 interface ChartTabProps {
   ticker: string;
@@ -331,74 +332,124 @@ function ChartErrorPanel({ errors }: { errors: ChartError[] }) {
   );
 }
 
+const AVAILABLE_TIMEFRAMES = ["15m", "1H", "4H", "D", "W"] as const;
+
 export function ChartTab({ ticker, chartAnalyses, chartErrors, chartIndicators, recommendation }: ChartTabProps) {
   const [activeTimeframe, setActiveTimeframe] = useState(0);
+  const [adHocChartUrl, setAdHocChartUrl] = useState<string | null>(null);
+  const [adHocTimeframe, setAdHocTimeframe] = useState<string | null>(null);
+  const [adHocLoading, setAdHocLoading] = useState(false);
   const activeAnalysis = chartAnalyses[activeTimeframe] ?? null;
   const hasErrors = chartErrors.length > 0;
 
-  return (
-    <div className="flex h-full w-full gap-4 p-4">
-      {/* Left: Claude Analysis */}
-      <div className="w-1/2 overflow-hidden border border-border rounded-lg bg-bg-secondary flex flex-col">
-        {chartAnalyses.length > 1 && (
-          <div className="flex border-b border-border px-3 shrink-0">
-            {chartAnalyses.map((analysis, i) => (
-              <button
-                key={`${analysis.timeframe}-${i}`}
-                onClick={() => setActiveTimeframe(i)}
-                className={clsx(
-                  "px-3 py-2.5 text-xs font-medium border-b-2 transition-colors",
-                  activeTimeframe === i
-                    ? "border-accent-blue text-accent-blue"
-                    : "border-transparent text-text-secondary hover:text-text-primary"
-                )}
-              >
-                {getTimeframeLabel(analysis.timeframe)}
-              </button>
-            ))}
-          </div>
-        )}
+  const analysisTimeframes = new Set(chartAnalyses.map(c => c.timeframe));
 
-        {activeAnalysis ? (
-          <div className="flex-1 overflow-hidden">
-            <AnalysisPanel analysis={activeAnalysis} />
-          </div>
-        ) : hasErrors ? (
-          <ChartErrorPanel errors={chartErrors} />
-        ) : (
-          <div className="flex items-center justify-center h-full text-text-secondary flex-col gap-2">
-            <span className="text-sm">Claude Vision Analysis</span>
-            <span className="text-xs opacity-50">No chart analysis available for this ticker</span>
-          </div>
-        )}
+  const handleTimeframeClick = useCallback(async (tf: string) => {
+    // If we have a pipeline analysis for this timeframe, switch to it
+    const idx = chartAnalyses.findIndex(c => c.timeframe === tf);
+    if (idx !== -1) {
+      setActiveTimeframe(idx);
+      setAdHocChartUrl(null);
+      setAdHocTimeframe(null);
+      return;
+    }
+    // Otherwise fetch an ad-hoc chart image
+    setAdHocLoading(true);
+    setAdHocTimeframe(tf);
+    try {
+      const resp = await api.fetchChart({ ticker, timeframe: tf, indicators: chartIndicators });
+      setAdHocChartUrl(resp.image_url);
+      setActiveTimeframe(-1);
+    } catch (err) {
+      console.error("Ad-hoc chart fetch failed:", err);
+      setAdHocChartUrl(null);
+    } finally {
+      setAdHocLoading(false);
+    }
+  }, [chartAnalyses, ticker, chartIndicators]);
+
+  const selectedTf = adHocTimeframe ?? activeAnalysis?.timeframe ?? null;
+
+  return (
+    <div className="flex flex-col h-full w-full">
+      {/* Timeframe selector bar */}
+      <div className="flex items-center gap-1 px-4 py-2 border-b border-border bg-bg-secondary shrink-0">
+        <span className="text-xs text-text-secondary mr-2">Timeframe:</span>
+        {AVAILABLE_TIMEFRAMES.map(tf => (
+          <button
+            key={tf}
+            onClick={() => handleTimeframeClick(tf)}
+            className={clsx(
+              "px-2.5 py-1 text-xs font-medium rounded transition-colors",
+              selectedTf === tf
+                ? "bg-accent-blue/15 text-accent-blue"
+                : analysisTimeframes.has(tf)
+                  ? "bg-bg-tertiary text-text-primary hover:bg-bg-tertiary/80"
+                  : "text-text-secondary hover:text-text-primary hover:bg-bg-tertiary"
+            )}
+          >
+            {getTimeframeLabel(tf)}
+          </button>
+        ))}
+        {adHocLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-accent-blue ml-2" />}
       </div>
 
-      {/* Right: Annotated Chart / Price Level Map */}
-      <div className="w-1/2 border border-border rounded-lg overflow-hidden bg-bg-secondary flex flex-col">
-        {activeAnalysis?.annotated_chart_path ? (
-          <>
-            <div className="flex-1 overflow-auto">
-              <ExpandableChartImage
-                src={activeAnalysis.annotated_chart_path}
-                alt={`${activeAnalysis.ticker} ${activeAnalysis.timeframe} annotated`}
-              />
+      <div className="flex flex-1 gap-4 p-4 overflow-hidden">
+        {/* Left: Claude Analysis */}
+        <div className="w-1/2 overflow-hidden border border-border rounded-lg bg-bg-secondary flex flex-col">
+          {activeAnalysis ? (
+            <div className="flex-1 overflow-hidden">
+              <AnalysisPanel analysis={activeAnalysis} />
             </div>
-            <CompactLevelLegend analysis={activeAnalysis} recommendation={recommendation} />
-          </>
-        ) : activeAnalysis ? (
-          <PriceLevelMap analysis={activeAnalysis} recommendation={recommendation} />
-        ) : hasErrors ? (
-          <div className="flex items-center justify-center h-full text-text-secondary flex-col gap-3">
-            <AlertTriangle className="w-5 h-5 text-accent-yellow" />
-            <span className="text-sm">Price Level Map</span>
-            <span className="text-xs opacity-50">Chart analysis failed — no levels to display</span>
-          </div>
-        ) : (
-          <div className="flex items-center justify-center h-full text-text-secondary flex-col gap-2">
-            <span className="text-sm">Price Level Map</span>
-            <span className="text-xs opacity-50">No analysis data available</span>
-          </div>
-        )}
+          ) : adHocChartUrl ? (
+            <div className="flex-1 overflow-auto p-4">
+              <ExpandableChartImage src={adHocChartUrl} alt={`${ticker} ${adHocTimeframe} chart`} />
+              <div className="mt-3 text-xs text-text-secondary text-center">
+                Chart-only view — no Claude analysis for this timeframe
+              </div>
+            </div>
+          ) : hasErrors ? (
+            <ChartErrorPanel errors={chartErrors} />
+          ) : (
+            <div className="flex items-center justify-center h-full text-text-secondary flex-col gap-2">
+              <span className="text-sm">Claude Vision Analysis</span>
+              <span className="text-xs opacity-50">No chart analysis available for this ticker</span>
+            </div>
+          )}
+        </div>
+
+        {/* Right: Annotated Chart / Price Level Map */}
+        <div className="w-1/2 border border-border rounded-lg overflow-hidden bg-bg-secondary flex flex-col">
+          {activeAnalysis?.annotated_chart_path ? (
+            <>
+              <div className="flex-1 overflow-auto">
+                <ExpandableChartImage
+                  src={activeAnalysis.annotated_chart_path}
+                  alt={`${activeAnalysis.ticker} ${activeAnalysis.timeframe} annotated`}
+                />
+              </div>
+              <CompactLevelLegend analysis={activeAnalysis} recommendation={recommendation} />
+            </>
+          ) : activeAnalysis ? (
+            <PriceLevelMap analysis={activeAnalysis} recommendation={recommendation} />
+          ) : adHocChartUrl ? (
+            <div className="flex items-center justify-center h-full text-text-secondary flex-col gap-2">
+              <span className="text-sm">Price Level Map</span>
+              <span className="text-xs opacity-50">Ad-hoc chart — no level data available</span>
+            </div>
+          ) : hasErrors ? (
+            <div className="flex items-center justify-center h-full text-text-secondary flex-col gap-3">
+              <AlertTriangle className="w-5 h-5 text-accent-yellow" />
+              <span className="text-sm">Price Level Map</span>
+              <span className="text-xs opacity-50">Chart analysis failed — no levels to display</span>
+            </div>
+          ) : (
+            <div className="flex items-center justify-center h-full text-text-secondary flex-col gap-2">
+              <span className="text-sm">Price Level Map</span>
+              <span className="text-xs opacity-50">No analysis data available</span>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

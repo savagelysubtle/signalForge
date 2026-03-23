@@ -82,20 +82,30 @@ EXCHANGE_SUFFIX_MAP: dict[str, str] = {
 }
 
 
-def _to_tradingview_symbol(ticker: str) -> str:
-    """Convert Yahoo Finance ticker format to TradingView format.
+_US_EXCHANGE_FALLBACKS = ["NASDAQ", "NYSE", "AMEX"]
+
+
+def _to_tradingview_symbols(ticker: str) -> list[str]:
+    """Convert ticker to one or more TradingView ``EXCHANGE:SYMBOL`` candidates.
+
+    Chart-Img v2 requires ``EXCHANGE:SYMBOL`` format. For non-US tickers
+    (Yahoo suffixes or already-prefixed), returns a single candidate. For
+    bare US symbols, returns candidates for NASDAQ, NYSE, and AMEX since
+    we cannot know the exchange at this point.
 
     Examples:
-        AC.TO  -> TSX:AC
-        RY.TO  -> TSX:RY
-        SHOP.V -> TSXV:SHOP
-        AAPL   -> AAPL  (unchanged)
+        TSX:ENB    -> ["TSX:ENB"]
+        AC.TO      -> ["TSX:AC"]
+        AAPL       -> ["NASDAQ:AAPL", "NYSE:AAPL", "AMEX:AAPL"]
     """
+    if ":" in ticker:
+        return [ticker]
     for suffix, exchange in EXCHANGE_SUFFIX_MAP.items():
         if ticker.endswith(suffix):
             base = ticker[: -len(suffix)]
-            return f"{exchange}:{base}"
-    return ticker
+            return [f"{exchange}:{base}"]
+    return [f"{ex}:{ticker}" for ex in _US_EXCHANGE_FALLBACKS]
+
 
 _supabase_client: Client | None = None
 
@@ -188,26 +198,40 @@ async def fetch_chart_image(
 
     interval = TIMEFRAME_MAP.get(timeframe, "1D")
     studies = _map_indicators(indicators)
-    tv_symbol = _to_tradingview_symbol(ticker)
-
-    body: dict = {
-        "symbol": tv_symbol,
-        "interval": interval,
-        "theme": "dark",
-        "width": 1920,
-        "height": 1080,
-    }
-    if studies:
-        body["studies"] = studies
+    tv_symbols = _to_tradingview_symbols(ticker)
 
     headers = {
         "x-api-key": api_key,
         "content-type": "application/json",
     }
 
+    response = None
     async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(CHART_IMG_V2_URL, json=body, headers=headers)
-        response.raise_for_status()
+        for tv_symbol in tv_symbols:
+            body: dict = {
+                "symbol": tv_symbol,
+                "interval": interval,
+                "theme": "dark",
+                "width": 1920,
+                "height": 1080,
+            }
+            if studies:
+                body["studies"] = studies
+
+            logger.info("Chart-Img request: %s", {k: v for k, v in body.items() if k != "studies"})
+            response = await client.post(CHART_IMG_V2_URL, json=body, headers=headers)
+            if response.status_code < 400:
+                break
+            logger.warning(
+                "Chart-Img %s failed (%s), trying next exchange", tv_symbol, response.status_code
+            )
+
+    if response is None or response.status_code >= 400:
+        error_detail = response.text[:500] if response else "No response"
+        logger.error("Chart-Img all candidates failed for %s: %s", ticker, error_detail)
+        if response is not None:
+            response.raise_for_status()
+        raise RuntimeError(f"Chart-Img: no valid exchange found for {ticker}")
 
     image_bytes = response.content
 
@@ -251,36 +275,44 @@ def _build_drawings(
     drawings: list[dict] = []
 
     if entry_price is not None:
-        drawings.append({
-            "name": "Horizontal Line",
-            "input": {"price": entry_price},
-            "override": {"lineWidth": 2, "lineColor": "rgb(59,130,246)"},
-        })
+        drawings.append(
+            {
+                "name": "Horizontal Line",
+                "input": {"price": entry_price},
+                "override": {"lineWidth": 2, "lineColor": "rgb(59,130,246)"},
+            }
+        )
 
     if stop_loss is not None:
-        drawings.append({
-            "name": "Horizontal Line",
-            "input": {"price": stop_loss},
-            "override": {"lineWidth": 2, "lineColor": "rgb(239,68,68)"},
-        })
+        drawings.append(
+            {
+                "name": "Horizontal Line",
+                "input": {"price": stop_loss},
+                "override": {"lineWidth": 2, "lineColor": "rgb(239,68,68)"},
+            }
+        )
 
     if take_profit is not None:
-        drawings.append({
-            "name": "Horizontal Line",
-            "input": {"price": take_profit},
-            "override": {"lineWidth": 2, "lineColor": "rgb(34,197,94)"},
-        })
+        drawings.append(
+            {
+                "name": "Horizontal Line",
+                "input": {"price": take_profit},
+                "override": {"lineWidth": 2, "lineColor": "rgb(34,197,94)"},
+            }
+        )
 
     remaining = MAX_DRAWINGS - len(drawings)
     if remaining > 0:
         ranked = sorted(key_levels, key=lambda lv: STRENGTH_RANK.get(lv.strength, 9))
         for lv in ranked[:remaining]:
             color = "rgb(34,197,94)" if lv.level_type == "support" else "rgb(239,68,68)"
-            drawings.append({
-                "name": "Horizontal Line",
-                "input": {"price": lv.price},
-                "override": {"lineWidth": 1, "lineColor": color},
-            })
+            drawings.append(
+                {
+                    "name": "Horizontal Line",
+                    "input": {"price": lv.price},
+                    "override": {"lineWidth": 1, "lineColor": color},
+                }
+            )
 
     return drawings
 
@@ -321,35 +353,47 @@ async def fetch_annotated_chart(
     """
     api_key = get_api_key("chartimg")
     if not api_key:
-        raise RuntimeError(
-            "Chart-Img API key not configured. Set CHARTIMG_API_KEY in .env."
-        )
+        raise RuntimeError("Chart-Img API key not configured. Set CHARTIMG_API_KEY in .env.")
 
     drawings = _build_drawings(key_levels, entry_price, stop_loss, take_profit)
     if not drawings:
-        logger.info("No drawings to overlay for %s %s — skipping annotated chart", ticker, timeframe)
+        logger.info(
+            "No drawings to overlay for %s %s — skipping annotated chart", ticker, timeframe
+        )
         return ""
 
     interval = TIMEFRAME_MAP.get(timeframe, "1D")
-    tv_symbol = _to_tradingview_symbol(ticker)
-
-    body: dict = {
-        "symbol": tv_symbol,
-        "interval": interval,
-        "theme": "dark",
-        "width": 1920,
-        "height": 1080,
-        "drawings": drawings,
-    }
+    tv_symbols = _to_tradingview_symbols(ticker)
 
     headers = {
         "x-api-key": api_key,
         "content-type": "application/json",
     }
 
+    response = None
     async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(CHART_IMG_V2_URL, json=body, headers=headers)
-        response.raise_for_status()
+        for tv_symbol in tv_symbols:
+            body: dict = {
+                "symbol": tv_symbol,
+                "interval": interval,
+                "theme": "dark",
+                "width": 1920,
+                "height": 1080,
+                "drawings": drawings,
+            }
+            response = await client.post(CHART_IMG_V2_URL, json=body, headers=headers)
+            if response.status_code < 400:
+                break
+            logger.warning(
+                "Annotated chart %s failed (%s), trying next exchange",
+                tv_symbol,
+                response.status_code,
+            )
+
+    if response is None or response.status_code >= 400:
+        if response is not None:
+            response.raise_for_status()
+        raise RuntimeError(f"Chart-Img: no valid exchange found for {ticker}")
 
     image_bytes = response.content
 
