@@ -15,7 +15,21 @@
       "Bash(taskkill //F //PID 26848)",
       "Bash(taskkill //F //IM python3.14t.exe)",
       "Bash(git config:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(bun --version)",
+      "Bash(netstat -ano)",
+      "Bash(taskkill //F //PID 25060)",
+      "Bash(taskkill //F //PID 20340)",
+      "Bash(taskkill //F //PID 17384)",
+      "Bash(taskkill //F //PID 11892)",
+      "Bash(taskkill //F //PID 17624)",
+      "Bash(taskkill //F //PID 27988)",
+      "Bash(taskkill //F //PID 4864)",
+      "Bash(bun add:*)",
+      "Bash(curl -s http://localhost:5173)",
+      "Bash(taskkill:*)",
+      "Bash(curl:*)"
     ]
   }
 }

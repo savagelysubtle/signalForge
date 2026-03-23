@@ -257,6 +257,7 @@ const TIMEFRAME_LABELS: Record<string, string> = {
   "1h": "1 Hour",
   "2H": "2 Hour",
   "2h": "2 Hour",
+  "15m": "15 Min",
 };
 
 function getTimeframeLabel(tf: string): string {

@@ -4,7 +4,10 @@
     {
       "label": "Start Frontend",
       "type": "shell",
-      "command": "cd src/frontend && bun run dev",
+      "command": "bun run dev",
+      "options": {
+        "cwd": "${workspaceFolder}/src/frontend"
+      },
       "isBackground": true,
       "problemMatcher": {
         "owner": "custom",
@@ -25,7 +28,10 @@
     {
       "label": "Start Backend",
       "type": "shell",
-      "command": "cd src/backend && uv run --python 3.14 uvicorn main:app --reload --port 8420",
+      "command": "uv run --python 3.14 uvicorn main:app --reload --port 8420",
+      "options": {
+        "cwd": "${workspaceFolder}/src/backend"
+      },
       "isBackground": true,
       "problemMatcher": {
         "owner": "custom",

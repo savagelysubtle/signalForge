@@ -52,6 +52,7 @@ INDICATOR_INPUTS: dict[str, dict] = {
 }
 
 TIMEFRAME_MAP: dict[str, str] = {
+    "15m": "15m",
     "1H": "1h",
     "2H": "2h",
     "4H": "4h",
