@@ -1,12 +1,13 @@
 import { useState, useCallback } from 'react';
-import type { ChartAnalysis, Recommendation, TechnicalLevel, IndicatorReading } from '../../types';
+import type { ChartAnalysis, ChartError, Recommendation, TechnicalLevel, IndicatorReading } from '../../types';
 import { PriceLevelMap } from './PriceLevelMap';
-import { Maximize2, X } from 'lucide-react';
+import { Maximize2, X, AlertTriangle } from 'lucide-react';
 import clsx from 'clsx';
 
 interface ChartTabProps {
   ticker: string;
   chartAnalyses: ChartAnalysis[];
+  chartErrors: ChartError[];
   chartIndicators: string[];
   recommendation: Recommendation | null;
 }
@@ -302,9 +303,37 @@ function CompactLevelLegend({
   );
 }
 
-export function ChartTab({ ticker, chartAnalyses, chartIndicators, recommendation }: ChartTabProps) {
+const ERROR_STATUS_LABELS: Record<string, string> = {
+  chart_fetch_error: 'Chart image fetch failed',
+  validation_failed: 'Claude response validation failed',
+  api_error: 'Claude API error',
+};
+
+function ChartErrorPanel({ errors }: { errors: ChartError[] }) {
+  return (
+    <div className="flex flex-col items-center justify-center h-full text-text-secondary gap-3 px-6">
+      <AlertTriangle className="w-6 h-6 text-accent-yellow" />
+      <span className="text-sm font-medium">Chart Analysis Failed</span>
+      <div className="space-y-2 w-full max-w-sm">
+        {errors.map((err, i) => (
+          <div key={i} className="rounded-lg bg-accent-red/5 border border-accent-red/20 px-3 py-2">
+            <div className="text-xs font-medium text-accent-red">
+              {ERROR_STATUS_LABELS[err.status] ?? err.status}
+            </div>
+            {err.error && (
+              <p className="text-xs text-text-secondary mt-1 wrap-break-word line-clamp-3">{err.error}</p>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function ChartTab({ ticker, chartAnalyses, chartErrors, chartIndicators, recommendation }: ChartTabProps) {
   const [activeTimeframe, setActiveTimeframe] = useState(0);
   const activeAnalysis = chartAnalyses[activeTimeframe] ?? null;
+  const hasErrors = chartErrors.length > 0;
 
   return (
     <div className="flex h-full w-full gap-4 p-4">
@@ -333,6 +362,8 @@ export function ChartTab({ ticker, chartAnalyses, chartIndicators, recommendatio
           <div className="flex-1 overflow-hidden">
             <AnalysisPanel analysis={activeAnalysis} />
           </div>
+        ) : hasErrors ? (
+          <ChartErrorPanel errors={chartErrors} />
         ) : (
           <div className="flex items-center justify-center h-full text-text-secondary flex-col gap-2">
             <span className="text-sm">Claude Vision Analysis</span>
@@ -355,6 +386,12 @@ export function ChartTab({ ticker, chartAnalyses, chartIndicators, recommendatio
           </>
         ) : activeAnalysis ? (
           <PriceLevelMap analysis={activeAnalysis} recommendation={recommendation} />
+        ) : hasErrors ? (
+          <div className="flex items-center justify-center h-full text-text-secondary flex-col gap-3">
+            <AlertTriangle className="w-5 h-5 text-accent-yellow" />
+            <span className="text-sm">Price Level Map</span>
+            <span className="text-xs opacity-50">Chart analysis failed — no levels to display</span>
+          </div>
         ) : (
           <div className="flex items-center justify-center h-full text-text-secondary flex-col gap-2">
             <span className="text-sm">Price Level Map</span>

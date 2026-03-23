@@ -165,6 +165,14 @@ class RecommendationList(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class ChartError(BaseModel):
+    """Per-ticker error from the Claude chart analysis stage."""
+
+    ticker: str
+    status: str
+    error: str = ""
+
+
 class PipelineResult(BaseModel):
     """Complete output from a full pipeline run."""
 
@@ -175,14 +183,13 @@ class PipelineResult(BaseModel):
     input_tickers: list[str] = Field(default_factory=list)
     screening: ScreeningResult | None = None
     chart_analyses: list[ChartAnalysis] = Field(default_factory=list)
+    chart_errors: list[ChartError] = Field(default_factory=list)
     sentiment_analyses: list[SentimentAnalysis] = Field(default_factory=list)
     recommendations: list[Recommendation] = Field(default_factory=list)
     stage_errors: list[dict] = Field(default_factory=list)
     total_duration_seconds: float = 0.0
     prompt_versions: dict[str, str] = Field(default_factory=dict)
-    chart_indicators: list[str] = Field(
-        default_factory=lambda: ["RSI", "MACD", "Volume"]
-    )
+    chart_indicators: list[str] = Field(default_factory=lambda: ["RSI", "MACD", "Volume"])
 
 
 # ---------------------------------------------------------------------------
