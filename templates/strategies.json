@@ -2,7 +2,7 @@
   {
     "name": "Momentum Breakout",
     "description": "High relative volume stocks near 52-week highs with bullish technical breakouts",
-    "screening_prompt": "Find stocks with high relative volume (>2x average), trading near 52-week highs, with bullish technical breakout patterns. Focus on mid-to-large cap stocks with strong earnings growth. Also include crypto assets showing similar breakout momentum.",
+    "screening_prompt": "Find Canadian stocks (TSX, TSX-V listed) with high relative volume (>2x average), trading near 52-week highs, with bullish technical breakout patterns. Focus on mid-to-large cap Canadian companies with strong earnings growth. Only include stocks trading on Canadian exchanges.",
     "constraint_style": "tight",
     "max_tickers": 8,
     "chart_indicators": ["RSI", "Volume", "EMA_20", "EMA_50"],
@@ -18,7 +18,7 @@
   {
     "name": "Value Accumulation",
     "description": "Undervalued names with insider buying and strong fundamentals",
-    "screening_prompt": "Find undervalued stocks with P/E below sector average, recent insider buying, growing free cash flow, and strong balance sheets. Include crypto projects with strong fundamentals (revenue, TVL growth, token burns).",
+    "screening_prompt": "Find undervalued Canadian stocks (TSX, TSX-V listed) with P/E below sector average, recent insider buying, growing free cash flow, and strong balance sheets. Only include stocks trading on Canadian exchanges.",
     "constraint_style": "loose",
     "max_tickers": 10,
     "chart_indicators": ["SMA_50", "SMA_200", "MACD", "Volume"],
@@ -34,7 +34,7 @@
   {
     "name": "Mean Reversion",
     "description": "Oversold stocks near support levels primed for a bounce",
-    "screening_prompt": "Find stocks with RSI below 30, trading near established support levels, with positive divergences forming. Include oversold crypto assets near key support with high funding rates.",
+    "screening_prompt": "Find Canadian stocks (TSX, TSX-V listed) with RSI below 30, trading near established support levels, with positive divergences forming. Only include stocks trading on Canadian exchanges.",
     "constraint_style": "tight",
     "max_tickers": 6,
     "chart_indicators": ["RSI", "Bollinger Bands", "Stochastic", "Volume"],
@@ -50,7 +50,7 @@
   {
     "name": "Earnings Play",
     "description": "Stocks reporting earnings within 2 weeks with high implied volatility",
-    "screening_prompt": "Find stocks reporting earnings within the next 2 weeks that have high implied volatility, strong historical earnings beats, and analyst estimate revisions trending upward.",
+    "screening_prompt": "Find Canadian stocks (TSX, TSX-V listed) reporting earnings within the next 2 weeks that have high implied volatility, strong historical earnings beats, and analyst estimate revisions trending upward. Only include stocks trading on Canadian exchanges.",
     "constraint_style": "tight",
     "max_tickers": 5,
     "chart_indicators": ["Bollinger Bands", "Volume", "ATR"],
@@ -82,7 +82,7 @@
   {
     "name": "Intraday Scalp",
     "description": "Short-term momentum scalps on 15-minute charts with tight risk management",
-    "screening_prompt": "Find stocks and crypto assets with high intraday volume, tight spreads, and strong short-term momentum. Focus on liquid names with clear intraday trends, VWAP holds, and volume spikes on 15-minute candles.",
+    "screening_prompt": "Find Canadian stocks (TSX, TSX-V listed) with high intraday volume, tight spreads, and strong short-term momentum. Focus on liquid Canadian names with clear intraday trends, VWAP holds, and volume spikes on 15-minute candles. Only include stocks trading on Canadian exchanges.",
     "constraint_style": "tight",
     "max_tickers": 5,
     "chart_indicators": ["VWAP", "RSI", "EMA_20", "Volume"],
