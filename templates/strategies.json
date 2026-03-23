@@ -78,5 +78,22 @@
     "risk_params": {"max_position_pct": 3.0, "min_risk_reward": 2.5, "max_portfolio_risk_pct": 10.0},
     "enable_debate": true,
     "is_template": true
+  },
+  {
+    "name": "Intraday Scalp",
+    "description": "Short-term momentum scalps on 15-minute charts with tight risk management",
+    "screening_prompt": "Find stocks and crypto assets with high intraday volume, tight spreads, and strong short-term momentum. Focus on liquid names with clear intraday trends, VWAP holds, and volume spikes on 15-minute candles.",
+    "constraint_style": "tight",
+    "max_tickers": 5,
+    "chart_indicators": ["VWAP", "RSI", "EMA_20", "Volume"],
+    "chart_timeframe": "15m",
+    "secondary_timeframe": "1H",
+    "ta_focus": "VWAP holds, intraday momentum, and micro support/resistance",
+    "news_recency": "today",
+    "news_scope": "company",
+    "trading_style": "Intraday scalper, 15 min to 2 hour holds",
+    "risk_params": {"max_position_pct": 3.0, "min_risk_reward": 2.0, "max_portfolio_risk_pct": 8.0},
+    "enable_debate": false,
+    "is_template": true
   }
 ]
