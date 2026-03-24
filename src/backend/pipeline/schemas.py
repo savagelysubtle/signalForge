@@ -40,6 +40,7 @@ class ScreeningResult(BaseModel):
     strategy_name: str | None = None
     tickers: list[FundamentalData]
     screening_summary: str
+    citations: list[str] = Field(default_factory=list)
     timestamp: datetime = Field(default_factory=datetime.now)
 
 

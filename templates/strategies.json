@@ -2,7 +2,7 @@
   {
     "name": "Momentum Breakout",
     "description": "High relative volume stocks near 52-week highs with bullish technical breakouts",
-    "screening_prompt": "Find Canadian stocks (TSX, TSX-V listed) with high relative volume (>2x average), trading near 52-week highs, with bullish technical breakout patterns. Focus on mid-to-large cap Canadian companies with strong earnings growth. Only include stocks trading on Canadian exchanges.",
+    "screening_prompt": "Canadian TSX stocks strong price momentum analyst upgrades accelerating earnings growth high average daily volume mid-to-large cap making new highs",
     "constraint_style": "tight",
     "max_tickers": 8,
     "chart_indicators": ["RSI", "MACD", "Volume", "EMA_50", "EMA_200"],
@@ -21,7 +21,7 @@
   {
     "name": "Value Accumulation",
     "description": "Undervalued names with insider buying and strong fundamentals",
-    "screening_prompt": "Find undervalued Canadian stocks (TSX, TSX-V listed) with P/E below sector average, recent insider buying, growing free cash flow, and strong balance sheets. Only include stocks trading on Canadian exchanges.",
+    "screening_prompt": "Canadian TSX stocks undervalued low P/E P/B discount to sector peers recent insider buying growing free cash flow strong balance sheet analyst buy ratings",
     "constraint_style": "loose",
     "max_tickers": 10,
     "chart_indicators": ["RSI", "MACD", "Volume", "EMA_50", "EMA_200"],
@@ -40,7 +40,7 @@
   {
     "name": "Mean Reversion",
     "description": "Oversold stocks near support levels primed for a bounce",
-    "screening_prompt": "Find Canadian stocks (TSX, TSX-V listed) with RSI below 30, trading near established support levels, with positive divergences forming. Only include stocks trading on Canadian exchanges.",
+    "screening_prompt": "Canadian TSX stocks recently sold off 15-30% past month strong fundamentals analysts maintain buy ratings insider buying during decline oversold bounce candidates",
     "constraint_style": "tight",
     "max_tickers": 6,
     "chart_indicators": ["RSI", "MACD", "Volume", "EMA_50", "EMA_200"],
@@ -59,7 +59,7 @@
   {
     "name": "Earnings Play",
     "description": "Stocks reporting earnings within 2 weeks with high implied volatility",
-    "screening_prompt": "Find Canadian stocks (TSX, TSX-V listed) reporting earnings within the next 2 weeks that have high implied volatility, strong historical earnings beats, and analyst estimate revisions trending upward. Only include stocks trading on Canadian exchanges.",
+    "screening_prompt": "Canadian TSX stocks reporting earnings next 2 weeks strong earnings beat history upward estimate revisions analyst attention meaningful catalyst potential",
     "constraint_style": "tight",
     "max_tickers": 5,
     "chart_indicators": ["RSI", "MACD", "Volume", "EMA_50", "EMA_200"],
@@ -78,7 +78,7 @@
   {
     "name": "Crypto Swing",
     "description": "Swing trade crypto assets with strong momentum and on-chain metrics",
-    "screening_prompt": "Find cryptocurrencies with strong price momentum, increasing on-chain activity (active addresses, transaction volume, TVL growth), positive funding rates, and strong social sentiment. Focus on top 100 by market cap.",
+    "screening_prompt": "cryptocurrencies strong momentum growing on-chain activity active addresses TVL growth developer activity protocol upgrades social buzz top 100 market cap",
     "constraint_style": "loose",
     "max_tickers": 8,
     "chart_indicators": ["RSI", "MACD", "Volume", "EMA_50", "EMA_200"],
@@ -97,7 +97,7 @@
   {
     "name": "Crypto Intraday Scalp",
     "description": "Short-term crypto scalps on 15-minute charts with tight risk management",
-    "screening_prompt": "Find cryptocurrencies with high 24-hour volume, strong short-term momentum, clear intraday trends on 15-minute candles, and tight spreads. Focus on top 50 by market cap with active trading pairs on major exchanges.",
+    "screening_prompt": "cryptocurrencies trending today high 24-hour volume breaking news token unlocks exchange listings viral social activity top 50 market cap deep liquidity major exchanges",
     "constraint_style": "tight",
     "max_tickers": 5,
     "chart_indicators": ["RSI", "MACD", "Volume", "EMA_50", "EMA_200"],
@@ -117,7 +117,7 @@
   {
     "name": "Intraday Scalp",
     "description": "Short-term momentum scalps on 15-minute charts with tight risk management",
-    "screening_prompt": "Find Canadian stocks (TSX, TSX-V listed) with high intraday volume, tight spreads, and strong short-term momentum. Focus on liquid Canadian names with clear intraday trends, VWAP holds, and volume spikes on 15-minute candles. Only include stocks trading on Canadian exchanges.",
+    "screening_prompt": "Canadian TSX stocks in play today breaking news earnings releases analyst upgrades sector catalysts liquid large-cap mid-cap high daily volume active day trading names",
     "constraint_style": "tight",
     "max_tickers": 5,
     "chart_indicators": ["RSI", "MACD", "Volume", "EMA_50", "EMA_200"],
