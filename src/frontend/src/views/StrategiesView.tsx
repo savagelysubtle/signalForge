@@ -30,7 +30,7 @@ export function StrategiesView() {
                   <span className="bg-bg-tertiary px-2 py-1 rounded">Max Tickers: {template.max_tickers}</span>
                   <span className="bg-bg-tertiary px-2 py-1 rounded capitalize">Constraint: {template.constraint_style}</span>
                   <span className="bg-bg-tertiary px-2 py-1 rounded">
-                    Charts: {[template.chart_timeframe, ...(template.additional_timeframes ?? [])].join(' / ')}
+                    Charts: {[...new Set([template.chart_timeframe, ...(template.additional_timeframes ?? []), ...(template.short_timeframes ?? [])])].join(' / ')}
                   </span>
                 </div>
               </div>
@@ -53,7 +53,7 @@ export function StrategiesView() {
                   <span className="bg-bg-tertiary px-2 py-1 rounded">Max Tickers: {strategy.max_tickers}</span>
                   <span className="bg-bg-tertiary px-2 py-1 rounded capitalize">Constraint: {strategy.constraint_style}</span>
                   <span className="bg-bg-tertiary px-2 py-1 rounded">
-                    Charts: {[strategy.chart_timeframe, ...(strategy.additional_timeframes ?? [])].join(' / ')}
+                    Charts: {[...new Set([strategy.chart_timeframe, ...(strategy.additional_timeframes ?? []), ...(strategy.short_timeframes ?? [])])].join(' / ')}
                   </span>
                 </div>
               </div>
