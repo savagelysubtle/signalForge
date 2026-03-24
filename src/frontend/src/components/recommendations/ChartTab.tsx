@@ -305,9 +305,6 @@ function CompactLevelLegend({
   );
 }
 
-<<<<<<< HEAD
-export function ChartTab({ chartAnalyses, recommendation }: ChartTabProps) {
-=======
 const ERROR_STATUS_LABELS: Record<string, string> = {
   chart_fetch_error: 'Chart image fetch failed',
   validation_failed: 'Claude response validation failed',
@@ -338,7 +335,6 @@ function ChartErrorPanel({ errors }: { errors: ChartError[] }) {
 const AVAILABLE_TIMEFRAMES = ["15m", "1H", "4H", "D", "W"] as const;
 
 export function ChartTab({ ticker, chartAnalyses, chartErrors, chartIndicators, recommendation }: ChartTabProps) {
->>>>>>> dev
   const [activeTimeframe, setActiveTimeframe] = useState(0);
   const [adHocChartUrl, setAdHocChartUrl] = useState<string | null>(null);
   const [adHocTimeframe, setAdHocTimeframe] = useState<string | null>(null);
