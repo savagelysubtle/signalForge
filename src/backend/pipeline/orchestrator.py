@@ -154,7 +154,15 @@ async def run_pipeline(
 
     if screening and screening.tickers:
         ticker_symbols = [t.ticker for t in screening.tickers]
-        ticker_news = {t.ticker: t.news_urls for t in screening.tickers if t.news_urls}
+
+        # Prefer real API citations over LM-generated news_urls
+        ticker_news: dict[str, list[str]] = {}
+        if screening.citations:
+            for t in screening.tickers:
+                ticker_news[t.ticker] = screening.citations
+        else:
+            ticker_news = {t.ticker: t.news_urls for t in screening.tickers if t.news_urls}
+
         try:
             sentiments, gemini_metadata_list = await run_sentiment(
                 ticker_symbols, effective_config, ticker_news=ticker_news or None

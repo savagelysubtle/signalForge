@@ -591,6 +591,23 @@ wheels = [
 ]
 
 [[package]]
+name = "perplexityai"
+version = "0.30.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "distro" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/44/5e/ec444b0da9fccc8b8af5a0efa3b8417b994db35f3c38ec04ef597f5aad73/perplexityai-0.30.4.tar.gz", hash = "sha256:b3ee308667fb8cc5c5d033a9c01f04bfab7b4583d10ba15298b0f45fdac3cfb1", size = 133968, upload-time = "2026-03-22T19:56:39.774Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6c/eb/d6a9683e7b76f3db43dd067a48cc1846b37747852e76133f96ff31b65a5a/perplexityai-0.30.4-py3-none-any.whl", hash = "sha256:aaa86edb5424be32d0933cf738f6677f0ca1453d1f3f510248bcc1567d8ad67b", size = 129580, upload-time = "2026-03-22T19:56:38.446Z" },
+]
+
+[[package]]
 name = "platformdirs"
 version = "4.9.4"
 source = { registry = "https://pypi.org/simple" }
@@ -919,6 +936,7 @@ dependencies = [
     { name = "google-genai" },
     { name = "httpx" },
     { name = "openai" },
+    { name = "perplexityai" },
     { name = "platformdirs" },
     { name = "pydantic" },
     { name = "pyjwt" },
@@ -941,6 +959,7 @@ requires-dist = [
     { name = "google-genai", specifier = ">=1.0.0" },
     { name = "httpx", specifier = ">=0.28.0" },
     { name = "openai", specifier = ">=1.60.0" },
+    { name = "perplexityai", specifier = ">=0.30.4" },
     { name = "platformdirs", specifier = ">=4.0.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pyjwt", specifier = ">=2.8.0" },

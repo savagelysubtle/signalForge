@@ -27,6 +27,7 @@ const TV_STUDY_MAP: Record<string, string> = {
 const BASELINE_STUDIES = ["RSI@tv-basicstudies", "MACD@tv-basicstudies"];
 
 const INTERVAL_MAP: Record<string, string> = {
+  "15m": "15",
   "1H": "60",
   "2H": "120",
   "4H": "240",

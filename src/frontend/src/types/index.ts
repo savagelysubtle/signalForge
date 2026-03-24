@@ -178,6 +178,9 @@ export interface StrategyConfig {
   chart_indicators: string[];
   chart_timeframe: string;
   secondary_timeframe: string;
+  additional_timeframes: string[];
+  short_timeframes: string[];
+  short_tf_indicators: string[];
   ta_focus: string | null;
   news_recency: "today" | "week" | "month";
   news_scope: "company" | "sector" | "macro";

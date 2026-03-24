@@ -56,6 +56,31 @@ def _row_to_config(row: dict[str, Any]) -> StrategyConfig:
         risk_params_raw = json.loads(risk_params_raw) if risk_params_raw else {}
     risk_params = RiskParams(**risk_params_raw) if risk_params_raw else RiskParams()
 
+    additional_tf_raw = row.get("additional_timeframes")
+    if isinstance(additional_tf_raw, str):
+        additional_tf = json.loads(additional_tf_raw)
+    elif isinstance(additional_tf_raw, list):
+        additional_tf = additional_tf_raw
+    else:
+        secondary = row.get("secondary_timeframe", "4H")
+        additional_tf = [secondary] if secondary else ["4H"]
+
+    short_tf_raw = row.get("short_timeframes")
+    if isinstance(short_tf_raw, str):
+        short_tf = json.loads(short_tf_raw)
+    elif isinstance(short_tf_raw, list):
+        short_tf = short_tf_raw
+    else:
+        short_tf = ["15m", "1H"]
+
+    short_tf_ind_raw = row.get("short_tf_indicators")
+    if isinstance(short_tf_ind_raw, str):
+        short_tf_ind = json.loads(short_tf_ind_raw)
+    elif isinstance(short_tf_ind_raw, list):
+        short_tf_ind = short_tf_ind_raw
+    else:
+        short_tf_ind = ["VWAP", "Stochastic", "EMA_20", "ATR", "Volume"]
+
     return StrategyConfig(
         id=row["id"],
         name=row["name"],
@@ -65,6 +90,10 @@ def _row_to_config(row: dict[str, Any]) -> StrategyConfig:
         max_tickers=row["max_tickers"],
         chart_indicators=chart_indicators,
         chart_timeframe=row["chart_timeframe"],
+        secondary_timeframe=row.get("secondary_timeframe", "4H"),
+        additional_timeframes=additional_tf,
+        short_timeframes=short_tf,
+        short_tf_indicators=short_tf_ind,
         ta_focus=row.get("ta_focus"),
         news_recency=row["news_recency"],
         news_scope=row["news_scope"],
@@ -132,6 +161,10 @@ async def create_strategy(config: StrategyConfig, user_id: str) -> StrategyConfi
         "max_tickers": config.max_tickers,
         "chart_indicators": json.dumps(config.chart_indicators),
         "chart_timeframe": config.chart_timeframe,
+        "secondary_timeframe": config.secondary_timeframe,
+        "additional_timeframes": json.dumps(config.additional_timeframes),
+        "short_timeframes": json.dumps(config.short_timeframes),
+        "short_tf_indicators": json.dumps(config.short_tf_indicators),
         "ta_focus": config.ta_focus,
         "news_recency": config.news_recency,
         "news_scope": config.news_scope,

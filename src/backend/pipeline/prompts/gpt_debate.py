@@ -18,7 +18,7 @@ from utils.hashing import prompt_hash
 
 BULL_PROMPT_VERSION = "v1"
 BEAR_PROMPT_VERSION = "v1"
-JUDGE_PROMPT_VERSION = "v2"
+JUDGE_PROMPT_VERSION = "v3"
 
 # ---------------------------------------------------------------------------
 # System Prompts
@@ -137,7 +137,9 @@ Confidence calibration:
 - 0.40-0.55: Low conviction, likely HOLD unless specific catalyst
 - <0.40: Very weak signal, default to HOLD
 
-Entry price rules (CRITICAL):
+Entry price rules (CRITICAL — MANDATORY for BUY and SELL):
+- entry_price, stop_loss, and take_profit are REQUIRED (non-null) for ALL BUY
+  and SELL recommendations. NEVER return null for these fields on BUY or SELL.
 - The "Current/Last Price" in the TECHNICAL ANALYSIS section is the live market
   price at the time of chart capture. Use it as the anchor for ALL price targets.
 - If recommending BUY and the current price IS at or near a favorable entry
@@ -152,11 +154,14 @@ Entry price rules (CRITICAL):
   the market.
 - For SELL recommendations, entry_price represents the short entry or exit
   level — same anchoring logic applies.
+- For HOLD recommendations, set entry_price to the price level at which you
+  would convert to BUY (the trigger price). Set stop_loss and take_profit
+  to null for HOLD.
 
 Risk management rules:
 - Position sizes should respect the provided risk parameters
-- Always set stop_loss and take_profit when recommending BUY
-- risk_reward_ratio = (take_profit - entry) / (entry - stop_loss)
+- entry_price, stop_loss, and take_profit MUST be set (non-null) for BUY and SELL
+- risk_reward_ratio = (take_profit - entry) / (entry - stop_loss) — REQUIRED for BUY/SELL
 - Reduce position_size_pct when confidence is low
 - Flag warnings for any unusual risks (earnings approaching, low liquidity, etc.)
 """
@@ -185,9 +190,7 @@ def _format_data_availability(
     chart_available = [t for t in tickers if t in chart_counts]
     chart_missing = [t for t in tickers if t not in chart_counts]
     if chart_available:
-        detail = ", ".join(
-            f"{t} ({'/'.join(chart_counts[t])})" for t in chart_available
-        )
+        detail = ", ".join(f"{t} ({'/'.join(chart_counts[t])})" for t in chart_available)
         lines.append(f"Chart analysis: AVAILABLE for {detail}")
     if chart_missing:
         lines.append(f"Chart analysis: MISSING for {', '.join(chart_missing)}")
@@ -253,16 +256,12 @@ def _format_single_chart(ca: ChartAnalysis) -> str:
         ]
     )
     if ca.key_levels:
-        level_strs = [
-            f"  ${lv.price:.2f} ({lv.level_type}, {lv.strength})" for lv in ca.key_levels
-        ]
+        level_strs = [f"  ${lv.price:.2f} ({lv.level_type}, {lv.strength})" for lv in ca.key_levels]
         lines.append("Key levels:\n" + "\n".join(level_strs))
     if ca.patterns_detected:
         lines.append(f"Patterns: {', '.join(ca.patterns_detected)}")
     if ca.indicator_readings:
-        ind_strs = [
-            f"  {ir.indicator}: {ir.value} ({ir.signal})" for ir in ca.indicator_readings
-        ]
+        ind_strs = [f"  {ir.indicator}: {ir.value} ({ir.signal})" for ir in ca.indicator_readings]
         lines.append("Indicators:\n" + "\n".join(ind_strs))
     if ca.volume_analysis:
         lines.append(f"Volume: {ca.volume_analysis}")

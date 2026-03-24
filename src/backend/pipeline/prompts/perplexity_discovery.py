@@ -10,13 +10,18 @@ from __future__ import annotations
 from pipeline.schemas import StrategyConfig
 from utils.hashing import prompt_hash
 
-PROMPT_VERSION = "v4"
+PROMPT_VERSION = "v6"
 
 DISCOVERY_SYSTEM_PROMPT = """\
 You are a financial research analyst specializing in market screening.
 Your job is to find stocks, ETFs, or cryptocurrencies that match specific
 screening criteria. You must return ONLY valid JSON — no commentary outside
 the JSON structure.
+
+IMPORTANT: Always return tickers. If you cannot find stocks matching every
+criterion perfectly, return the best available matches. An empty tickers
+array should only be returned if the search yields absolutely nothing
+relevant. Partial matches are valuable — note any caveats in key_highlights.
 
 Return a JSON object with this exact structure:
 {
@@ -34,19 +39,18 @@ Return a JSON object with this exact structure:
       "free_cash_flow": "<e.g. $2.3B or null>",
       "key_highlights": ["<highlight 1>", "<highlight 2>"],
       "risk_factors": ["<risk 1>", "<risk 2>"],
-      "sources": ["<url or source name>"],
-      "news_urls": ["<recent article url 1>", "<recent article url 2>", "<recent article url 3>"]
+      "sources": ["<url or source name>"]
     }
   ],
   "screening_summary": "<brief summary of screening rationale and methodology>"
 }
 
-For each ticker, include at least 3 recent news article URLs in the news_urls
-array. These should be from the past week covering earnings, analyst actions,
-company developments, or sector-relevant trends. Prefer reputable financial
-sources (Reuters, Bloomberg, CNBC, Barron's, Seeking Alpha, Yahoo Finance,
-Globe and Mail, Financial Post, etc.). These URLs will be passed to a downstream
-sentiment analysis model, so quality and recency matter.
+ANTI-HALLUCINATION RULES (for financial metrics only):
+- If you cannot verify a specific number (pe_ratio, revenue_growth, etc.)
+  from search results, set that field to null. Do NOT invent numbers.
+- Do NOT include news URLs in the JSON — they are captured separately.
+- You CAN and SHOULD still return the ticker with whatever data you have.
+  Missing metrics are fine — missing tickers are not.
 
 For crypto assets, use the common trading symbol (e.g. BTC, ETH, SOL).
 Set pe_ratio, revenue_growth, and free_cash_flow to null for crypto.
@@ -66,68 +70,47 @@ Ticker format rules (CRITICAL -- use TradingView format):
 
 
 def build_discovery_prompt(config: StrategyConfig) -> str:
-    """Build the user prompt for discovery mode screening.
+    """Build a search-query-style user prompt for discovery screening.
+
+    Sonar Pro's search component triggers on the user prompt text, so this
+    should read like a web search query rather than an instruction set.
+    Constraint style is NOT included — it pollutes the search query.
 
     Args:
         config: The active strategy configuration.
 
     Returns:
-        The formatted user prompt string.
+        Search-query-style prompt string.
     """
-    constraint_instruction = (
-        "Apply strict filtering — only return tickers that strongly match ALL criteria."
-        if config.constraint_style == "tight"
-        else "Apply loose filtering — return tickers that match most criteria, even partially."
-    )
-
-    return (
-        f"Strategy: {config.name}\n\n"
-        f"Screening criteria:\n{config.screening_prompt}\n\n"
-        f"{constraint_instruction}\n\n"
-        f"Return up to {config.max_tickers} tickers as JSON. "
-        f"Include both traditional securities and crypto if the criteria apply."
-    )
+    parts = [config.screening_prompt]
+    parts.append(f"top {config.max_tickers} picks")
+    return " ".join(parts)
 
 
 def build_prompted_discovery_prompt(
     user_prompt: str,
     config: StrategyConfig | None = None,
 ) -> str:
-    """Build the user prompt for prompt-driven discovery mode.
+    """Build a search-query-style prompt from user free-form text.
 
-    The user's free-form prompt is the primary screening instruction.
-    If a strategy is selected, its constraints and limits are layered on.
+    The user's text is used directly as the search query, with optional
+    strategy context appended as additional search terms.
 
     Args:
         user_prompt: The user's free-form screening request.
         config: Optional strategy configuration for additional context.
 
     Returns:
-        The formatted user prompt string.
+        Search-query-style prompt string.
     """
-    parts: list[str] = [f"User request:\n{user_prompt}"]
-
+    parts = [user_prompt]
+    if config and config.screening_prompt:
+        parts.append(config.screening_prompt)
     if config:
-        parts.append(f"\nStrategy context: {config.name}")
-        if config.screening_prompt:
-            parts.append(f"Additional screening criteria:\n{config.screening_prompt}")
-        constraint_instruction = (
-            "Apply strict filtering — only return tickers that strongly match ALL criteria."
-            if config.constraint_style == "tight"
-            else "Apply loose filtering — return tickers that match most criteria, even partially."
-        )
-        parts.append(constraint_instruction)
-        parts.append(
-            f"\nReturn up to {config.max_tickers} tickers as JSON. "
-            f"Include both traditional securities and crypto if the criteria apply."
-        )
+        parts.append(f"top {config.max_tickers} picks")
     else:
-        parts.append(
-            "\nReturn up to 10 tickers as JSON. "
-            "Include both traditional securities and crypto if the criteria apply."
-        )
-
-    return "\n".join(parts)
+        parts.append("top 10 picks")
+    return " ".join(parts)
 
 
 def get_prompt_hash() -> str:
