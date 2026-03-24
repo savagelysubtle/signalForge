@@ -29,7 +29,9 @@ export function StrategiesView() {
                 <div className="flex flex-wrap gap-2 text-xs">
                   <span className="bg-bg-tertiary px-2 py-1 rounded">Max Tickers: {template.max_tickers}</span>
                   <span className="bg-bg-tertiary px-2 py-1 rounded capitalize">Constraint: {template.constraint_style}</span>
-                  <span className="bg-bg-tertiary px-2 py-1 rounded">Timeframe: {template.chart_timeframe}</span>
+                  <span className="bg-bg-tertiary px-2 py-1 rounded">
+                    Charts: {[template.chart_timeframe, ...(template.additional_timeframes ?? [])].join(' / ')}
+                  </span>
                 </div>
               </div>
             ))}
@@ -50,7 +52,9 @@ export function StrategiesView() {
                 <div className="flex flex-wrap gap-2 text-xs">
                   <span className="bg-bg-tertiary px-2 py-1 rounded">Max Tickers: {strategy.max_tickers}</span>
                   <span className="bg-bg-tertiary px-2 py-1 rounded capitalize">Constraint: {strategy.constraint_style}</span>
-                  <span className="bg-bg-tertiary px-2 py-1 rounded">Timeframe: {strategy.chart_timeframe}</span>
+                  <span className="bg-bg-tertiary px-2 py-1 rounded">
+                    Charts: {[strategy.chart_timeframe, ...(strategy.additional_timeframes ?? [])].join(' / ')}
+                  </span>
                 </div>
               </div>
             ))}

@@ -108,6 +108,7 @@ async def _analyze_ticker(
     run_id: str,
     user_id: str = "",
     timeframe_override: str | None = None,
+    indicators_override: list[str] | None = None,
 ) -> tuple[ChartAnalysis | None, dict]:
     """Run chart analysis for a single ticker and timeframe.
 
@@ -122,13 +123,20 @@ async def _analyze_ticker(
         user_id: User UUID for storage path isolation.
         timeframe_override: If set, use this timeframe instead of the
             strategy's ``chart_timeframe``.
+        indicators_override: If set, use these indicators instead of
+            the strategy's ``chart_indicators`` (for short-TF analysis).
 
     Returns:
         Tuple of (validated ChartAnalysis or None, metadata dict).
     """
     effective_timeframe = timeframe_override or config.chart_timeframe
+    effective_indicators = indicators_override or config.chart_indicators
     user_prompt = build_chart_prompt(
-        ticker, config, sentiment, timeframe_override=timeframe_override
+        ticker,
+        config,
+        sentiment,
+        timeframe_override=timeframe_override,
+        indicators_override=effective_indicators,
     )
     metadata: dict = {
         "stage": "claude",
@@ -146,7 +154,7 @@ async def _analyze_ticker(
             image_bytes, image_path = await fetch_chart_image(
                 ticker,
                 effective_timeframe,
-                config.chart_indicators,
+                effective_indicators,
                 run_id,
                 user_id,
             )
@@ -171,6 +179,7 @@ async def _analyze_ticker(
 
         if result is not None:
             result.ticker = ticker
+            result.timeframe = effective_timeframe
             result.chart_image_path = image_path
             metadata["status"] = "success"
             metadata["raw_response"] = result.model_dump_json()
@@ -217,18 +226,33 @@ async def run_chart_analysis(
         sentiment = sentiment_map.get(ticker)
         tasks.append(_analyze_ticker(ticker, config, sentiment, run_id, user_id))
         task_tickers.append(ticker)
-        if config.secondary_timeframe:
-            tasks.append(
-                _analyze_ticker(
-                    ticker,
-                    config,
-                    sentiment,
-                    run_id,
-                    user_id,
-                    timeframe_override=config.secondary_timeframe,
+        for extra_tf in config.additional_timeframes:
+            if extra_tf != config.chart_timeframe:
+                tasks.append(
+                    _analyze_ticker(
+                        ticker,
+                        config,
+                        sentiment,
+                        run_id,
+                        user_id,
+                        timeframe_override=extra_tf,
+                    )
                 )
-            )
-            task_tickers.append(ticker)
+                task_tickers.append(ticker)
+        for short_tf in config.short_timeframes:
+            if short_tf != config.chart_timeframe:
+                tasks.append(
+                    _analyze_ticker(
+                        ticker,
+                        config,
+                        sentiment,
+                        run_id,
+                        user_id,
+                        timeframe_override=short_tf,
+                        indicators_override=config.short_tf_indicators,
+                    )
+                )
+                task_tickers.append(ticker)
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     charts: list[ChartAnalysis] = []

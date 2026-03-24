@@ -11,7 +11,7 @@ from __future__ import annotations
 from pipeline.schemas import SentimentAnalysis, StrategyConfig
 from utils.hashing import prompt_hash
 
-PROMPT_VERSION = "v3"
+PROMPT_VERSION = "v4"
 
 CHART_SYSTEM_PROMPT = """\
 You are an expert technical analyst reviewing a TradingView chart screenshot.
@@ -19,10 +19,16 @@ Your job is to perform a thorough technical analysis and return a structured
 assessment as JSON. Consider the visible price action, indicators, patterns,
 volume, and key support/resistance levels.
 
-CRITICAL: Read the current/last traded price from the chart. This is the most
-recent price shown — typically the rightmost point of the price line or the
-value displayed on the price axis. This price is essential for downstream
-entry/exit calculations.
+CRITICAL — MANDATORY FIELDS:
+1. current_price: You MUST read and return the current/last traded price from
+   the chart. This is the most recent price shown — typically the rightmost
+   point of the price line or the value displayed on the price axis. This
+   field must NEVER be null. It is essential for downstream entry/exit
+   calculations.
+2. key_levels: You MUST identify and return at least 2 support/resistance
+   levels in key_levels. If exact levels are not immediately obvious, estimate
+   them from the nearest visible support/resistance zones, round numbers, or
+   recent swing highs/lows. NEVER return an empty key_levels array.
 
 You must return ONLY valid JSON — no commentary outside the JSON structure.
 
@@ -80,9 +86,12 @@ confidence:
 - medium: Reasonable signals but some ambiguity
 - low: Conflicting signals or unclear chart
 
-Identify at least 2 key support/resistance levels when visible. Note all
-visible indicator readings. If chart patterns (head & shoulders, double top/bottom,
-flags, wedges, triangles, etc.) are present, name them.
+You MUST identify at least 2 key support/resistance levels — this is not
+optional. Use recent swing lows for support and swing highs for resistance.
+If the chart is unclear, use round-number levels or indicator-derived levels
+(e.g. VWAP, moving average crossover prices). Note all visible indicator
+readings. If chart patterns (head & shoulders, double top/bottom, flags,
+wedges, triangles, etc.) are present, name them.
 """
 
 
@@ -91,6 +100,7 @@ def build_chart_prompt(
     config: StrategyConfig,
     sentiment: SentimentAnalysis | None = None,
     timeframe_override: str | None = None,
+    indicators_override: list[str] | None = None,
 ) -> str:
     """Build the user prompt for per-ticker chart analysis.
 
@@ -103,15 +113,18 @@ def build_chart_prompt(
         sentiment: Gemini's sentiment result for this ticker, or None.
         timeframe_override: If set, use this timeframe instead of the
             strategy's ``chart_timeframe``.
+        indicators_override: If set, use these indicators instead of the
+            strategy's ``chart_indicators`` (for short-TF analysis).
 
     Returns:
         The formatted user prompt string.
     """
     effective_timeframe = timeframe_override or config.chart_timeframe
+    effective_indicators = indicators_override or config.chart_indicators
     parts: list[str] = [
         f"Analyze the attached TradingView chart for: {ticker}",
         f"\nTimeframe: {effective_timeframe}",
-        f"Indicators on chart: {', '.join(config.chart_indicators)}",
+        f"Indicators on chart: {', '.join(effective_indicators)}",
     ]
 
     if config.ta_focus:

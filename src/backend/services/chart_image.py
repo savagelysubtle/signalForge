@@ -31,8 +31,9 @@ INDICATOR_MAP: dict[str, str] = {
     "Bollinger Bands": "Bollinger Bands",
     "Stochastic": "Stochastic",
     "ATR": "Average True Range",
-    "EMA_20": "Exponential Moving Average",
-    "EMA_50": "Exponential Moving Average",
+    "EMA_20": "Moving Average Exponential",
+    "EMA_50": "Moving Average Exponential",
+    "EMA_200": "Moving Average Exponential",
     "SMA_50": "Moving Average",
     "SMA_200": "Moving Average",
     "VWAP": "VWAP",
@@ -40,13 +41,14 @@ INDICATOR_MAP: dict[str, str] = {
     "OBV": "On Balance Volume",
     "CCI": "Commodity Channel Index",
     "Ichimoku": "Ichimoku Cloud",
-    "DMI": "Directional Movement Index",
+    "DMI": "Directional Movement",
     "Parabolic SAR": "Parabolic SAR",
 }
 
 INDICATOR_INPUTS: dict[str, dict] = {
     "EMA_20": {"length": 20},
     "EMA_50": {"length": 50},
+    "EMA_200": {"length": 200},
     "SMA_50": {"length": 50},
     "SMA_200": {"length": 200},
 }
@@ -223,7 +225,10 @@ async def fetch_chart_image(
             if response.status_code < 400:
                 break
             logger.warning(
-                "Chart-Img %s failed (%s), trying next exchange", tv_symbol, response.status_code
+                "Chart-Img %s failed (HTTP %s): %s",
+                tv_symbol,
+                response.status_code,
+                response.text[:500],
             )
 
     if response is None or response.status_code >= 400:
@@ -385,9 +390,10 @@ async def fetch_annotated_chart(
             if response.status_code < 400:
                 break
             logger.warning(
-                "Annotated chart %s failed (%s), trying next exchange",
+                "Annotated chart %s failed (HTTP %s): %s",
                 tv_symbol,
                 response.status_code,
+                response.text[:500],
             )
 
     if response is None or response.status_code >= 400:

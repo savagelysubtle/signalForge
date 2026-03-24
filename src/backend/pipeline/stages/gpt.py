@@ -203,6 +203,23 @@ async def run_debate(
     )
     all_metadata.append(judge_metadata)
 
+    for rec in recommendations:
+        if rec.action in ("BUY", "SELL"):
+            missing = []
+            if rec.entry_price is None:
+                missing.append("entry_price")
+            if rec.stop_loss is None:
+                missing.append("stop_loss")
+            if rec.take_profit is None:
+                missing.append("take_profit")
+            if missing:
+                logger.warning(
+                    "GPT judge returned %s for %s but missing: %s",
+                    rec.action,
+                    rec.ticker,
+                    ", ".join(missing),
+                )
+
     logger.info(
         "GPT debate: %d recommendations for %d tickers (debate=%s)",
         len(recommendations),

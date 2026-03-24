@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 # ---------------------------------------------------------------------------
 # Perplexity Stage (Stage 1)
@@ -189,7 +189,9 @@ class PipelineResult(BaseModel):
     stage_errors: list[dict] = Field(default_factory=list)
     total_duration_seconds: float = 0.0
     prompt_versions: dict[str, str] = Field(default_factory=dict)
-    chart_indicators: list[str] = Field(default_factory=lambda: ["RSI", "MACD", "Volume"])
+    chart_indicators: list[str] = Field(
+        default_factory=lambda: ["RSI", "MACD", "Volume", "EMA_50", "EMA_200"]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -218,10 +220,24 @@ class StrategyConfig(BaseModel):
     max_tickers: int = 10
 
     # Claude Stage
-    chart_indicators: list[str] = Field(default_factory=lambda: ["RSI", "MACD", "Volume"])
+    chart_indicators: list[str] = Field(
+        default_factory=lambda: ["RSI", "MACD", "Volume", "EMA_50", "EMA_200"]
+    )
     chart_timeframe: str = "D"
     secondary_timeframe: str = "4H"
+    additional_timeframes: list[str] = Field(default_factory=lambda: ["4H", "W"])
+    short_timeframes: list[str] = Field(default_factory=lambda: ["15m", "1H"])
+    short_tf_indicators: list[str] = Field(
+        default_factory=lambda: ["VWAP", "Stochastic", "EMA_20", "ATR", "Volume"]
+    )
     ta_focus: str | None = None
+
+    @model_validator(mode="after")
+    def _sync_timeframes(self) -> StrategyConfig:
+        """Ensure additional_timeframes is populated from secondary_timeframe if empty."""
+        if not self.additional_timeframes and self.secondary_timeframe:
+            self.additional_timeframes = [self.secondary_timeframe]
+        return self
 
     # Gemini Stage
     news_recency: Literal["today", "week", "month"] = "week"
