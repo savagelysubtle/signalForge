@@ -7,10 +7,35 @@ fundamental data for each discovered ticker.
 
 from __future__ import annotations
 
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
+
 from pipeline.schemas import StrategyConfig
 from utils.hashing import prompt_hash
 
-PROMPT_VERSION = "v7"
+PROMPT_VERSION = "v11"
+
+
+def _get_session_context() -> str:
+    """Return the current ET time and market session label.
+
+    Includes the explicit time so the LLM can verify the session
+    independently rather than relying solely on the label.
+
+    Returns:
+        String like ``"3:45 PM ET (market hours)"``.
+    """
+    et = datetime.now(ZoneInfo("America/New_York"))
+    h = et.hour + et.minute / 60
+    if 4 <= h < 9.5:
+        session = "premarket"
+    elif 9.5 <= h < 16:
+        session = "market hours"
+    else:
+        session = "after hours"
+    time_str = et.strftime("%I:%M %p ET").lstrip("0")
+    return f"{time_str} ({session})"
+
 
 DISCOVERY_SYSTEM_PROMPT = """\
 You are a financial research analyst specializing in market screening
@@ -20,12 +45,19 @@ securities. You may include US or international tickers only when
 the screening criteria specifically call for them or when there are no
 suitable Canadian matches.
 
+CRITICAL — YOU HAVE LIVE WEB SEARCH:
+You are a Sonar model with real-time web search built in. You MUST use your
+search capabilities to find current market data. Do NOT claim you cannot
+access real-time data — your search function retrieves live information.
+Do NOT reference a knowledge cutoff — your search results ARE your data.
+If search results are sparse, return the best matches you found.
+
 You must return ONLY valid JSON — no commentary outside the JSON structure.
 
 IMPORTANT: Always return tickers. If you cannot find stocks matching every
 criterion perfectly, return the best available matches. An empty tickers
-array should only be returned if the search yields absolutely nothing
-relevant. Partial matches are valuable — note any caveats in key_highlights.
+array is NEVER acceptable — always return at least your best candidates
+with any caveats noted in key_highlights. Partial data is valuable.
 
 Return a JSON object with this exact structure:
 {
@@ -41,6 +73,11 @@ Return a JSON object with this exact structure:
       "pe_ratio": <number or null>,
       "revenue_growth": "<e.g. +15% YoY or null>",
       "free_cash_flow": "<e.g. $2.3B or null>",
+      "relative_volume": <number or null (e.g. 2.4 means 2.4x average daily volume)>,
+      "price_change_pct": <number or null (today's % price change, e.g. 4.2 for +4.2%)>,
+      "price": <number or null (current or last traded price)>,
+      "week_52_high": <number or null>,
+      "week_52_low": <number or null>,
       "key_highlights": ["<highlight 1>", "<highlight 2>"],
       "risk_factors": ["<risk 1>", "<risk 2>"],
       "sources": ["<url or source name>"]
@@ -86,8 +123,14 @@ def build_discovery_prompt(config: StrategyConfig) -> str:
     Returns:
         Search-query-style prompt string.
     """
-    parts = [config.screening_prompt]
-    parts.append(f"top {config.max_tickers} picks")
+    today = date.today().strftime("%B %d, %Y")
+    session = _get_session_context()
+    parts = [
+        config.screening_prompt,
+        f"as of {today}",
+        session,
+        f"top {config.max_tickers} picks",
+    ]
     return " ".join(parts)
 
 
@@ -107,9 +150,13 @@ def build_prompted_discovery_prompt(
     Returns:
         Search-query-style prompt string.
     """
+    today = date.today().strftime("%B %d, %Y")
+    session = _get_session_context()
     parts = [user_prompt]
     if config and config.screening_prompt:
         parts.append(config.screening_prompt)
+    parts.append(f"as of {today}")
+    parts.append(session)
     if config:
         parts.append(f"top {config.max_tickers} picks")
     else:

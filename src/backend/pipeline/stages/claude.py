@@ -30,7 +30,7 @@ from services.keyring_service import get_api_key
 
 logger = logging.getLogger(__name__)
 
-CLAUDE_MODEL = "claude-sonnet-4-20250514"
+CLAUDE_MODEL = "claude-opus-4-6"
 
 _semaphore = asyncio.Semaphore(3)
 

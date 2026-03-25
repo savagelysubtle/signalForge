@@ -17,6 +17,7 @@ dependencies = [
     "supabase>=2.0.0",
     "slowapi>=0.1.9",
     "perplexityai>=0.30.4",
+    "tzdata>=2025.3",
 ]
 
 [build-system]

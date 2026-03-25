@@ -41,7 +41,7 @@ from services.keyring_service import get_api_key
 
 logger = logging.getLogger(__name__)
 
-GPT_MODEL = "gpt-4.1"
+GPT_MODEL = "gpt-5.4"
 
 
 def _get_client() -> AsyncOpenAI:
@@ -143,7 +143,7 @@ async def _call_gpt(
             {"role": "user", "content": full_user_prompt},
         ],
         temperature=0.7,
-        max_tokens=8192,
+        max_completion_tokens=8192,
     )
 
     return response.choices[0].message.content or ""

@@ -28,7 +28,7 @@ from services.keyring_service import get_api_key
 
 logger = logging.getLogger(__name__)
 
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-2.5-pro"
 
 _semaphore = asyncio.Semaphore(5)
 
@@ -141,10 +141,7 @@ async def run_sentiment(
         list of per-ticker metadata dicts).
     """
     news_map = ticker_news or {}
-    tasks = [
-        _analyze_ticker(ticker, config, news_urls=news_map.get(ticker))
-        for ticker in tickers
-    ]
+    tasks = [_analyze_ticker(ticker, config, news_urls=news_map.get(ticker)) for ticker in tickers]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     sentiments: list[SentimentAnalysis] = []

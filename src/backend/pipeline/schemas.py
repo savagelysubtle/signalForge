@@ -27,6 +27,11 @@ class FundamentalData(BaseModel):
     pe_ratio: float | None = None
     revenue_growth: str | None = None
     free_cash_flow: str | None = None
+    relative_volume: float | None = None
+    price_change_pct: float | None = None
+    price: float | None = None
+    week_52_high: float | None = None
+    week_52_low: float | None = None
     key_highlights: list[str] = Field(default_factory=list)
     risk_factors: list[str] = Field(default_factory=list)
     sources: list[str] = Field(default_factory=list)

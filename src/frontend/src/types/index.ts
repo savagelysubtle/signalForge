@@ -11,6 +11,11 @@ export interface FundamentalData {
   pe_ratio: number | null;
   revenue_growth: string | null;
   free_cash_flow: string | null;
+  relative_volume: number | null;
+  price_change_pct: number | null;
+  price: number | null;
+  week_52_high: number | null;
+  week_52_low: number | null;
   key_highlights: string[];
   risk_factors: string[];
   sources: string[];

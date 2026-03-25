@@ -36,8 +36,9 @@ from services.keyring_service import get_api_key
 
 logger = logging.getLogger(__name__)
 
-PERPLEXITY_MODEL = "sonar-pro"
+PERPLEXITY_MODEL = "sonar-reasoning-pro"
 MAX_RETRIES = 2
+
 
 _semaphore = asyncio.Semaphore(3)
 
@@ -52,8 +53,88 @@ def _get_client() -> AsyncPerplexity:
     return AsyncPerplexity(api_key=api_key)
 
 
+_CRYPTO_KEYWORDS = frozenset(
+    {"crypt", "bitcoin", "btc", "eth", "defi", "token", "coin", "web3", "blockchain"}
+)
+
+
+def _is_crypto_strategy(config: StrategyConfig) -> bool:
+    """Detect whether a strategy targets crypto assets.
+
+    Checks both the strategy name and screening prompt against a broad
+    keyword set so custom strategy names like "BTC Scalper" are caught.
+
+    Args:
+        config: Strategy configuration to inspect.
+
+    Returns:
+        True if the strategy appears to target crypto assets.
+    """
+    text = f"{config.name} {config.screening_prompt}".lower()
+    return any(kw in text for kw in _CRYPTO_KEYWORDS)
+
+
+_DOMAIN_SETS: dict[str, list[str]] = {
+    "canadian": [
+        "theglobeandmail.com",
+        "financialpost.com",
+        "bnnbloomberg.ca",
+        "marketwatch.com",
+        "finance.yahoo.com",
+        "reuters.com",
+    ],
+    "us_stock": [
+        "reuters.com",
+        "bloomberg.com",
+        "marketwatch.com",
+        "finance.yahoo.com",
+        "seekingalpha.com",
+        "barrons.com",
+        "cnbc.com",
+    ],
+    "crypto": [
+        "coindesk.com",
+        "cointelegraph.com",
+        "theblock.co",
+        "coingecko.com",
+        "decrypt.co",
+        "cryptoslate.com",
+    ],
+    "earnings": [
+        "reuters.com",
+        "bloomberg.com",
+        "finance.yahoo.com",
+        "seekingalpha.com",
+        "earningswhispers.com",
+        "benzinga.com",
+    ],
+}
+
+
+def _get_domain_set(config: StrategyConfig) -> list[str]:
+    """Select the best domain filter set for the given strategy.
+
+    Checks crypto first, then earnings, then Canadian/TSX keywords in
+    the screening prompt, falling back to the US stock set.
+
+    Args:
+        config: Strategy configuration to inspect.
+
+    Returns:
+        List of domain strings for ``search_domain_filter``.
+    """
+    if _is_crypto_strategy(config):
+        return _DOMAIN_SETS["crypto"]
+    if "earnings" in config.name.lower():
+        return _DOMAIN_SETS["earnings"]
+    text = config.screening_prompt.lower()
+    if "canadian" in text or "tsx" in text:
+        return _DOMAIN_SETS["canadian"]
+    return _DOMAIN_SETS["us_stock"]
+
+
 def _build_search_params(config: StrategyConfig | None) -> dict:
-    """Build Sonar Pro search parameters from strategy config.
+    """Build Sonar search parameters from strategy config.
 
     Args:
         config: Strategy configuration (None for defaults).
@@ -61,8 +142,9 @@ def _build_search_params(config: StrategyConfig | None) -> dict:
     Returns:
         Dict of API parameters for search filtering.
     """
+    context_size = "high" if (not config or config.constraint_style == "tight") else "medium"
     params: dict = {
-        "web_search_options": {"search_context_size": "high"},
+        "web_search_options": {"search_context_size": context_size},
     }
 
     recency_map = {"today": "day", "week": "week", "month": "month"}
@@ -71,28 +153,32 @@ def _build_search_params(config: StrategyConfig | None) -> dict:
     else:
         params["search_recency_filter"] = "week"
 
-    stock_domains = [
-        "finance.yahoo.com",
-        "reuters.com",
-        "bloomberg.com",
-        "marketwatch.com",
-        "theglobeandmail.com",
-        "financialpost.com",
-        "seekingalpha.com",
-        "barrons.com",
-    ]
-    crypto_domains = [
-        "coindesk.com",
-        "cointelegraph.com",
-        "theblock.co",
-        "coingecko.com",
-        "decrypt.co",
-    ]
-
-    is_crypto = config and "crypt" in (config.name or "").lower()
-    params["search_domain_filter"] = crypto_domains if is_crypto else stock_domains
+    params["search_domain_filter"] = _get_domain_set(config) if config else _DOMAIN_SETS["us_stock"]
 
     return params
+
+
+def _distribute_citations(result: ScreeningResult, citations: list[str]) -> None:
+    """Match citation URLs to tickers by symbol or company name slug.
+
+    Populates each ``FundamentalData.news_urls`` in-place. When no URL
+    matches a ticker, the first 3 citations are used as a fallback so
+    every ticker gets at least some context for downstream stages.
+
+    Args:
+        result: Validated screening result with ticker data.
+        citations: Flat list of citation URLs from the API response.
+    """
+    if not citations:
+        return
+
+    for td in result.tickers:
+        symbol = td.ticker.split(":")[-1].lower()
+        slug = td.company_name.lower().replace(" ", "")[:8]
+        matched = [
+            url for url in citations if symbol in url.lower() or (slug and slug in url.lower())
+        ]
+        td.news_urls = matched[:4] if matched else citations[:3]
 
 
 async def _call_perplexity_raw(
@@ -100,6 +186,7 @@ async def _call_perplexity_raw(
     user_prompt: str,
     *,
     search_params: dict | None = None,
+    model: str = PERPLEXITY_MODEL,
 ) -> tuple[str, list[str]]:
     """Make a single call to Perplexity Sonar and return text + citations.
 
@@ -107,6 +194,7 @@ async def _call_perplexity_raw(
         system_prompt: The system prompt defining output format.
         user_prompt: The user prompt (search-query-style).
         search_params: API search parameters (domain filter, recency, etc.).
+        model: Perplexity model identifier (e.g. sonar-pro, sonar-reasoning-pro).
 
     Returns:
         Tuple of (raw response text, list of citation URLs from the API).
@@ -119,7 +207,7 @@ async def _call_perplexity_raw(
     ]
 
     api_kwargs: dict = {
-        "model": PERPLEXITY_MODEL,
+        "model": model,
         "messages": messages,
     }
 
@@ -148,6 +236,7 @@ async def _call_with_retry(
     user_prompt: str,
     *,
     search_params: dict | None = None,
+    model: str = PERPLEXITY_MODEL,
 ) -> tuple[ScreeningResult | None, list[str]]:
     """Call Perplexity with validation retry logic and return result + citations.
 
@@ -158,6 +247,7 @@ async def _call_with_retry(
         system_prompt: The system prompt defining output format.
         user_prompt: The user prompt.
         search_params: API search parameters.
+        model: Perplexity model identifier.
 
     Returns:
         Tuple of (validated ScreeningResult or None, citation URLs).
@@ -186,18 +276,39 @@ async def _call_with_retry(
                 system_prompt,
                 effective_prompt,
                 search_params=search_params,
+                model=model,
             )
             if citations:
                 all_citations = citations
 
+            logger.debug("Perplexity raw response (first 500 chars): %s", raw_text[:500])
+
             result = validate_llm_json(raw_text, ScreeningResult)
+
+            if not result.tickers:
+                logger.warning(
+                    "Perplexity returned valid JSON but 0 tickers (attempt %d). "
+                    "Raw response (first 1000 chars): %s",
+                    attempt + 1,
+                    raw_text[:1000],
+                )
+                last_error = (
+                    "You returned an empty tickers array. This is not acceptable. "
+                    "You HAVE web search — use it to find current stocks. "
+                    "Return your best candidates even if data is partial."
+                )
+                continue
+
             result.citations = all_citations
+            _distribute_citations(result, all_citations)
             return result, all_citations
 
         except (ValueError, json.JSONDecodeError) as exc:
             last_error = f"JSON parse error: {exc}"
+            logger.warning("Perplexity JSON parse failed: %s. Raw: %s", exc, raw_text[:500])
         except ValidationError as exc:
             last_error = f"Schema validation error: {exc}"
+            logger.warning("Perplexity validation failed: %s. Raw: %s", exc, raw_text[:500])
 
     logger.error(
         "All %d attempts failed for Perplexity. Last error: %s",

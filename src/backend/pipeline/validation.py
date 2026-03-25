@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from functools import wraps
 from typing import TypeVar
@@ -22,12 +23,17 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
 
 def extract_json(text: str) -> str:
-    """Extract a JSON object or array from LLM text that may include markdown fences.
+    """Extract a JSON object or array from LLM text.
+
+    Handles markdown fences (````json ...` ```) and ``<think>`` reasoning
+    tokens emitted by models like ``sonar-reasoning-pro``.
 
     Args:
-        text: Raw LLM response text, possibly wrapped in ```json ... ```.
+        text: Raw LLM response text.
 
     Returns:
         The extracted JSON string.
@@ -35,7 +41,7 @@ def extract_json(text: str) -> str:
     Raises:
         ValueError: If no JSON object/array can be located in the text.
     """
-    stripped = text.strip()
+    stripped = _THINK_RE.sub("", text).strip()
     if stripped.startswith("```"):
         lines = stripped.split("\n", 1)
         body = lines[1] if len(lines) > 1 else ""
