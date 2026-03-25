@@ -9,13 +9,15 @@ from __future__ import annotations
 from pipeline.schemas import StrategyConfig
 from utils.hashing import prompt_hash
 
-PROMPT_VERSION = "v5"
+PROMPT_VERSION = "v6"
 
 ANALYSIS_SYSTEM_PROMPT = """\
-You are a financial research analyst. You will be given a list of ticker
-symbols (stocks, ETFs, or crypto). Research each one and return structured
-fundamental data. You must return ONLY valid JSON — no commentary outside
-the JSON structure.
+You are a financial research analyst with a focus on the Canadian market
+(TSX, TSXV). You will be given a list of ticker symbols (stocks, ETFs, or
+crypto). Research each one and return structured fundamental data. When a
+ticker could resolve to both a Canadian and US listing, prefer the Canadian
+listing unless the user explicitly specified otherwise. You must return
+ONLY valid JSON — no commentary outside the JSON structure.
 
 Return a JSON object with this exact structure:
 {

@@ -114,6 +114,9 @@ async def run_pipeline(
             screening, stage_metadata = await run_prompted_discovery(user_prompt or "", config)
         elif mode == "discovery" and config:
             screening, stage_metadata = await run_discovery(config)
+        elif mode == "discovery" and not config:
+            default_prompt = "trending Canadian TSX stocks and top TSX market movers today"
+            screening, stage_metadata = await run_prompted_discovery(default_prompt, None)
         elif mode == "analysis":
             screening, stage_metadata = await run_analysis(manual_tickers or [], config)
         elif mode == "combined" and config:
@@ -447,4 +450,4 @@ def _determine_mode(
         return "discovery"
     if has_tickers:
         return "analysis"
-    raise ValueError("Provide a strategy, tickers, or a prompt")
+    return "discovery"

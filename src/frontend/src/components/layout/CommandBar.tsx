@@ -44,7 +44,7 @@ export function CommandBar() {
 
     if (inputKind === 'prompt') return 'prompt';
     if (hasStrategy && inputKind === 'tickers') return 'combined';
-    if (hasStrategy && inputKind === 'empty') return 'discovery';
+    if (inputKind === 'empty') return 'discovery';
     if (inputKind === 'tickers') return 'analysis';
     return 'none';
   }, [selectedStrategy, inputKind]);
@@ -92,12 +92,13 @@ export function CommandBar() {
 
   const placeholderText = selectedStrategy
     ? 'Tickers (AAPL, NVDA) or prompt ("oil stocks under $50") or leave empty'
-    : 'Tickers (AAPL, NVDA) or prompt ("find undervalued tech stocks")';
+    : 'Tickers (AAPL, NVDA) or prompt ("find undervalued tech stocks") or leave empty';
 
   const runningLabel = (() => {
     if (runMode === 'prompt') return 'Searching with prompt...';
     if (selectedStrategyName) return `Discovering via ${selectedStrategyName}...`;
-    return `Analyzing ${parsedTickers.join(', ')}...`;
+    if (parsedTickers.length > 0) return `Analyzing ${parsedTickers.join(', ')}...`;
+    return 'Discovering market movers...';
   })();
 
   return (
