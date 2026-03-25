@@ -234,9 +234,10 @@ async def fetch_chart_image(
     if response is None or response.status_code >= 400:
         error_detail = response.text[:500] if response else "No response"
         logger.error("Chart-Img all candidates failed for %s: %s", ticker, error_detail)
-        if response is not None:
-            response.raise_for_status()
-        raise RuntimeError(f"Chart-Img: no valid exchange found for {ticker}")
+        raise RuntimeError(
+            f"Chart-Img HTTP {response.status_code if response else 'N/A'} "
+            f"for {ticker}: {error_detail}"
+        )
 
     image_bytes = response.content
 
