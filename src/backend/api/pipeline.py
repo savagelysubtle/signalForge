@@ -48,12 +48,6 @@ async def trigger_pipeline_run(
     user_id: CurrentUser,
 ) -> PipelineRunResponse:
     """Trigger a new pipeline analysis run."""
-    if not body.strategy_id and not body.manual_tickers and not body.user_prompt:
-        raise HTTPException(
-            status_code=400,
-            detail="Provide a strategy, tickers, or a prompt",
-        )
-
     tickers = body.manual_tickers if body.manual_tickers else None
     user_prompt = body.user_prompt.strip() if body.user_prompt else None
 
