@@ -45,7 +45,9 @@
       "Bash(powershell.exe -Command \"foreach \\($pid in @\\(23032,9564,28112,19868,25892\\)\\) { try { Stop-Process -Id $pid -Force } catch {} }\")",
       "Bash(powershell.exe -Command \"Stop-Process -Id 23032 -Force; Stop-Process -Id 9564 -Force; Stop-Process -Id 28112 -Force; Stop-Process -Id 19868 -Force; Stop-Process -Id 25892 -Force\")",
       "WebFetch(domain:doc.chart-img.com)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(xargs grep:*)",
+      "Bash(find /d/Coding/signalForge -name *.sql -o -name *migration* -o -name *schema*)"
     ]
   }
 }
