@@ -32,7 +32,7 @@ export function CommandBar() {
   const [selectedStrategy, setSelectedStrategy] = useState<string>('');
   const [inputText, setInputText] = useState<string>('');
 
-  const allStrategies = [...templates, ...strategies];
+  const allStrategies = strategies;
 
   const { kind: inputKind, tickers: parsedTickers } = useMemo(
     () => classifyInput(inputText),

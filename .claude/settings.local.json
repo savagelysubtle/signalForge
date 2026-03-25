@@ -45,7 +45,32 @@
       "Bash(powershell.exe -Command \"foreach \\($pid in @\\(23032,9564,28112,19868,25892\\)\\) { try { Stop-Process -Id $pid -Force } catch {} }\")",
       "Bash(powershell.exe -Command \"Stop-Process -Id 23032 -Force; Stop-Process -Id 9564 -Force; Stop-Process -Id 28112 -Force; Stop-Process -Id 19868 -Force; Stop-Process -Id 25892 -Force\")",
       "WebFetch(domain:doc.chart-img.com)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(bun run:*)",
+      "Bash(tasklist:*)",
+      "Bash(powershell -Command \"Get-Process -Id 9736,25892,28112,19868,23032,9564 2>\\\\$null | Select-Object Id,ProcessName | Format-Table -AutoSize\")",
+      "Bash(powershell.exe -NoProfile -Command \"Get-Process -Id 9736,25892,28112,19868,23032,9564 -ErrorAction SilentlyContinue | Select-Object Id,ProcessName\")",
+      "Bash(while read:*)",
+      "Bash(do echo:*)",
+      "Read(//proc/$pid/**)",
+      "Bash(powershell.exe -NoProfile -Command \"Stop-Process -Id 9736,25892,28112,19868,23032,9564 -Force -ErrorAction SilentlyContinue\")",
+      "Bash(powershell.exe -NoProfile -Command \"9736,25892,28112,19868,23032,9564 | ForEach-Object { Stop-Process -Id \\\\$_ -Force -ErrorAction SilentlyContinue }\")",
+      "Bash(powershell.exe -NoProfile -Command \"Get-NetTCPConnection -LocalPort 8420 -ErrorAction SilentlyContinue | Select-Object OwningProcess,State | Format-Table\")",
+      "Bash(powershell.exe -NoProfile -Command \"Get-Process -Id 9564 | Select-Object Id,ProcessName,Path | Format-List\")",
+      "Bash(powershell.exe -NoProfile -Command \"Test-NetConnection -ComputerName 127.0.0.1 -Port 8420 -WarningAction SilentlyContinue | Select-Object TcpTestSucceeded\")",
+      "Bash(powershell.exe -NoProfile -Command \"Get-NetTCPConnection -LocalPort 8420 | ForEach-Object { try { Get-Process -Id \\\\$_.OwningProcess | Select-Object Id,ProcessName,Path } catch { Write-Output \\('PID ' + \\\\$_.OwningProcess + ' not found'\\) } }\")",
+      "Bash(powershell.exe -NoProfile -Command \"Get-Process python*,uvicorn*,uv* -ErrorAction SilentlyContinue | Select-Object Id,ProcessName,Path | Format-Table -AutoSize\")",
+      "Bash(powershell.exe -NoProfile -Command \"Stop-Process -Name uvicorn -Force -ErrorAction SilentlyContinue; Stop-Process -Id 5732,24724,26980 -Force -ErrorAction SilentlyContinue; Stop-Process -Id 16600,18164,28040 -Force -ErrorAction SilentlyContinue\")",
+      "Bash(powershell.exe -NoProfile -Command \"Stop-Process -Name uvicorn -Force; Stop-Process -Name uv -Force\")",
+      "Bash(powershell.exe -NoProfile -Command \"Get-Process python*,uvicorn*,uv* -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue\")",
+      "Bash(powershell.exe -NoProfile -Command \"& { $names = @\\('python','uv','node','npm','pnpm','yarn','bun','deno','uvicorn','gunicorn','hypercorn','pytest','pyright','tsserver','vite','webpack','next','nuxt','astro','parcel','esbuild','watchman'\\); foreach \\(\\\\$n in \\\\$names\\) { Stop-Process -Name \\\\$n -Force -ErrorAction SilentlyContinue }; Write-Host 'dev processes terminated \\(where found\\).' -ForegroundColor Green }\")",
+      "Bash(powershell -Command \"$PSVersionTable.PSVersion.ToString\\(\\)\")",
+      "Bash(powershell -Command \"$PSVersionTable.PSVersion\")",
+      "Bash(powershell -NoProfile -Command \"Write-Host $PSVersionTable.PSVersion\")",
+      "Bash(powershell -NoProfile -Command 'echo $PSVersionTable.PSVersion.Major; echo $PSVersionTable.PSVersion.Minor')",
+      "Bash(winget install:*)",
+      "Read(//c/Program Files/PowerShell/7/**)",
+      "Read(//c/Program Files/PowerShell/**)"
     ]
   }
 }
