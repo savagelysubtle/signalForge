@@ -86,25 +86,39 @@ EXCHANGE_SUFFIX_MAP: dict[str, str] = {
 
 _US_EXCHANGE_FALLBACKS = ["NASDAQ", "NYSE", "AMEX"]
 
+_CANADIAN_EXCHANGE_FALLBACKS = ["TSX", "TSXV"]
+
 
 def _to_tradingview_symbols(ticker: str) -> list[str]:
     """Convert ticker to one or more TradingView ``EXCHANGE:SYMBOL`` candidates.
 
     Chart-Img v2 requires ``EXCHANGE:SYMBOL`` format. For non-US tickers
-    (Yahoo suffixes or already-prefixed), returns a single candidate. For
-    bare US symbols, returns candidates for NASDAQ, NYSE, and AMEX since
-    we cannot know the exchange at this point.
+    (Yahoo suffixes or already-prefixed), returns candidates with fallbacks.
+    For bare US symbols, returns candidates for NASDAQ, NYSE, and AMEX.
+
+    Canadian tickers (TSX/TSXV prefixed or .TO/.V suffixed) get both TSX and
+    TSXV as candidates, since Perplexity may guess the wrong exchange.
 
     Examples:
-        TSX:ENB    -> ["TSX:ENB"]
-        AC.TO      -> ["TSX:AC"]
+        TSX:ENB    -> ["TSX:ENB", "TSXV:ENB"]
+        TSXV:NVX   -> ["TSXV:NVX", "TSX:NVX"]
+        AC.TO      -> ["TSX:AC", "TSXV:AC"]
         AAPL       -> ["NASDAQ:AAPL", "NYSE:AAPL", "AMEX:AAPL"]
     """
     if ":" in ticker:
+        exchange, symbol = ticker.split(":", 1)
+        if exchange in _CANADIAN_EXCHANGE_FALLBACKS:
+            return [f"{ex}:{symbol}" for ex in _CANADIAN_EXCHANGE_FALLBACKS if ex == exchange] + [
+                f"{ex}:{symbol}" for ex in _CANADIAN_EXCHANGE_FALLBACKS if ex != exchange
+            ]
         return [ticker]
     for suffix, exchange in EXCHANGE_SUFFIX_MAP.items():
         if ticker.endswith(suffix):
             base = ticker[: -len(suffix)]
+            if exchange in _CANADIAN_EXCHANGE_FALLBACKS:
+                return [f"{ex}:{base}" for ex in _CANADIAN_EXCHANGE_FALLBACKS if ex == exchange] + [
+                    f"{ex}:{base}" for ex in _CANADIAN_EXCHANGE_FALLBACKS if ex != exchange
+                ]
             return [f"{exchange}:{base}"]
     return [f"{ex}:{ticker}" for ex in _US_EXCHANGE_FALLBACKS]
 
