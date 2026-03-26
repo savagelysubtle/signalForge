@@ -101,6 +101,7 @@ async def get_pipeline_status(run_id: str, user_id: CurrentUser) -> PipelineResu
 class PipelineRunSummary(BaseModel):
     id: str
     strategy_id: str | None
+    strategy_name: str | None = None
     mode: str
     status: str
     started_at: str
@@ -122,6 +123,14 @@ async def list_pipeline_runs(user_id: CurrentUser) -> list[PipelineRunSummary]:
     )
     rows = resp.data
 
+    strategy_ids = list({r["strategy_id"] for r in rows if r["strategy_id"]})
+    strategy_names: dict[str, str] = {}
+    if strategy_ids:
+        strat_resp = (
+            await client.table("strategies").select("id, name").in_("id", strategy_ids).execute()
+        )
+        strategy_names = {s["id"]: s["name"] for s in strat_resp.data}
+
     summaries: list[PipelineRunSummary] = []
     for r in rows:
         manual = json.loads(r["manual_tickers"]) if r["manual_tickers"] else []
@@ -138,6 +147,7 @@ async def list_pipeline_runs(user_id: CurrentUser) -> list[PipelineRunSummary]:
             PipelineRunSummary(
                 id=r["id"],
                 strategy_id=r["strategy_id"],
+                strategy_name=strategy_names.get(r["strategy_id"]) if r["strategy_id"] else None,
                 mode=r["mode"],
                 status=r["status"],
                 started_at=str(r["started_at"]),

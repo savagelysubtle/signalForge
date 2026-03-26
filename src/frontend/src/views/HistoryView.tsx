@@ -36,6 +36,7 @@ export function HistoryView() {
           <thead className="bg-bg-tertiary border-b border-border">
             <tr>
               <th className="px-4 py-3 font-medium text-text-secondary">Date</th>
+              <th className="px-4 py-3 font-medium text-text-secondary">Strategy</th>
               <th className="px-4 py-3 font-medium text-text-secondary">Tickers</th>
               <th className="px-4 py-3 font-medium text-text-secondary">Mode</th>
               <th className="px-4 py-3 font-medium text-text-secondary">Status</th>
@@ -51,6 +52,9 @@ export function HistoryView() {
               >
                 <td className="px-4 py-3 text-text-primary">
                   {new Date(run.started_at).toLocaleString()}
+                </td>
+                <td className="px-4 py-3 text-text-secondary text-xs">
+                  {run.strategy_name ?? '—'}
                 </td>
                 <td className="px-4 py-3">
                   {run.tickers && run.tickers.length > 0 ? (

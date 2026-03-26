@@ -157,6 +157,7 @@ export interface StageError {
 export interface PipelineRunSummary {
   id: string;
   strategy_id: string | null;
+  strategy_name: string | null;
   mode: string;
   status: string; // "running" | "completed" | "failed" | "partial"
   started_at: string;
