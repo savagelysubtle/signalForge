@@ -25,7 +25,7 @@ const TREND_COLORS: Record<string, string> = {
   bullish: 'text-accent-green',
   bearish: 'text-accent-red',
   neutral: 'text-accent-yellow',
-  transitioning: 'text-accent-blue',
+  transitioning: 'text-accent-cyan',
 };
 
 const SIGNAL_COLORS: Record<string, string> = {
@@ -41,7 +41,7 @@ const CONFIDENCE_STYLES: Record<string, { text: string; color: string; bg: strin
 };
 
 const STRENGTH_BADGE: Record<string, string> = {
-  strong: 'bg-accent-blue/15 text-accent-blue',
+  strong: 'bg-accent-cyan/15 text-accent-cyan',
   moderate: 'bg-bg-tertiary text-text-secondary',
   weak: 'bg-bg-tertiary text-text-secondary opacity-70',
 };
@@ -210,7 +210,7 @@ function AnalysisPanel({ analysis }: { analysis: ChartAnalysis }) {
             {analysis.patterns_detected.map((pattern, i) => (
               <span
                 key={i}
-                className="text-xs px-3 py-1.5 rounded-lg bg-accent-blue/10 text-accent-blue border border-accent-blue/20"
+                className="text-xs px-3 py-1.5 rounded-lg bg-accent-cyan/10 text-accent-cyan border border-accent-cyan/20"
               >
                 {pattern}
               </span>
@@ -275,7 +275,7 @@ function CompactLevelLegend({
   const items: { label: string; price: number; color: string }[] = [];
 
   if (recommendation?.entry_price != null)
-    items.push({ label: 'Entry', price: recommendation.entry_price, color: 'text-accent-blue' });
+    items.push({ label: 'Entry', price: recommendation.entry_price, color: 'text-accent-cyan' });
   if (recommendation?.stop_loss != null)
     items.push({ label: 'Stop', price: recommendation.stop_loss, color: 'text-accent-red' });
   if (recommendation?.take_profit != null)
@@ -382,7 +382,7 @@ export function ChartTab({ ticker, chartAnalyses, chartErrors, chartIndicators, 
             className={clsx(
               "px-2.5 py-1 text-xs font-medium rounded transition-colors",
               selectedTf === tf
-                ? "bg-accent-blue/15 text-accent-blue"
+                ? "bg-accent-lime/15 text-accent-lime"
                 : analysisTimeframes.has(tf)
                   ? "bg-bg-tertiary text-text-primary hover:bg-bg-tertiary/80"
                   : "text-text-secondary hover:text-text-primary hover:bg-bg-tertiary"
@@ -391,7 +391,7 @@ export function ChartTab({ ticker, chartAnalyses, chartErrors, chartIndicators, 
             {getTimeframeLabel(tf)}
           </button>
         ))}
-        {adHocLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-accent-blue ml-2" />}
+        {adHocLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-accent-lime ml-2" />}
       </div>
 
       <div className="flex flex-1 gap-4 p-4 overflow-hidden">

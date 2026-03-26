@@ -27,6 +27,7 @@
       "is_actively_trading": true,
       "limit": 50,
       "enrich_with_ratios": true,
+<<<<<<< HEAD
       "roe_min": 5.0,
       "price_change_3m_min": 10.0,
       "rvol_min": 1.5,
@@ -36,6 +37,12 @@
       "weight_momentum": 40,
       "weight_sentiment": 25,
       "weight_quality": 20
+=======
+      "rvol_min": 1.5,
+      "piotroski_min": 4,
+      "max_per_sector": 3,
+      "scoring_weights": {"fundamental": 0.15, "momentum": 0.40, "sentiment": 0.20, "quality": 0.25}
+>>>>>>> feature/carbon-lime-theme
     }
   },
   {
@@ -65,6 +72,7 @@
       "is_actively_trading": true,
       "limit": 80,
       "enrich_with_ratios": true,
+<<<<<<< HEAD
       "pe_max": 18.0,
       "pe_min": 3.0,
       "pb_max": 3.0,
@@ -79,6 +87,15 @@
       "weight_momentum": 10,
       "weight_sentiment": 20,
       "weight_quality": 30
+=======
+      "pe_max": 20.0,
+      "roe_min": 8.0,
+      "debt_equity_max": 2.0,
+      "piotroski_min": 5,
+      "require_insider_buying": true,
+      "max_per_sector": 3,
+      "scoring_weights": {"fundamental": 0.40, "momentum": 0.10, "sentiment": 0.25, "quality": 0.25}
+>>>>>>> feature/carbon-lime-theme
     }
   },
   {
@@ -108,6 +125,7 @@
       "is_actively_trading": true,
       "limit": 60,
       "enrich_with_ratios": true,
+<<<<<<< HEAD
       "roe_min": 5.0,
       "debt_equity_max": 3.0,
       "piotroski_min": 4,
@@ -119,6 +137,12 @@
       "weight_momentum": 30,
       "weight_sentiment": 25,
       "weight_quality": 25
+=======
+      "piotroski_min": 4,
+      "debt_equity_max": 2.5,
+      "max_per_sector": 2,
+      "scoring_weights": {"fundamental": 0.20, "momentum": 0.15, "sentiment": 0.30, "quality": 0.35}
+>>>>>>> feature/carbon-lime-theme
     }
   },
   {
@@ -148,6 +172,7 @@
       "is_actively_trading": true,
       "limit": 50,
       "enrich_with_ratios": true,
+<<<<<<< HEAD
       "roe_min": 5.0,
       "earnings_within_days": 14,
       "min_earnings_beat_pct": 60.0,
@@ -156,6 +181,12 @@
       "weight_momentum": 15,
       "weight_sentiment": 35,
       "weight_quality": 25
+=======
+      "earnings_within_days": 14,
+      "piotroski_min": 3,
+      "max_per_sector": 2,
+      "scoring_weights": {"fundamental": 0.20, "momentum": 0.20, "sentiment": 0.35, "quality": 0.25}
+>>>>>>> feature/carbon-lime-theme
     }
   },
   {
@@ -255,6 +286,7 @@
       "beta_min": 1.2,
       "is_actively_trading": true,
       "limit": 40,
+<<<<<<< HEAD
       "enrich_with_ratios": false,
       "price_change_1d_min": 1.5,
       "rvol_min": 2.0,
@@ -263,6 +295,12 @@
       "weight_momentum": 55,
       "weight_sentiment": 20,
       "weight_quality": 20
+=======
+      "enrich_with_ratios": true,
+      "rvol_min": 2.0,
+      "max_per_sector": 2,
+      "scoring_weights": {"fundamental": 0.10, "momentum": 0.50, "sentiment": 0.15, "quality": 0.25}
+>>>>>>> feature/carbon-lime-theme
     }
   }
 ]

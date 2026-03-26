@@ -87,9 +87,9 @@ export function CommandBar() {
   const modeColors: Record<RunMode, string> = {
     none: '',
     discovery: 'text-accent-green',
-    analysis: 'text-accent-blue',
+    analysis: 'text-accent-cyan',
     combined: 'text-accent-yellow',
-    prompt: 'text-purple-400',
+    prompt: 'text-accent-cyan',
   };
 
   const placeholderText = selectedStrategy
@@ -110,7 +110,7 @@ export function CommandBar() {
           value={selectedStrategy}
           onChange={(e) => setSelectedStrategy(e.target.value)}
           disabled={isRunning}
-          className="bg-bg-tertiary border border-border rounded px-3 py-1.5 text-sm text-text-primary focus:outline-none focus:border-accent-blue min-w-[180px]"
+          className="bg-bg-tertiary border border-border rounded px-3 py-1.5 text-sm text-text-primary focus:outline-none focus:border-accent-lime min-w-[180px]"
         >
           <option value="">No Strategy</option>
           {allStrategies.map(s => (
@@ -127,13 +127,13 @@ export function CommandBar() {
           onChange={(e) => setInputText(e.target.value)}
           disabled={isRunning}
           onKeyDown={(e) => { if (e.key === 'Enter' && runMode !== 'none') handleRun(); }}
-          className="bg-bg-tertiary border border-border rounded px-3 py-1.5 text-sm text-text-primary placeholder:text-text-secondary/50 focus:outline-none focus:border-accent-blue flex-1 max-w-lg"
+          className="bg-bg-tertiary border border-border rounded px-3 py-1.5 text-sm text-text-primary placeholder:text-text-secondary/50 focus:outline-none focus:border-accent-lime flex-1 max-w-lg"
         />
 
         <button
           onClick={handleRun}
           disabled={isRunning || runMode === 'none'}
-          className="flex items-center gap-2 bg-accent-blue text-bg-primary px-4 py-1.5 rounded text-sm font-medium hover:bg-opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity"
+          className="flex items-center gap-2 bg-accent-lime text-black px-4 py-1.5 rounded text-sm font-medium hover:bg-accent-lime/90 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity"
         >
           {isRunning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
           {isRunning ? 'Analyzing...' : 'Run'}
@@ -149,10 +149,10 @@ export function CommandBar() {
         )}
 
         {isRunning && (
-          <span className="flex items-center gap-2 text-accent-blue">
+          <span className="flex items-center gap-2 text-accent-lime">
             <span className="relative flex h-3 w-3">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent-blue opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-3 w-3 bg-accent-blue"></span>
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent-lime opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-3 w-3 bg-accent-lime"></span>
             </span>
             {runningLabel}
           </span>

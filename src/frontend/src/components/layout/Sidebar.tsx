@@ -32,7 +32,7 @@ export function Sidebar() {
             className={({ isActive }) => clsx(
               "p-3 rounded-lg flex items-center justify-center transition-colors group relative",
               isActive 
-                ? "bg-bg-tertiary text-accent-blue" 
+                ? "bg-bg-tertiary text-accent-lime" 
                 : "text-text-secondary hover:text-text-primary hover:bg-bg-tertiary"
             )}
             title={item.label}

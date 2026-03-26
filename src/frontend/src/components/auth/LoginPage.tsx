@@ -17,7 +17,7 @@ export function LoginPage() {
   if (authLoading) {
     return (
       <div className="flex items-center justify-center h-screen bg-bg-primary">
-        <Loader2 className="w-8 h-8 animate-spin text-accent-blue" />
+        <Loader2 className="w-8 h-8 animate-spin text-accent-lime" />
       </div>
     );
   }
@@ -94,7 +94,7 @@ export function LoginPage() {
                     onChange={(e) => setEmail(e.target.value)}
                     required
                     autoComplete="email"
-                    className="w-full rounded-lg border border-border bg-bg-tertiary px-3 py-2 text-sm text-text-primary placeholder-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/50 focus-visible:border-accent-blue"
+                    className="w-full rounded-lg border border-border bg-bg-tertiary px-3 py-2 text-sm text-text-primary placeholder-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-lime/50 focus-visible:border-accent-lime"
                     placeholder="you@example.com"
                   />
                 </div>
@@ -114,7 +114,7 @@ export function LoginPage() {
                     required
                     minLength={6}
                     autoComplete={isSignUp ? "new-password" : "current-password"}
-                    className="w-full rounded-lg border border-border bg-bg-tertiary px-3 py-2 text-sm text-text-primary placeholder-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/50 focus-visible:border-accent-blue"
+                    className="w-full rounded-lg border border-border bg-bg-tertiary px-3 py-2 text-sm text-text-primary placeholder-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-lime/50 focus-visible:border-accent-lime"
                     placeholder="At least 6 characters"
                   />
                 </div>
@@ -122,7 +122,7 @@ export function LoginPage() {
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="flex w-full items-center justify-center gap-2 rounded-lg bg-accent-blue py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-blue/90 disabled:opacity-50"
+                  className="flex w-full items-center justify-center gap-2 rounded-lg bg-accent-lime py-2.5 text-sm font-medium text-black transition-colors hover:bg-accent-lime/90 disabled:opacity-50"
                 >
                   {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
                   {isSignUp ? "Create account" : "Sign in"}
@@ -137,7 +137,7 @@ export function LoginPage() {
                   setError(null);
                   setSignUpSuccess(false);
                 }}
-                className="text-sm text-accent-blue hover:underline"
+                className="text-sm text-accent-lime hover:underline"
               >
                 {isSignUp
                   ? "Already have an account? Sign in"

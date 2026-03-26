@@ -175,6 +175,13 @@ export interface RiskParams {
   max_portfolio_risk_pct: number;
 }
 
+export interface ScoringWeights {
+  fundamental: number;
+  momentum: number;
+  sentiment: number;
+  quality: number;
+}
+
 export interface FmpScreenerConfig {
   enabled: boolean;
   is_crypto: boolean;
@@ -238,6 +245,18 @@ export interface FmpScreenerConfig {
   weight_quality: number | null;
 
   enrich_with_ratios: boolean;
+
+  // Signal-based post-filters
+  piotroski_min: number | null;
+  require_insider_buying: boolean;
+  rvol_min: number | null;
+  earnings_within_days: number | null;
+
+  // Composite scoring weights
+  scoring_weights: ScoringWeights;
+
+  // Sector concentration guard
+  max_per_sector: number | null;
 }
 
 export interface StrategyConfig {

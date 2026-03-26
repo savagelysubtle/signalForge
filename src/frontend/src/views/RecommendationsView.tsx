@@ -39,7 +39,7 @@ export function RecommendationsView() {
   if (isRunning || isLoading) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-text-secondary">
-        <Loader2 className="w-8 h-8 animate-spin mb-4 text-accent-blue" />
+        <Loader2 className="w-8 h-8 animate-spin mb-4 text-accent-lime" />
         <p>Loading analysis results...</p>
       </div>
     );

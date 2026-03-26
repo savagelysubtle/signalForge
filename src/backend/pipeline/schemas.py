@@ -209,14 +209,41 @@ class PipelineResult(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class ScoringWeights(BaseModel):
+    """Per-strategy weights for the FMP composite scoring engine.
+
+    Each weight is 0.0-1.0 and they should sum to 1.0 (enforced at
+    scoring time via normalisation). Strategies can bias the score
+    toward dimensions that matter most for their trading style.
+
+    Attributes:
+        fundamental: Weight for ROE, margins, Piotroski score.
+        momentum: Weight for price changes and relative volume.
+        sentiment: Weight for insider activity and analyst consensus.
+        quality: Weight for Altman Z-score, debt/equity, current ratio.
+    """
+
+    fundamental: float = 0.25
+    momentum: float = 0.25
+    sentiment: float = 0.25
+    quality: float = 0.25
+
+
 class FmpScreenerConfig(BaseModel):
     """Strategy-level FMP stock screener configuration.
 
     Defines API-level screener filters (sent directly to FMP),
+<<<<<<< HEAD
     ratio-based post-filters (applied client-side), quality/momentum
     gates, insider trading requirements, and multi-factor scoring
     weights. When ``enabled`` is ``False`` (or the field is ``None``
     on StrategyConfig), the FMP pre-screening stage is skipped entirely.
+=======
+    ratio-based post-filters, signal-based post-filters, and
+    composite scoring weights. When ``enabled`` is ``False`` (or the
+    field is ``None`` on StrategyConfig), the FMP pre-screening stage
+    is skipped entirely.
+>>>>>>> feature/carbon-lime-theme
 
     For crypto strategies, set ``is_crypto=True``. This routes to a
     different FMP workflow using ``/stable/batch-crypto-quotes`` with
@@ -290,6 +317,18 @@ class FmpScreenerConfig(BaseModel):
     weight_momentum: float | None = None
     weight_sentiment: float | None = None
     weight_quality: float | None = None
+
+    # Signal-based post-filters (applied after full enrichment, stocks only)
+    piotroski_min: int | None = None
+    require_insider_buying: bool = False
+    rvol_min: float | None = None
+    earnings_within_days: int | None = None
+
+    # Composite scoring weights (strategies can override defaults)
+    scoring_weights: ScoringWeights = Field(default_factory=ScoringWeights)
+
+    # Sector concentration guard — max stocks from any single sector
+    max_per_sector: int | None = None
 
     enrich_with_ratios: bool = True
 
