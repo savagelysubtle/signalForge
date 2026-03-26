@@ -55,7 +55,10 @@
       "Bash(while read:*)",
       "Bash(do echo:*)",
       "Bash(winget install:*)",
-      "Read(//c/Program Files/PowerShell/**)"
+      "Read(//c/Program Files/PowerShell/**)",
+      "Bash(rm -rf .venv)",
+      "Bash(uv venv:*)",
+      "Bash(uv sync:*)"
     ]
   }
 }
