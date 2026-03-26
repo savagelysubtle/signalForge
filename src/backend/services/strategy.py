@@ -190,6 +190,101 @@ async def create_strategy(config: StrategyConfig, user_id: str) -> StrategyConfi
     return config
 
 
+async def update_strategy(strategy_id: str, config: StrategyConfig, user_id: str) -> StrategyConfig:
+    """Update an existing strategy owned by the user.
+
+    Templates cannot be updated. The strategy must belong to the user.
+
+    Args:
+        strategy_id: UUID of the strategy to update.
+        config: Updated strategy configuration.
+        user_id: Owner user UUID.
+
+    Returns:
+        The updated strategy configuration.
+
+    Raises:
+        ValueError: If the strategy doesn't exist, isn't owned by user, or is a template.
+    """
+    safe_id = _validate_user_id(user_id)
+    client = await get_db()
+
+    existing_resp = await (
+        client.table("strategies")
+        .select("id, user_id, is_template")
+        .eq("id", strategy_id)
+        .maybe_single()
+        .execute()
+    )
+    row_data = existing_resp.data if existing_resp else None
+    if not row_data or not isinstance(row_data, dict):
+        raise ValueError(f"Strategy '{strategy_id}' not found")
+    if row_data.get("is_template"):
+        raise ValueError("Cannot update a template strategy")
+    if row_data.get("user_id") not in (safe_id, "system"):
+        raise ValueError("Strategy does not belong to this user")
+
+    payload = {
+        "name": config.name,
+        "description": config.description,
+        "fmp_screener": (
+            json.dumps(config.fmp_screener.model_dump()) if config.fmp_screener else None
+        ),
+        "screening_prompt": config.screening_prompt,
+        "constraint_style": config.constraint_style,
+        "max_tickers": config.max_tickers,
+        "chart_indicators": json.dumps(config.chart_indicators),
+        "chart_timeframe": config.chart_timeframe,
+        "secondary_timeframe": config.secondary_timeframe,
+        "additional_timeframes": json.dumps(config.additional_timeframes),
+        "short_timeframes": json.dumps(config.short_timeframes),
+        "short_tf_indicators": json.dumps(config.short_tf_indicators),
+        "ta_focus": config.ta_focus,
+        "news_recency": config.news_recency,
+        "news_scope": config.news_scope,
+        "trading_style": config.trading_style,
+        "risk_params": json.dumps(config.risk_params.model_dump()),
+        "enable_debate": config.enable_debate,
+    }
+    await client.table("strategies").update(payload).eq("id", strategy_id).execute()
+    config.id = strategy_id
+    return config
+
+
+async def delete_strategy(strategy_id: str, user_id: str) -> None:
+    """Delete a strategy owned by the user.
+
+    Templates cannot be deleted.
+
+    Args:
+        strategy_id: UUID of the strategy to delete.
+        user_id: Owner user UUID.
+
+    Raises:
+        ValueError: If the strategy doesn't exist, isn't owned by user, or is a template.
+    """
+    safe_id = _validate_user_id(user_id)
+    client = await get_db()
+
+    existing_resp = await (
+        client.table("strategies")
+        .select("id, user_id, is_template")
+        .eq("id", strategy_id)
+        .maybe_single()
+        .execute()
+    )
+    row_data = existing_resp.data if existing_resp else None
+    if not row_data or not isinstance(row_data, dict):
+        raise ValueError(f"Strategy '{strategy_id}' not found")
+    if row_data.get("is_template"):
+        raise ValueError("Cannot delete a template strategy")
+    if row_data.get("user_id") not in (safe_id, "system"):
+        raise ValueError("Strategy does not belong to this user")
+
+    await client.table("strategies").delete().eq("id", strategy_id).execute()
+    logger.info("Deleted strategy %s for user %s", strategy_id, safe_id)
+
+
 async def ensure_defaults() -> None:
     """Load strategy templates if the strategies table is empty."""
     client = await get_db()

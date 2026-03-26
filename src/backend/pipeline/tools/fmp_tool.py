@@ -88,6 +88,36 @@ FMP_TOOL_DEFINITION: dict[str, Any] = {
                 "type": "integer",
                 "description": "Maximum number of results to return (default 50)",
             },
+            "pe_max": {
+                "type": "number",
+                "description": "Maximum P/E ratio filter. Stocks only.",
+            },
+            "roe_min": {
+                "type": "number",
+                "description": "Minimum return on equity (%). Stocks only.",
+            },
+            "debt_equity_max": {
+                "type": "number",
+                "description": "Maximum debt-to-equity ratio. Stocks only.",
+            },
+            "piotroski_min": {
+                "type": "integer",
+                "description": "Minimum Piotroski financial quality score (0-9). Stocks only.",
+            },
+            "require_insider_buying": {
+                "type": "boolean",
+                "description": "Only include stocks with net insider buying. Stocks only.",
+            },
+            "rvol_min": {
+                "type": "number",
+                "description": "Minimum relative volume (volume/avgVolume). Stocks only.",
+            },
+            "earnings_within_days": {
+                "type": "integer",
+                "description": (
+                    "Only include stocks reporting earnings within this many days. Stocks only."
+                ),
+            },
         },
     },
 }
@@ -110,6 +140,18 @@ async def execute_fmp_tool(arguments: dict[str, Any]) -> str:
     """
     try:
         is_crypto = arguments.get("is_crypto", False)
+        needs_enrichment = any(
+            arguments.get(k) is not None
+            for k in (
+                "pe_max",
+                "roe_min",
+                "debt_equity_max",
+                "piotroski_min",
+                "require_insider_buying",
+                "rvol_min",
+                "earnings_within_days",
+            )
+        )
         results = await screen_stocks_from_params(
             is_crypto=is_crypto,
             country=arguments.get("country"),
@@ -124,6 +166,14 @@ async def execute_fmp_tool(arguments: dict[str, Any]) -> str:
             beta_min=arguments.get("beta_min"),
             beta_max=arguments.get("beta_max"),
             limit=arguments.get("limit", 50),
+            pe_max=arguments.get("pe_max"),
+            roe_min=arguments.get("roe_min"),
+            debt_equity_max=arguments.get("debt_equity_max"),
+            piotroski_min=arguments.get("piotroski_min"),
+            require_insider_buying=arguments.get("require_insider_buying", False),
+            rvol_min=arguments.get("rvol_min"),
+            earnings_within_days=arguments.get("earnings_within_days"),
+            enrich_with_ratios=needs_enrichment,
         )
         asset_type = "crypto" if is_crypto else "stocks"
         logger.info("FMP tool call returned %d %s", len(results), asset_type)

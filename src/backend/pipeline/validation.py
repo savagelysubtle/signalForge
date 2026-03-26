@@ -124,7 +124,9 @@ def with_validation_retry(  # noqa: UP047
 
                 try:
                     raw_text = await fn(*args, **kwargs)
-                    return validate_llm_json(raw_text, schema)
+                    validated = validate_llm_json(raw_text, schema)
+                    validated.__dict__["_retry_count"] = attempt
+                    return validated
                 except (ValueError, json.JSONDecodeError) as exc:
                     last_error = f"JSON parse error: {exc}"
                 except ValidationError as exc:

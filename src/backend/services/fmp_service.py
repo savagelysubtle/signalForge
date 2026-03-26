@@ -1568,6 +1568,14 @@ async def screen_stocks_from_params(
     beta_min: float | None = None,
     beta_max: float | None = None,
     limit: int = 50,
+    pe_max: float | None = None,
+    roe_min: float | None = None,
+    debt_equity_max: float | None = None,
+    piotroski_min: int | None = None,
+    require_insider_buying: bool = False,
+    rvol_min: float | None = None,
+    earnings_within_days: int | None = None,
+    enrich_with_ratios: bool = False,
 ) -> list[dict[str, Any]]:
     """Screen stocks or crypto from raw parameters (used by Perplexity tool calls).
 
@@ -1609,10 +1617,20 @@ async def screen_stocks_from_params(
         beta_min=beta_min,
         beta_max=beta_max,
         limit=limit,
-        enrich_with_ratios=False,
+        pe_max=pe_max,
+        roe_min=roe_min,
+        debt_equity_max=debt_equity_max,
+        piotroski_min=piotroski_min,
+        require_insider_buying=require_insider_buying,
+        rvol_min=rvol_min,
+        earnings_within_days=earnings_within_days,
+        enrich_with_ratios=enrich_with_ratios,
     )
     if is_crypto:
         results = await screen_crypto(config)
+        return [r.model_dump() for r in results]
+    if enrich_with_ratios:
+        results = await screen_and_enrich(config)
         return [r.model_dump() for r in results]
     stock_results = await screen_stocks(config)
     return [r.model_dump() for r in stock_results]

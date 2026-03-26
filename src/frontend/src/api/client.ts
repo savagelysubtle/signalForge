@@ -30,6 +30,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
       .catch(() => ({ detail: response.statusText }));
     throw new Error(error.detail || response.statusText);
   }
+  if (response.status === 204) return undefined as T;
   return response.json();
 }
 
@@ -54,6 +55,19 @@ export const api = {
   // Strategies
   listStrategies: () => request<StrategyConfig[]>("/api/strategies"),
   listTemplates: () => request<StrategyConfig[]>("/api/strategies/templates"),
+  getStrategy: (id: string) => request<StrategyConfig>(`/api/strategies/${id}`),
+  createStrategy: (config: StrategyConfig) =>
+    request<StrategyConfig>("/api/strategies", {
+      method: "POST",
+      body: JSON.stringify(config),
+    }),
+  updateStrategy: (id: string, config: StrategyConfig) =>
+    request<StrategyConfig>(`/api/strategies/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(config),
+    }),
+  deleteStrategy: (id: string) =>
+    request<void>(`/api/strategies/${id}`, { method: "DELETE" }),
 
   // Charts
   fetchChart: (body: { ticker: string; timeframe: string; indicators?: string[] }) =>

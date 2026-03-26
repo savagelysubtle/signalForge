@@ -10,7 +10,7 @@ from __future__ import annotations
 from pipeline.schemas import StrategyConfig
 from utils.hashing import prompt_hash
 
-PROMPT_VERSION = "v2"
+PROMPT_VERSION = "v3"
 
 SENTIMENT_SYSTEM_PROMPT = """\
 You are a financial news analyst specializing in sentiment analysis.
@@ -86,6 +86,7 @@ def build_sentiment_prompt(
     ticker: str,
     config: StrategyConfig,
     news_urls: list[str] | None = None,
+    fmp_context: str | None = None,
 ) -> str:
     """Build the user prompt for per-ticker sentiment analysis.
 
@@ -93,6 +94,7 @@ def build_sentiment_prompt(
         ticker: Stock/crypto ticker symbol (e.g. "AAPL", "BTC").
         config: The active strategy configuration.
         news_urls: Pre-researched article URLs from Perplexity to analyze.
+        fmp_context: Pre-formatted FMP company context string, or None.
 
     Returns:
         The formatted user prompt string.
@@ -105,6 +107,16 @@ def build_sentiment_prompt(
         f"Time window: Search for news from {recency}.",
         f"Scope: {scope}\n",
     ]
+
+    if fmp_context:
+        parts.append(
+            "--- COMPANY CONTEXT (verified FMP data) ---\n"
+            f"{fmp_context}\n"
+            "Use this context to assess the significance of news events. For example,\n"
+            "a company with upcoming earnings deserves extra weight on earnings-related\n"
+            "news, and insider buying patterns can confirm or contradict news sentiment.\n"
+            "--- END COMPANY CONTEXT ---\n"
+        )
 
     if news_urls:
         parts.append("Pre-researched article URLs to analyze (read each one):")

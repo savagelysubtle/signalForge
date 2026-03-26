@@ -45,6 +45,15 @@ from services.strategy import get_strategy
 
 logger = logging.getLogger(__name__)
 
+STAGE_TIMEOUTS: dict[str, float] = {
+    "fmp": 90.0,
+    "perplexity": 180.0,
+    "gemini": 120.0,
+    "claude": 180.0,
+    "gpt": 180.0,
+    "annotate": 60.0,
+}
+
 
 async def run_pipeline(
     *,
@@ -102,6 +111,7 @@ async def run_pipeline(
                 "strategy_id": strategy_id,
                 "mode": mode,
                 "manual_tickers": json.dumps(manual_tickers or []),
+                "user_prompt": user_prompt,
                 "status": "running",
                 "started_at": result.timestamp.isoformat(),
             }
@@ -122,11 +132,19 @@ async def run_pipeline(
         fmp_key = get_api_key("fmp")
         if fmp_key:
             try:
-                fmp_candidates = await screen_and_enrich(config.fmp_screener)
+                fmp_candidates = await asyncio.wait_for(
+                    screen_and_enrich(config.fmp_screener),
+                    timeout=STAGE_TIMEOUTS["fmp"],
+                )
                 logger.info(
                     "FMP pre-screened %d candidates for strategy '%s'",
                     len(fmp_candidates),
                     config.name,
+                )
+            except TimeoutError:
+                logger.error("FMP stage timed out after %ss", STAGE_TIMEOUTS["fmp"])
+                result.stage_errors.append(
+                    {"stage": "fmp", "error": "Stage timed out", "type": "TimeoutError"}
                 )
             except Exception as exc:
                 logger.warning("FMP screening failed, continuing without: %s", exc)
@@ -140,33 +158,51 @@ async def run_pipeline(
         else:
             logger.info("FMP_API_KEY not set, skipping FMP pre-screening")
 
+    fmp_map: dict[str, FmpEnrichedStock] = {}
+    if fmp_candidates:
+        fmp_map = {s.symbol: s for s in fmp_candidates}
+
     # Stage 1: Perplexity (screening/research)
     screening = None
     stage_metadata: dict = {}
 
     try:
-        if mode == "prompt":
-            screening, stage_metadata = await run_prompted_discovery(
-                user_prompt or "", config, fmp_candidates=fmp_candidates
-            )
-        elif mode == "discovery" and config:
-            screening, stage_metadata = await run_discovery(config, fmp_candidates=fmp_candidates)
-        elif mode == "discovery" and not config:
-            default_prompt = "trending Canadian TSX stocks and top TSX market movers today"
-            screening, stage_metadata = await run_prompted_discovery(default_prompt, None)
-        elif mode == "analysis":
-            screening, stage_metadata = await run_analysis(manual_tickers or [], config)
-        elif mode == "combined" and config:
-            discovery_result, _disc_meta = await run_discovery(
-                config, fmp_candidates=fmp_candidates
-            )
-            all_tickers = list(manual_tickers or [])
-            if discovery_result:
-                all_tickers.extend(t.ticker for t in discovery_result.tickers)
-            all_tickers = list(dict.fromkeys(all_tickers))
-            screening, stage_metadata = await run_analysis(all_tickers, config)
-            if not screening and discovery_result:
-                screening = discovery_result
+
+        async def _run_perplexity_stage() -> tuple:
+            if mode == "prompt":
+                return await run_prompted_discovery(
+                    user_prompt or "", config, fmp_candidates=fmp_candidates
+                )
+            if mode == "discovery" and config:
+                return await run_discovery(config, fmp_candidates=fmp_candidates)
+            if mode == "discovery" and not config:
+                default_prompt = "trending Canadian TSX stocks and top TSX market movers today"
+                return await run_prompted_discovery(default_prompt, None)
+            if mode == "analysis":
+                return await run_analysis(manual_tickers or [], config)
+            if mode == "combined" and config:
+                discovery_result, _disc_meta = await run_discovery(
+                    config, fmp_candidates=fmp_candidates
+                )
+                all_tickers = list(manual_tickers or [])
+                if discovery_result:
+                    all_tickers.extend(t.ticker for t in discovery_result.tickers)
+                all_tickers = list(dict.fromkeys(all_tickers))
+                _screening, _meta = await run_analysis(all_tickers, config)
+                if not _screening and discovery_result:
+                    _screening = discovery_result
+                return _screening, _meta
+            return None, {}
+
+        screening, stage_metadata = await asyncio.wait_for(
+            _run_perplexity_stage(),
+            timeout=STAGE_TIMEOUTS["perplexity"],
+        )
+    except TimeoutError:
+        result.stage_errors.append(
+            {"stage": "perplexity", "error": "Stage timed out", "type": "TimeoutError"}
+        )
+        logger.error("Perplexity stage timed out after %ss", STAGE_TIMEOUTS["perplexity"])
     except Exception as exc:
         result.stage_errors.append(
             {
@@ -208,12 +244,23 @@ async def run_pipeline(
                 ticker_news[t.ticker] = screening.citations[:3]
 
         try:
-            sentiments, gemini_metadata_list = await run_sentiment(
-                ticker_symbols, effective_config, ticker_news=ticker_news or None
+            sentiments, gemini_metadata_list = await asyncio.wait_for(
+                run_sentiment(
+                    ticker_symbols,
+                    effective_config,
+                    ticker_news=ticker_news or None,
+                    fmp_context=fmp_map or None,
+                ),
+                timeout=STAGE_TIMEOUTS["gemini"],
             )
             result.sentiment_analyses = sentiments
             for gm in gemini_metadata_list:
                 await _save_stage_output(run_id, gm)
+        except TimeoutError:
+            result.stage_errors.append(
+                {"stage": "gemini", "error": "Stage timed out", "type": "TimeoutError"}
+            )
+            logger.error("Gemini stage timed out after %ss", STAGE_TIMEOUTS["gemini"])
         except Exception as exc:
             result.stage_errors.append(
                 {
@@ -228,12 +275,16 @@ async def run_pipeline(
     if screening and screening.tickers:
         ticker_symbols = [t.ticker for t in screening.tickers]
         try:
-            charts, claude_metadata_list = await run_chart_analysis(
-                ticker_symbols,
-                effective_config,
-                result.sentiment_analyses,
-                run_id,
-                user_id,
+            charts, claude_metadata_list = await asyncio.wait_for(
+                run_chart_analysis(
+                    ticker_symbols,
+                    effective_config,
+                    result.sentiment_analyses,
+                    run_id,
+                    user_id,
+                    fmp_context=fmp_map or None,
+                ),
+                timeout=STAGE_TIMEOUTS["claude"],
             )
             result.chart_analyses = charts
             for cm in claude_metadata_list:
@@ -246,6 +297,11 @@ async def run_pipeline(
                             error=cm.get("error", ""),
                         )
                     )
+        except TimeoutError:
+            result.stage_errors.append(
+                {"stage": "claude", "error": "Stage timed out", "type": "TimeoutError"}
+            )
+            logger.error("Claude stage timed out after %ss", STAGE_TIMEOUTS["claude"])
         except Exception as exc:
             result.stage_errors.append(
                 {
@@ -266,19 +322,28 @@ async def run_pipeline(
     if ticker_symbols:
         try:
             reflection_context = await load_reflection_context()
-            recommendations, gpt_metadata_list = await run_debate(
-                ticker_symbols,
-                screening,
-                result.chart_analyses,
-                result.sentiment_analyses,
-                effective_config,
-                reflection_context,
-                run_id,
+            recommendations, gpt_metadata_list = await asyncio.wait_for(
+                run_debate(
+                    ticker_symbols,
+                    screening,
+                    result.chart_analyses,
+                    result.sentiment_analyses,
+                    effective_config,
+                    reflection_context,
+                    run_id,
+                    fmp_context=fmp_map or None,
+                ),
+                timeout=STAGE_TIMEOUTS["gpt"],
             )
             result.recommendations = recommendations
             for gm in gpt_metadata_list:
                 await _save_stage_output(run_id, gm)
             await _save_recommendations(run_id, recommendations, user_id)
+        except TimeoutError:
+            result.stage_errors.append(
+                {"stage": "gpt", "error": "Stage timed out", "type": "TimeoutError"}
+            )
+            logger.error("GPT stage timed out after %ss", STAGE_TIMEOUTS["gpt"])
         except Exception as exc:
             result.stage_errors.append(
                 {
@@ -317,11 +382,25 @@ async def run_pipeline(
                     ca.timeframe,
                     exc,
                 )
+                result.stage_errors.append(
+                    {
+                        "stage": "annotate",
+                        "error": str(exc),
+                        "type": type(exc).__name__,
+                        "ticker": ca.ticker,
+                    }
+                )
 
-        await asyncio.gather(
-            *(_annotate(i) for i in range(len(result.chart_analyses))),
-            return_exceptions=True,
-        )
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(
+                    *(_annotate(i) for i in range(len(result.chart_analyses))),
+                    return_exceptions=True,
+                ),
+                timeout=STAGE_TIMEOUTS["annotate"],
+            )
+        except TimeoutError:
+            logger.error("Annotate stage timed out after %ss", STAGE_TIMEOUTS["annotate"])
         logger.info("Stage 4.5 annotated charts complete")
 
         # Persist annotated_chart_path back into stage_outputs so it survives reload
@@ -376,7 +455,7 @@ async def _save_stage_output(run_id: str, metadata: dict) -> None:
         "model_used": metadata.get("model", ""),
         "duration_ms": metadata.get("duration_ms", 0),
         "status": metadata.get("status", "unknown"),
-        "retry_count": 0,
+        "retry_count": metadata.get("retry_count", 0),
         "created_at": datetime.now(tz=UTC).isoformat(),
     }
     if metadata.get("error"):
