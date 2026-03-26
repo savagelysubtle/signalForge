@@ -20,6 +20,7 @@ PROVIDERS: dict[str, str] = {
     "google": "GOOGLE_API_KEY",
     "openai": "OPENAI_API_KEY",
     "chartimg": "CHARTIMG_API_KEY",
+    "fmp": "FMP_API_KEY",
 }
 
 

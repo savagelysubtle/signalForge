@@ -47,6 +47,10 @@ class ScreeningResult(BaseModel):
     screening_summary: str
     citations: list[str] = Field(default_factory=list)
     timestamp: datetime = Field(default_factory=datetime.now)
+    fmp_pre_screened: list[str] = Field(
+        default_factory=list,
+        description="Ticker symbols that came from FMP pre-screening (empty if FMP was skipped).",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +205,47 @@ class PipelineResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# FMP Screener Config
+# ---------------------------------------------------------------------------
+
+
+class FmpScreenerConfig(BaseModel):
+    """Strategy-level FMP stock screener configuration.
+
+    Defines both the API-level screener filters (sent directly to FMP)
+    and ratio-based post-filters (applied client-side after fetching
+    ratios-ttm). When ``enabled`` is ``False`` (or the field is ``None``
+    on StrategyConfig), the FMP pre-screening stage is skipped entirely.
+    """
+
+    enabled: bool = False
+
+    # API-level screener filters
+    country: str | None = None
+    exchange: str | None = None
+    sector: str | None = None
+    industry: str | None = None
+    market_cap_min: int | None = None
+    market_cap_max: int | None = None
+    price_min: float | None = None
+    price_max: float | None = None
+    volume_min: int | None = None
+    beta_min: float | None = None
+    beta_max: float | None = None
+    is_actively_trading: bool = True
+    is_etf: bool = False
+    limit: int = 50
+
+    # Ratio-based post-filters (applied after ratios-ttm fetch)
+    pe_max: float | None = None
+    pe_min: float | None = None
+    roe_min: float | None = None
+    debt_equity_max: float | None = None
+
+    enrich_with_ratios: bool = True
+
+
+# ---------------------------------------------------------------------------
 # Strategy Config
 # ---------------------------------------------------------------------------
 
@@ -219,6 +264,9 @@ class StrategyConfig(BaseModel):
     id: str
     name: str
     description: str = ""
+
+    # FMP Pre-Screening (None = skip FMP)
+    fmp_screener: FmpScreenerConfig | None = None
 
     # Perplexity Stage
     screening_prompt: str

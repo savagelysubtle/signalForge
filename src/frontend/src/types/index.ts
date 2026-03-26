@@ -28,6 +28,7 @@ export interface ScreeningResult {
   tickers: FundamentalData[];
   screening_summary: string;
   timestamp: string; // ISO 8601
+  fmp_pre_screened: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -173,10 +174,34 @@ export interface RiskParams {
   max_portfolio_risk_pct: number;
 }
 
+export interface FmpScreenerConfig {
+  enabled: boolean;
+  country: string | null;
+  exchange: string | null;
+  sector: string | null;
+  industry: string | null;
+  market_cap_min: number | null;
+  market_cap_max: number | null;
+  price_min: number | null;
+  price_max: number | null;
+  volume_min: number | null;
+  beta_min: number | null;
+  beta_max: number | null;
+  is_actively_trading: boolean;
+  is_etf: boolean;
+  limit: number;
+  pe_max: number | null;
+  pe_min: number | null;
+  roe_min: number | null;
+  debt_equity_max: number | null;
+  enrich_with_ratios: boolean;
+}
+
 export interface StrategyConfig {
   id: string;
   name: string;
   description: string;
+  fmp_screener: FmpScreenerConfig | null;
   screening_prompt: string;
   constraint_style: "tight" | "loose";
   max_tickers: number;

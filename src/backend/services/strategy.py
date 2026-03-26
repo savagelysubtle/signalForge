@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from database.connection import get_db
-from pipeline.schemas import RiskParams, StrategyConfig
+from pipeline.schemas import FmpScreenerConfig, RiskParams, StrategyConfig
 
 logger = logging.getLogger(__name__)
 
@@ -81,10 +81,19 @@ def _row_to_config(row: dict[str, Any]) -> StrategyConfig:
     else:
         short_tf_ind = ["VWAP", "Stochastic", "EMA_20", "ATR", "Volume"]
 
+    fmp_raw = row.get("fmp_screener")
+    fmp_screener: FmpScreenerConfig | None = None
+    if fmp_raw:
+        if isinstance(fmp_raw, str):
+            fmp_raw = json.loads(fmp_raw)
+        if isinstance(fmp_raw, dict):
+            fmp_screener = FmpScreenerConfig(**fmp_raw)
+
     return StrategyConfig(
         id=row["id"],
         name=row["name"],
         description=row.get("description") or "",
+        fmp_screener=fmp_screener,
         screening_prompt=row["screening_prompt"],
         constraint_style=row["constraint_style"],
         max_tickers=row["max_tickers"],
@@ -156,6 +165,9 @@ async def create_strategy(config: StrategyConfig, user_id: str) -> StrategyConfi
         "user_id": user_id,
         "name": config.name,
         "description": config.description,
+        "fmp_screener": (
+            json.dumps(config.fmp_screener.model_dump()) if config.fmp_screener else None
+        ),
         "screening_prompt": config.screening_prompt,
         "constraint_style": config.constraint_style,
         "max_tickers": config.max_tickers,
@@ -192,7 +204,9 @@ async def ensure_defaults() -> None:
             tmpl.setdefault("id", uuid.uuid4().hex)
             tmpl.setdefault("is_template", True)
             risk = tmpl.pop("risk_params", {})
-            config = StrategyConfig(**tmpl, risk_params=RiskParams(**risk))
+            fmp_raw = tmpl.pop("fmp_screener", None)
+            fmp = FmpScreenerConfig(**fmp_raw) if isinstance(fmp_raw, dict) else None
+            config = StrategyConfig(**tmpl, risk_params=RiskParams(**risk), fmp_screener=fmp)
             await create_strategy(config, user_id="system")
     else:
         logger.info("No templates file found — inserting default screener strategy")

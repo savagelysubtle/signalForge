@@ -16,7 +16,17 @@
     "trading_style": "Day to swing trader, 2-5 day holds",
     "risk_params": {"max_position_pct": 5.0, "min_risk_reward": 2.0, "max_portfolio_risk_pct": 15.0},
     "enable_debate": true,
-    "is_template": true
+    "is_template": true,
+    "fmp_screener": {
+      "enabled": true,
+      "country": "CA",
+      "volume_min": 200000,
+      "price_min": 5.0,
+      "market_cap_min": 500000000,
+      "is_actively_trading": true,
+      "limit": 50,
+      "enrich_with_ratios": true
+    }
   },
   {
     "name": "Value Accumulation",
@@ -35,7 +45,17 @@
     "trading_style": "Position trader, 2-8 week holds",
     "risk_params": {"max_position_pct": 8.0, "min_risk_reward": 1.5, "max_portfolio_risk_pct": 20.0},
     "enable_debate": true,
-    "is_template": true
+    "is_template": true,
+    "fmp_screener": {
+      "enabled": true,
+      "country": "CA",
+      "market_cap_min": 200000000,
+      "price_min": 2.0,
+      "is_actively_trading": true,
+      "limit": 80,
+      "pe_max": 20.0,
+      "enrich_with_ratios": true
+    }
   },
   {
     "name": "Mean Reversion",
@@ -54,7 +74,16 @@
     "trading_style": "Swing trader, 3-7 day holds",
     "risk_params": {"max_position_pct": 4.0, "min_risk_reward": 2.5, "max_portfolio_risk_pct": 12.0},
     "enable_debate": true,
-    "is_template": true
+    "is_template": true,
+    "fmp_screener": {
+      "enabled": true,
+      "country": "CA",
+      "market_cap_min": 300000000,
+      "price_min": 5.0,
+      "is_actively_trading": true,
+      "limit": 60,
+      "enrich_with_ratios": true
+    }
   },
   {
     "name": "Earnings Play",
@@ -73,7 +102,16 @@
     "trading_style": "Event-driven, 1-5 day holds around earnings",
     "risk_params": {"max_position_pct": 3.0, "min_risk_reward": 2.0, "max_portfolio_risk_pct": 10.0},
     "enable_debate": true,
-    "is_template": true
+    "is_template": true,
+    "fmp_screener": {
+      "enabled": true,
+      "country": "CA",
+      "market_cap_min": 500000000,
+      "volume_min": 100000,
+      "is_actively_trading": true,
+      "limit": 50,
+      "enrich_with_ratios": true
+    }
   },
   {
     "name": "Crypto Swing",
@@ -92,7 +130,8 @@
     "trading_style": "Crypto swing trader, 3-14 day holds",
     "risk_params": {"max_position_pct": 3.0, "min_risk_reward": 2.5, "max_portfolio_risk_pct": 10.0},
     "enable_debate": true,
-    "is_template": true
+    "is_template": true,
+    "fmp_screener": null
   },
   {
     "name": "Crypto Intraday Scalp",
@@ -112,7 +151,8 @@
     "trading_style": "Crypto intraday scalper, 15 min to 2 hour holds",
     "risk_params": {"max_position_pct": 2.0, "min_risk_reward": 2.0, "max_portfolio_risk_pct": 8.0},
     "enable_debate": false,
-    "is_template": true
+    "is_template": true,
+    "fmp_screener": null
   },
   {
     "name": "Intraday Scalp",
@@ -132,6 +172,16 @@
     "trading_style": "Intraday scalper, 15 min to 2 hour holds",
     "risk_params": {"max_position_pct": 3.0, "min_risk_reward": 2.0, "max_portfolio_risk_pct": 8.0},
     "enable_debate": false,
-    "is_template": true
+    "is_template": true,
+    "fmp_screener": {
+      "enabled": true,
+      "country": "CA",
+      "volume_min": 500000,
+      "price_min": 5.0,
+      "market_cap_min": 1000000000,
+      "is_actively_trading": true,
+      "limit": 40,
+      "enrich_with_ratios": false
+    }
   }
 ]

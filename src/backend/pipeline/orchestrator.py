@@ -1,8 +1,9 @@
 """Pipeline execution engine.
 
-Runs the full 4-stage analysis pipeline sequentially:
-Perplexity (screening) → Gemini (news sentiment) →
-Claude (charts with news context) → GPT (bull/bear/judge debate).
+Runs the full pipeline sequentially:
+FMP pre-screening (optional) → Perplexity (screening/research) →
+Gemini (news sentiment) → Claude (charts with news context) →
+GPT (bull/bear/judge debate).
 Gemini runs before Claude so that chart analysis is informed by
 recent news catalysts.
 """
@@ -37,6 +38,8 @@ from pipeline.stages.gemini import run_sentiment
 from pipeline.stages.gpt import run_debate
 from pipeline.stages.perplexity import run_analysis, run_discovery, run_prompted_discovery
 from services.chart_image import fetch_annotated_chart
+from services.fmp_service import FmpEnrichedStock, screen_and_enrich
+from services.keyring_service import get_api_key
 from services.reflection import load_reflection_context
 from services.strategy import get_strategy
 
@@ -106,21 +109,57 @@ async def run_pipeline(
         .execute()
     )
 
+    # Stage 0: FMP Pre-Screening (if strategy has fmp_screener config)
+    fmp_candidates: list[FmpEnrichedStock] | None = None
+    fmp_enabled = (
+        config is not None
+        and config.fmp_screener is not None
+        and config.fmp_screener.enabled
+        and mode != "analysis"
+    )
+
+    if fmp_enabled and config and config.fmp_screener:
+        fmp_key = get_api_key("fmp")
+        if fmp_key:
+            try:
+                fmp_candidates = await screen_and_enrich(config.fmp_screener)
+                logger.info(
+                    "FMP pre-screened %d candidates for strategy '%s'",
+                    len(fmp_candidates),
+                    config.name,
+                )
+            except Exception as exc:
+                logger.warning("FMP screening failed, continuing without: %s", exc)
+                result.stage_errors.append(
+                    {
+                        "stage": "fmp",
+                        "error": str(exc),
+                        "type": type(exc).__name__,
+                    }
+                )
+        else:
+            logger.info("FMP_API_KEY not set, skipping FMP pre-screening")
+
+    # Stage 1: Perplexity (screening/research)
     screening = None
     stage_metadata: dict = {}
 
     try:
         if mode == "prompt":
-            screening, stage_metadata = await run_prompted_discovery(user_prompt or "", config)
+            screening, stage_metadata = await run_prompted_discovery(
+                user_prompt or "", config, fmp_candidates=fmp_candidates
+            )
         elif mode == "discovery" and config:
-            screening, stage_metadata = await run_discovery(config)
+            screening, stage_metadata = await run_discovery(config, fmp_candidates=fmp_candidates)
         elif mode == "discovery" and not config:
             default_prompt = "trending Canadian TSX stocks and top TSX market movers today"
             screening, stage_metadata = await run_prompted_discovery(default_prompt, None)
         elif mode == "analysis":
             screening, stage_metadata = await run_analysis(manual_tickers or [], config)
         elif mode == "combined" and config:
-            discovery_result, _disc_meta = await run_discovery(config)
+            discovery_result, _disc_meta = await run_discovery(
+                config, fmp_candidates=fmp_candidates
+            )
             all_tickers = list(manual_tickers or [])
             if discovery_result:
                 all_tickers.extend(t.ticker for t in discovery_result.tickers)

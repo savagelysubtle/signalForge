@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 from pipeline.schemas import StrategyConfig
 from utils.hashing import prompt_hash
 
-PROMPT_VERSION = "v11"
+PROMPT_VERSION = "v12"
 
 
 def _get_session_context() -> str:
@@ -45,12 +45,21 @@ securities. You may include US or international tickers only when
 the screening criteria specifically call for them or when there are no
 suitable Canadian matches.
 
-CRITICAL — YOU HAVE LIVE WEB SEARCH:
-You are a Sonar model with real-time web search built in. You MUST use your
-search capabilities to find current market data. Do NOT claim you cannot
-access real-time data — your search function retrieves live information.
-Do NOT reference a knowledge cutoff — your search results ARE your data.
-If search results are sparse, return the best matches you found.
+CRITICAL — YOU HAVE LIVE WEB SEARCH AND TOOLS:
+You have real-time web search built in. You MUST use your search capabilities
+to find current market data. Do NOT claim you cannot access real-time data —
+your search function retrieves live information. Do NOT reference a knowledge
+cutoff — your search results ARE your data. If search results are sparse,
+return the best matches you found.
+
+If pre-screened candidates from FMP financial data are provided below, use
+them as your starting universe — analyze and rank them against the strategy
+criteria. You may also have access to a screen_stocks tool that calls the
+FMP API. Use it if the pre-screened candidates are a poor fit for the
+strategy and you need to search with different parameters (e.g. different
+sector, market cap range, or exchange). Prefer web search for qualitative
+analysis (news, analyst opinions) and the screen_stocks tool for
+quantitative filtering (market cap, volume, price ranges).
 
 You must return ONLY valid JSON — no commentary outside the JSON structure.
 
