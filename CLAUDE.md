@@ -32,82 +32,9 @@ The core loop: User triggers analysis → FMP pre-screens (optional) → Perplex
 
 5. **Context hygiene.** The main agent should summarize subagent results for the user rather than dumping raw output. Keep the main thread readable.
 
-6. **Use Plan mode for anything beyond trivial changes.** If a task touches more than one file, involves architectural decisions, or has multiple valid approaches, switch to Plan mode first. Design the approach collaboratively before writing code. Only skip planning for single-file, obvious fixes. **Write every plan to a `.plan.md` file in `.cursor/plans/`** using the format described below.
+6. **Plan before building for non-trivial changes.** If a task touches more than one file, involves architectural decisions, or has multiple valid approaches, discuss the approach with the user before writing code. Only skip planning for single-file, obvious fixes.
 
-7. **Ask questions — more than you think you should.** Before implementing, clarify requirements, edge cases, and preferences with the user. Do not assume intent. Ask about scope, expected behavior, error handling, naming preferences, and trade-offs. Better to ask one extra question than to build the wrong thing and rework it.
-
----
-
-## Plan File Format
-
-All non-trivial plans MUST be persisted as `.plan.md` files in `.cursor/plans/`. This keeps plans discoverable, trackable, and resumable across sessions.
-
-**Filename:** `<short-snake-case-description>_<8-char-hex>.plan.md`
-(e.g., `fix_chart_ticker_mismatch_49e0ca2c.plan.md`)
-
-**Structure:**
-
-```markdown
----
-name: Human-readable plan title
-overview:
-  2-3 sentence summary of the problem and the chosen approach.
-  Should be enough context for someone unfamiliar to understand the plan.
-todos:
-  - id: step-1-short-id
-    content: Description of what this step does
-    status: pending
-  - id: step-2-short-id
-    content: Description of what this step does
-    status: pending
-  - id: step-3-short-id
-    content: Description of what this step does
-    status: pending
-isProject: false
----
-
-# Plan Title
-
-## Problem
-
-What is broken, missing, or being improved? Include concrete symptoms or user impact.
-
-## Solution
-
-High-level approach. Why this approach over alternatives?
-Include diagrams (mermaid) if the data flow or architecture is non-obvious.
-
-## Implementation Steps
-
-### Step 1: <step-1-short-id>
-
-What to change, which files, and how. Include code snippets showing the intended diff
-when helpful. Reference files with markdown links:
-`[path/to/file.py](path/to/file.py)`
-
-### Step 2: <step-2-short-id>
-
-(repeat for each step)
-
-## Risks / Open Questions
-
-- Anything uncertain or requiring user input before proceeding
-- Edge cases to watch for
-- Breaking change potential
-
-## Branch
-
-Which branch this work happens on (e.g., `feature/my-feature` off `dev`).
-```
-
-**Rules for plan files:**
-
-- **Create the plan file BEFORE writing any code.** The plan is the first artifact.
-- **Update todo statuses** in the frontmatter as steps are completed (`pending` → `completed`).
-- **One plan per feature/task.** Don't combine unrelated work into a single plan.
-- **Keep steps atomic.** Each todo should be completable and verifiable independently.
-- **Include file references.** Every step should name the files it touches.
-- **Generate the hex suffix** from any 8 hex characters (e.g., first 8 of a UUID).
+7. **Ask questions for ambiguous or multi-step tasks.** Clarify requirements, edge cases, and preferences before implementing. Do not assume intent on scope, expected behavior, or trade-offs.
 
 ---
 
@@ -340,12 +267,14 @@ Stage 4.5: Annotated Charts (Chart-Img v2 with horizontal line drawings)
 
 ### LLM Models
 
-| Stage | Provider | Model | API Style |
-|-------|----------|-------|-----------|
-| Perplexity | Perplexity | `perplexity/sonar` | Agent API (`responses.create`) with tool calling |
-| Gemini | Google | `gemini-2.5-pro` | Google GenAI SDK with Search grounding |
-| Claude | Anthropic | `claude-opus-4-6` | Vision API with base64 chart images |
-| GPT | OpenAI | `gpt-5.4` | Chat completions (bull/bear/judge roles) |
+Each stage's model is configured in its stage file under `pipeline/stages/`. Check the source for current model IDs.
+
+| Stage | Provider | API Style |
+|-------|----------|-----------|
+| Perplexity | Perplexity | Agent API (`responses.create`) with tool calling |
+| Gemini | Google | Google GenAI SDK with Search grounding |
+| Claude | Anthropic | Vision API with base64 chart images |
+| GPT | OpenAI | Chat completions (bull/bear/judge roles) |
 
 ### Concurrency Control
 
@@ -380,7 +309,7 @@ def get_prompt_hash() -> str:
     return hashlib.sha256(GPT_JUDGE_SYSTEM_PROMPT.encode()).hexdigest()[:8]
 ```
 
-**Current prompt versions:** Perplexity Discovery v12, Perplexity Analysis v8, Gemini Sentiment v2, Claude Chart v4, GPT Bull v1, GPT Bear v1, GPT Judge v3.
+Prompt versions are defined as `PROMPT_VERSION` constants in each file under `pipeline/prompts/`. Check the source for current versions.
 
 ---
 
@@ -433,27 +362,9 @@ All timeframes for a ticker run concurrently via `asyncio.gather`. Short timefra
 
 ---
 
-## Supported Chart Indicators (16 total)
+## Supported Chart Indicators
 
-| Indicator | Chart-Img v2 Study | Custom Params |
-|-----------|-------------------|---------------|
-| RSI | `RSI@tv-basicstudies` | — |
-| MACD | `MACD@tv-basicstudies` | — |
-| Bollinger Bands | `BollingerBands@tv-basicstudies` | — |
-| Stochastic | `Stochastic@tv-basicstudies` | — |
-| ATR | `ATR@tv-basicstudies` | — |
-| EMA_20 | `MAExp@tv-basicstudies` | `length=20` |
-| EMA_50 | `MAExp@tv-basicstudies` | `length=50` |
-| EMA_200 | `MAExp@tv-basicstudies` | `length=200` |
-| SMA_50 | `MASimple@tv-basicstudies` | `length=50` |
-| SMA_200 | `MASimple@tv-basicstudies` | `length=200` |
-| VWAP | `VWAP@tv-basicstudies` | — |
-| Volume | `Volume@tv-basicstudies` | — |
-| OBV | `OBV@tv-basicstudies` | — |
-| CCI | `CCI@tv-basicstudies` | — |
-| Ichimoku Cloud | `IchimokuCloud@tv-basicstudies` | — |
-| DMI | `DMI@tv-basicstudies` | — |
-| Parabolic SAR | `PSAR@tv-basicstudies` | — |
+The full indicator list and their Chart-Img v2 study mappings are defined in `INDICATOR_MAP` and `INDICATOR_INPUTS` in `services/chart_image.py`. Includes EMAs, SMAs, RSI, MACD, Bollinger Bands, Stochastic, ATR, VWAP, Volume, OBV, CCI, Ichimoku, DMI, and Parabolic SAR.
 
 ---
 
@@ -465,27 +376,13 @@ Schema is managed via raw SQL migration files in `database/migrations/` (not Ale
 
 ### Tables
 
-| Table | Multi-tenant | Purpose |
-|-------|-------------|---------|
-| `strategies` | `user_id` | Strategy configs. `is_template` flag for system templates. |
-| `pipeline_runs` | `user_id` | Pipeline execution history. FK to strategies. Status: running/completed/partial/failed. |
-| `stage_outputs` | via run_id FK | Raw LLM prompts, responses, metadata per stage per ticker. |
-| `chart_images` | via run_id FK | Chart image metadata (path, hash, indicators). **Note: currently unused in code — chart paths stored in stage_outputs.** |
-| `recommendations` | `user_id` | Final BUY/SELL/HOLD recommendations with trade params and debate cases. |
-| `decisions` | `user_id` | User decisions on recommendations (following/passing). **No API endpoints yet.** |
-| `outcomes` | `user_id` | Manual trade outcome logging (entry/exit/PnL). **No API endpoints yet.** |
-| `reflections` | N/A | Self-learning summaries with injection prompts. |
+Core tables: `strategies`, `pipeline_runs`, `stage_outputs`, `recommendations`, `decisions`, `outcomes`, `reflections`, `chart_images`. All user-facing tables include `user_id` for multi-tenant isolation. See `database/migrations/001_initial.sql` for the full schema.
 
-### Migrations (6 files)
+**Notable:** `chart_images` table exists but is currently unused in code (chart paths stored in `stage_outputs`). `decisions` and `outcomes` have no API endpoints yet (needed for Phase 5).
 
-| Migration | Purpose |
-|-----------|---------|
-| `001_initial.sql` | Full schema: 8 tables, RLS, indexes |
-| `002_enable_rls.sql` | Idempotent RLS enablement |
-| `003_add_secondary_timeframe.sql` | `secondary_timeframe` column on strategies |
-| `004_additional_timeframes.sql` | `additional_timeframes` JSON array column |
-| `005_short_timeframes.sql` | `short_timeframes` + `short_tf_indicators` columns |
-| `006_add_fmp_screener.sql` | `fmp_screener` JSON column for FMP pre-screening config |
+### Migrations
+
+Sequential SQL files in `database/migrations/` (001–006). Check the directory for the current list.
 
 ### RLS Strategy
 RLS enabled on all tables with zero policies = full deny for anon key. Backend uses service_role key (bypasses RLS).
@@ -589,95 +486,23 @@ RLS enabled on all tables with zero policies = full deny for anon key. Backend u
 
 ```
 signalForge/
-├── CLAUDE.md                        # This file — AI assistant context
-├── README.md                        # Project overview
-├── Dockerfile                       # Python 3.14-slim backend container
-├── railway.toml                     # Railway deployment config
-├── LICENSE                          # AGPL v3.0
-├── .env.example                     # Backend env template
-├── .node-version                    # Node 22
-├── .github/workflows/ci.yml         # GitHub Actions CI
+├── src/backend/          # Python 3.14 FastAPI — ALL business logic
+│   ├── api/              # Route handlers (pipeline, strategies, charts, settings)
+│   ├── pipeline/         # LLM engine: orchestrator, schemas, validation, stages/, prompts/, tools/
+│   ├── services/         # Business logic (chart_image, fmp_service, strategy, keyring, reflection)
+│   ├── database/         # Supabase connection + SQL migrations
+│   └── middleware/       # JWT auth
 │
-├── templates/
-│   └── strategies.json              # 7 strategy templates (seed data)
+├── src/frontend/src/     # React 19 + TypeScript 5.9 + Tailwind v4
+│   ├── views/            # Main views (Recommendations, History, Strategies, Settings, Login)
+│   ├── components/       # auth/, layout/, shared/, recommendations/
+│   ├── hooks/            # usePipeline, useStrategies, useApiKeyStatus
+│   ├── api/client.ts     # HTTP client with JWT auth
+│   └── types/index.ts    # TypeScript interfaces (must mirror Pydantic schemas)
 │
-├── docs/                            # Project documentation
-│   ├── DEPLOY.md                    # Deployment guide (current)
-│   ├── ARCHITECTURE.md              # ⚠️ OUTDATED (still references Tauri/SQLite)
-│   ├── PRD.md                       # ⚠️ PARTIALLY OUTDATED (tech stack section)
-│   ├── backend/                     # Backend docs (api-reference, pipeline, services, database)
-│   ├── frontend/                    # Frontend docs (components, routing)
-│   ├── guides/                      # How-to guides (indicators, templates, prompts)
-│   ├── research/                    # Research notes (Perplexity optimization)
-│   └── plans/                       # Completed/historical plan files
-│
-├── src/backend/                     # Python 3.14 — ALL business logic
-│   ├── main.py                      # FastAPI entry point, lifespan, CORS, rate limiting
-│   ├── config.py                    # Settings from env vars, AppData paths
-│   ├── pyproject.toml               # Dependencies, ruff/ty config
-│   ├── .python-version              # 3.14+freethreaded
-│   │
-│   ├── api/                         # FastAPI route handlers (4 routers)
-│   │   ├── pipeline.py              # /api/pipeline/* endpoints
-│   │   ├── strategies.py            # /api/strategies/* endpoints
-│   │   ├── charts.py                # /api/charts/* endpoints
-│   │   └── settings.py              # /api/settings/* endpoints
-│   │
-│   ├── middleware/
-│   │   └── auth.py                  # JWT validation via Supabase JWKS (ES256)
-│   │
-│   ├── pipeline/                    # LLM pipeline engine
-│   │   ├── orchestrator.py          # Pipeline execution, mode determination, stage wiring
-│   │   ├── schemas.py               # All Pydantic v2 models (stage contracts)
-│   │   ├── validation.py            # JSON extraction, Pydantic validation, retry decorator
-│   │   ├── stages/                  # One file per LLM provider
-│   │   │   ├── perplexity.py        # Stage 1: Agent API + web search + FMP tool
-│   │   │   ├── gemini.py            # Stage 2: Google Search grounding
-│   │   │   ├── claude.py            # Stage 3: Vision API (multi-timeframe)
-│   │   │   └── gpt.py               # Stage 4: Bull/bear/judge debate
-│   │   ├── prompts/                 # Versioned prompt templates
-│   │   │   ├── perplexity_discovery.py  # Discovery mode (v12)
-│   │   │   ├── perplexity_analysis.py   # Analysis mode (v8)
-│   │   │   ├── gemini_sentiment.py      # Sentiment (v2)
-│   │   │   ├── claude_chart.py          # Chart analysis (v4)
-│   │   │   └── gpt_debate.py           # Bull/Bear/Judge (v1/v1/v3)
-│   │   └── tools/
-│   │       └── fmp_tool.py          # FMP screener tool for Perplexity Agent API
-│   │
-│   ├── services/                    # Business logic services
-│   │   ├── keyring_service.py       # API key management (6 providers)
-│   │   ├── strategy.py              # Strategy CRUD + template loading
-│   │   ├── chart_image.py           # Chart-Img v2 API + Supabase Storage uploads
-│   │   ├── fmp_service.py           # FMP stock/crypto screener + enrichment
-│   │   └── reflection.py            # Reflection context loader (read-only)
-│   │
-│   ├── database/
-│   │   ├── connection.py            # Supabase AsyncClient singleton
-│   │   └── migrations/              # 6 SQL migration files (001-006)
-│   │
-│   └── utils/
-│       └── hashing.py               # SHA-256 prompt hashing
-│
-├── src/frontend/                    # React 19 + TypeScript 5.9 + Tailwind v4
-│   ├── vercel.json                  # SPA rewrite rule
-│   ├── .env.example                 # Frontend env template
-│   ├── package.json                 # Vite 8, React 19, React Router 7
-│   │
-│   └── src/
-│       ├── App.tsx                  # Router + AuthProvider + route definitions
-│       ├── main.tsx                 # React root
-│       ├── api/client.ts            # Centralized HTTP client with JWT auth
-│       ├── context/AuthContext.tsx   # Supabase auth context
-│       ├── lib/supabase.ts          # Supabase client initialization
-│       ├── types/index.ts           # ALL TypeScript interfaces (mirrors Pydantic)
-│       ├── theme/globals.css        # Dark theme tokens + Tailwind v4 @theme
-│       ├── hooks/                   # usePipeline, useStrategies, useApiKeyStatus
-│       ├── views/                   # 5 main views + LoginPage
-│       └── components/
-│           ├── auth/                # LoginPage, ProtectedRoute
-│           ├── layout/              # MainLayout, Sidebar, CommandBar
-│           ├── shared/              # AssetTypeBadge, TradingViewWidget
-│           └── recommendations/     # TickerCardList, TickerCard, DetailView, 5 tab components, PriceLevelMap
+├── templates/strategies.json  # Strategy templates (seed data)
+├── docs/                      # ⚠️ ARCHITECTURE.md and PRD.md are partially outdated
+└── .github/workflows/ci.yml   # CI: ruff + ty (backend), tsc + build (frontend)
 ```
 
 ---
@@ -716,19 +541,9 @@ Strategies are the core configuration unit. A strategy defines:
 
 Users create strategies from templates. Templates are stored in `templates/strategies.json` and loaded on first run via `services/strategy.py → ensure_defaults()`.
 
-### Strategy Templates (7 total)
+### Strategy Templates
 
-| Template | Asset Type | Primary TF | Additional TFs | Short TFs | Debate |
-|----------|-----------|------------|----------------|-----------|--------|
-| Momentum Breakout | TSX stocks | D | 4H, W | — | Yes |
-| Value Accumulation | TSX stocks | D | 4H, W | — | Yes |
-| Mean Reversion | TSX stocks | D | 4H, W | — | Yes |
-| Earnings Play | TSX stocks | D | 4H | 1H | Yes |
-| Crypto Swing | Crypto | D | 4H, W | — | Yes |
-| Crypto Intraday Scalp | Crypto | 4H | — | 15m, 1H | **No** |
-| Intraday Scalp | TSX stocks | 4H | — | 15m, 1H | **No** |
-
-All templates include `fmp_screener` config. Scalp templates disable debate for faster execution. Default market focus is Canadian (TSX/TSXV).
+Templates are defined in `templates/strategies.json`. All include `fmp_screener` config. Scalp templates disable debate for faster execution. Default market focus is Canadian (TSX/TSXV). See the file for the current list of templates and their configurations.
 
 When implementing strategy-related features, remember that the strategy config drives prompt construction at every stage. The prompt modules in `pipeline/prompts/` all accept a `StrategyConfig` parameter.
 
@@ -756,7 +571,7 @@ Perplexity uses the **Agent API** (`responses.create`) instead of the older chat
 
 The chart service (`services/chart_image.py`) handles multi-exchange ticker resolution:
 
-- **EXCHANGE_SUFFIX_MAP** converts exchange suffixes to TradingView format: `.TO` → `TSX:`, `.V` → `TSXV:`, `.L` → `LSE:`, etc. (13 exchanges)
+- **EXCHANGE_SUFFIX_MAP** converts exchange suffixes to TradingView format: `.TO` → `TSX:`, `.V` → `TSXV:`, `.L` → `LSE:`, etc.
 - For bare US tickers, tries NASDAQ → NYSE → AMEX sequentially via Chart-Img API
 - First successful HTTP response wins
 - Exchange prefixes are stripped in the collapsed ticker sidebar for readability
