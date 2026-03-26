@@ -7,9 +7,9 @@
 
 ## What Is This Project?
 
-SignalForge is a cloud-hosted stock analysis platform that chains four AI models (Perplexity, Claude, Gemini, GPT) into a pipeline that produces structured trading recommendations. It does NOT execute trades — the user reviews recommendations and trades manually in TradingView (connected to Questrade).
+SignalForge is a cloud-hosted **stock and crypto** analysis platform that chains an optional FMP pre-screener plus four AI models (Perplexity, Gemini, Claude, GPT) into a pipeline that produces structured trading recommendations. It does NOT execute trades — the user reviews recommendations and trades manually in TradingView (connected to Questrade).
 
-The core loop: User triggers analysis → Perplexity screens stocks → Gemini gathers news/sentiment → Claude reads charts with news context → GPT synthesizes via bull/bear/judge debate → Dashboard displays recommendations → User decides to follow or pass → Logs outcome → System learns.
+The core loop: User triggers analysis → FMP pre-screens (optional) → Perplexity screens stocks/crypto → Gemini gathers news/sentiment → Claude reads charts with news context (multiple timeframes) → GPT synthesizes via bull/bear/judge debate → Stage 4.5 generates annotated charts → Dashboard displays recommendations → User decides to follow or pass → Logs outcome → System learns.
 
 ---
 
@@ -115,19 +115,25 @@ Which branch this work happens on (e.g., `feature/my-feature` off `dev`).
 
 | Layer | Technology |
 |-------|-----------|
-| Frontend hosting | Vercel (static site) |
-| Backend hosting | Railway (Docker container) |
-| Auth | Supabase Auth (email/password, JWT) |
-| Frontend | React + TypeScript + Tailwind (dark theme) |
-| Backend | Python 3.14 (FastAPI) — ALL business logic lives here |
-| Database | PostgreSQL (Railway addon) |
-| Chart storage | Supabase Storage (public bucket) |
+| Frontend hosting | Vercel (static site, SPA rewrite) |
+| Backend hosting | Railway (Docker container, Python 3.14-slim) |
+| Auth | Supabase Auth (email/password, ES256 JWT via JWKS) |
+| Database | Supabase PostgreSQL (accessed via PostgREST, not raw SQL) |
+| Chart storage | Supabase Storage (public `charts` bucket) |
+| Frontend | React 19 + TypeScript 5.9 + Tailwind v4 + Vite 8 |
+| Routing | React Router v7 |
+| Icons | Lucide React |
+| Backend | Python 3.14 free-threaded (FastAPI) — ALL business logic lives here |
 | Package manager | `uv` (Python), `bun` (frontend) |
-| LLM SDKs | `openai`, `anthropic`, `google-generativeai` |
+| LLM SDKs | `openai`, `anthropic`, `google-generativeai`, `perplexityai` |
+| Data APIs | FMP (Financial Modeling Prep), Chart-Img v2 |
 | Validation | Pydantic v2 |
 | Async | `asyncio` + `httpx` |
+| DB Client | `supabase` Python SDK (PostgREST over HTTPS) |
 | Linting / Formatting | `ruff` (Black-compatible) |
 | Type checking | `ty` (Astral's type checker) |
+| CI | GitHub Actions (ruff + ty for backend, tsc + build for frontend) |
+| License | AGPL v3.0 |
 
 ---
 
@@ -289,47 +295,84 @@ async def call_claude_chart_analysis(prompt: str, image: bytes) -> ChartAnalysis
     ...
 ```
 
-### Sequential Stages & Parallel Execution
+The `validation.py` module also handles JSON extraction from LLM responses — stripping markdown fences, `<think>` tags, and other wrapper text before parsing.
 
-Perplexity gathers news article URLs alongside fundamentals and passes them to Gemini for grounded sentiment analysis. Gemini runs before Claude so that Claude receives news context for chart analysis. Claude analyzes **two timeframes** per ticker (primary + `secondary_timeframe` from strategy config, e.g. Daily + 4H) concurrently. Bull + Bear GPT calls run concurrently. After GPT, Stage 4.5 generates annotated chart images with key-level overlays via Chart-Img v2 drawings.
+### Full Pipeline Flow (5 Stages)
 
-```python
-# Perplexity screens + gathers news URLs
-screening = await run_perplexity(config)
-
-# Gemini uses Perplexity-provided article URLs for grounded sentiment
-sentiment_analyses = await run_gemini_stage(tickers, config, ticker_news)
-
-# Claude runs both timeframes per ticker concurrently
-chart_analyses = await run_claude_stage(tickers, config, sentiment_analyses)
-
-# Bull + Bear are parallel, Judge is sequential
-bull_cases, bear_cases = await asyncio.gather(
-    run_gpt_bull(tickers, screening, chart_analyses, sentiment_analyses, config),
-    run_gpt_bear(tickers, screening, chart_analyses, sentiment_analyses, config),
-    return_exceptions=True,
-)
-
-# Stage 4.5: Annotated charts with horizontal lines (support/resistance/entry/stop/target)
-# Runs after GPT so trade parameters are available for overlay
-await asyncio.gather(*[annotate(ca) for ca in chart_analyses])
 ```
+Stage 0 (Optional): FMP Pre-Screening
+    │  Stock screener + ratios-ttm enrichment, OR crypto batch quotes
+    │  Output: enriched stock/crypto list passed as context to Perplexity
+    ↓
+Stage 1: Perplexity (Agent API with web_search + optional FMP tool)
+    │  Discovery mode: screen market for opportunities
+    │  Analysis mode: research given tickers
+    │  Output: ScreeningResult with tickers, fundamentals, news_urls
+    ↓
+Stage 2: Gemini (Google Search grounding, per-ticker)
+    │  Uses Perplexity-provided news URLs for grounded sentiment
+    │  Output: SentimentAnalysis per ticker
+    ↓
+Stage 3: Claude (Vision API, per-ticker × per-timeframe)
+    │  Receives chart images + news context from Gemini
+    │  Runs ALL timeframes concurrently (primary + additional + short)
+    │  Output: ChartAnalysis per ticker per timeframe
+    ↓
+Stage 4: GPT (Bull/Bear/Judge debate)
+    │  Bull + Bear run in parallel, Judge runs sequentially
+    │  Debate is optional per strategy (enable_debate flag)
+    │  Output: Recommendation per ticker
+    ↓
+Stage 4.5: Annotated Charts (Chart-Img v2 with horizontal line drawings)
+    │  Runs after GPT so trade params (entry/stop/target) are available
+    │  Max 5 drawings per chart (PRO plan limit)
+    │  Output: annotated chart images uploaded to Supabase Storage
+```
+
+### Pipeline Modes
+
+| Mode | Trigger | Behavior |
+|------|---------|----------|
+| `discovery` | strategy_id only, no tickers | Screen market for new opportunities |
+| `analysis` | manual_tickers only, no strategy | Research specific tickers |
+| `combined` | strategy_id + manual_tickers | Both screening and targeted research |
+| `prompt` | user_prompt free-form text | Natural language drives screening |
+
+### LLM Models
+
+| Stage | Provider | Model | API Style |
+|-------|----------|-------|-----------|
+| Perplexity | Perplexity | `perplexity/sonar` | Agent API (`responses.create`) with tool calling |
+| Gemini | Google | `gemini-2.5-pro` | Google GenAI SDK with Search grounding |
+| Claude | Anthropic | `claude-opus-4-6` | Vision API with base64 chart images |
+| GPT | OpenAI | `gpt-5.4` | Chat completions (bull/bear/judge roles) |
+
+### Concurrency Control
+
+Per-stage semaphores prevent API rate limit issues:
+- Perplexity: `Semaphore(3)`
+- Gemini: `Semaphore(5)`
+- Claude: `Semaphore(3)`
+- FMP: `Semaphore(5)`
+
+Bull + Bear GPT calls run in `asyncio.gather`. Judge is sequential after both complete.
 
 ### Degraded Pipeline
 
 If a non-critical stage fails, the pipeline continues. The `PipelineResult.stage_errors` list tracks all failures.
 
+- If **FMP** fails or is not configured, Perplexity proceeds without pre-screened data.
 - If **Gemini** fails, Claude proceeds without news context (the prompt omits the "Recent News Context" section). GPT judge is told sentiment data is unavailable.
 - If **Claude** fails after receiving news, GPT proceeds with Perplexity fundamentals + Gemini sentiment only (no chart analysis).
-- The GPT judge prompt explicitly notes which data is missing so it can adjust confidence accordingly.
+- The GPT judge prompt explicitly notes which data is missing via a `DATA AVAILABILITY` section so it can adjust confidence accordingly.
 
 ### Prompt Versioning
 
 Every prompt is stored as a Python constant with a version hash. When a prompt changes, the hash changes. The hash is stored in `pipeline_runs.prompt_versions` so you can correlate prompt iterations with outcome performance.
 
 ```python
-# In pipeline/prompts/gpt_judge.py
-PROMPT_VERSION = "v2"  # bump this when prompt changes
+# In pipeline/prompts/gpt_debate.py
+PROMPT_VERSION = "v3"  # bump this when prompt changes
 
 GPT_JUDGE_SYSTEM_PROMPT = """You are a senior portfolio manager..."""
 
@@ -337,50 +380,304 @@ def get_prompt_hash() -> str:
     return hashlib.sha256(GPT_JUDGE_SYSTEM_PROMPT.encode()).hexdigest()[:8]
 ```
 
+**Current prompt versions:** Perplexity Discovery v12, Perplexity Analysis v8, Gemini Sentiment v2, Claude Chart v4, GPT Bull v1, GPT Bear v1, GPT Judge v3.
+
+---
+
+## FMP Integration (Financial Modeling Prep)
+
+FMP provides Stage 0 pre-screening and is also available as a Perplexity tool-calling function.
+
+### Stock Screening Flow
+1. `/stable/company-screener` — filter by country, exchange, sector, industry, market cap, price, volume, beta, ETF toggle
+2. Concurrent `ratios-ttm` + `key-metrics-ttm` enrichment per result
+3. Client-side post-filtering: P/E range, min ROE, max debt/equity
+4. Results passed as context to Perplexity prompt
+
+### Crypto Screening Flow
+1. `/stable/batch-crypto-quotes` — fetch all crypto quotes
+2. Client-side filtering by market cap, volume, price range
+3. Sort by market cap, limit results
+
+### Strategy-Level Config
+Every strategy has an optional `fmp_screener` JSON field (`FmpScreenerConfig` model) controlling:
+- `enabled`, `is_crypto`, `country`, `exchange`, `sector`, `industry`
+- `market_cap_min/max`, `price_min/max`, `volume_min`, `beta_min/max`
+- `is_actively_trading`, `is_etf`, `limit`
+- `pe_max`, `pe_min`, `roe_min`, `debt_equity_max`, `enrich_with_ratios`
+
+### Perplexity Tool Calling
+FMP is exposed as a function tool (`pipeline/tools/fmp_tool.py`) so Perplexity can dynamically invoke the screener with different parameters during its Agent API conversation. Max 3 tool-calling rounds per run.
+
+### Key Files
+- `services/fmp_service.py` — FMP API client, screening, enrichment
+- `pipeline/tools/fmp_tool.py` — FMP tool definition for Perplexity Agent API
+- `database/migrations/006_add_fmp_screener.sql` — `fmp_screener` column on strategies
+
+---
+
+## Multi-Timeframe Chart Analysis
+
+Claude analyzes **multiple timeframes per ticker** concurrently. A strategy defines three timeframe sets:
+
+| Config Field | Default | Example | Purpose |
+|-------------|---------|---------|---------|
+| `chart_timeframe` | `"D"` | `"D"` | Primary timeframe |
+| `additional_timeframes` | `["4H", "W"]` | `["4H", "W"]` | Supplementary swing timeframes |
+| `short_timeframes` | `[]` | `["15m", "1H"]` | Intraday/scalp timeframes |
+| `short_tf_indicators` | `["VWAP", "Stochastic", "EMA_20", "ATR", "Volume"]` | — | Indicator set for short TFs |
+
+All timeframes for a ticker run concurrently via `asyncio.gather`. Short timeframes use a different indicator set optimized for intraday analysis.
+
+**Supported timeframes:** 15m, 1H, 2H, 4H, D, W, M
+
+---
+
+## Supported Chart Indicators (16 total)
+
+| Indicator | Chart-Img v2 Study | Custom Params |
+|-----------|-------------------|---------------|
+| RSI | `RSI@tv-basicstudies` | — |
+| MACD | `MACD@tv-basicstudies` | — |
+| Bollinger Bands | `BollingerBands@tv-basicstudies` | — |
+| Stochastic | `Stochastic@tv-basicstudies` | — |
+| ATR | `ATR@tv-basicstudies` | — |
+| EMA_20 | `MAExp@tv-basicstudies` | `length=20` |
+| EMA_50 | `MAExp@tv-basicstudies` | `length=50` |
+| EMA_200 | `MAExp@tv-basicstudies` | `length=200` |
+| SMA_50 | `MASimple@tv-basicstudies` | `length=50` |
+| SMA_200 | `MASimple@tv-basicstudies` | `length=200` |
+| VWAP | `VWAP@tv-basicstudies` | — |
+| Volume | `Volume@tv-basicstudies` | — |
+| OBV | `OBV@tv-basicstudies` | — |
+| CCI | `CCI@tv-basicstudies` | — |
+| Ichimoku Cloud | `IchimokuCloud@tv-basicstudies` | — |
+| DMI | `DMI@tv-basicstudies` | — |
+| Parabolic SAR | `PSAR@tv-basicstudies` | — |
+
 ---
 
 ## Database
 
-PostgreSQL (Railway addon in production, can use local Postgres in development). The schema is managed via Alembic migrations in `database/migrations/`. All tables use TEXT UUIDs as primary keys (`uuid.uuid4().hex`). Multi-tenant: all user-facing tables include a `user_id` column for data isolation.
+Supabase PostgreSQL accessed via the Supabase Python SDK (PostgREST over HTTPS). **Not raw SQL connections** — this eliminates IPv6/pooler/DNS issues on Railway. All queries use the fluent `.table().select().eq()...execute()` pattern. The backend uses the `service_role` key which bypasses Row Level Security.
 
-**Core tables:** `strategies`, `pipeline_runs`, `stage_outputs`, `chart_images`, `recommendations`, `decisions`, `outcomes`, `reflections`.
+Schema is managed via raw SQL migration files in `database/migrations/` (not Alembic). All tables use TEXT UUIDs as primary keys (`uuid.uuid4().hex`). Multi-tenant: all user-facing tables include a `user_id` column for data isolation.
 
-See `docs/ARCHITECTURE.md` section 4 for full schema.
+### Tables
 
-**Important:** Never store API keys in the database. In production, they are set as Railway environment variables. In development, they go in the `.env` file at the project root (gitignored). See `.env.example` for the template. Keys are loaded at startup by `services/keyring_service.py` using `python-dotenv`.
+| Table | Multi-tenant | Purpose |
+|-------|-------------|---------|
+| `strategies` | `user_id` | Strategy configs. `is_template` flag for system templates. |
+| `pipeline_runs` | `user_id` | Pipeline execution history. FK to strategies. Status: running/completed/partial/failed. |
+| `stage_outputs` | via run_id FK | Raw LLM prompts, responses, metadata per stage per ticker. |
+| `chart_images` | via run_id FK | Chart image metadata (path, hash, indicators). **Note: currently unused in code — chart paths stored in stage_outputs.** |
+| `recommendations` | `user_id` | Final BUY/SELL/HOLD recommendations with trade params and debate cases. |
+| `decisions` | `user_id` | User decisions on recommendations (following/passing). **No API endpoints yet.** |
+| `outcomes` | `user_id` | Manual trade outcome logging (entry/exit/PnL). **No API endpoints yet.** |
+| `reflections` | N/A | Self-learning summaries with injection prompts. |
+
+### Migrations (6 files)
+
+| Migration | Purpose |
+|-----------|---------|
+| `001_initial.sql` | Full schema: 8 tables, RLS, indexes |
+| `002_enable_rls.sql` | Idempotent RLS enablement |
+| `003_add_secondary_timeframe.sql` | `secondary_timeframe` column on strategies |
+| `004_additional_timeframes.sql` | `additional_timeframes` JSON array column |
+| `005_short_timeframes.sql` | `short_timeframes` + `short_tf_indicators` columns |
+| `006_add_fmp_screener.sql` | `fmp_screener` JSON column for FMP pre-screening config |
+
+### RLS Strategy
+RLS enabled on all tables with zero policies = full deny for anon key. Backend uses service_role key (bypasses RLS).
+
+---
+
+## API Endpoints
+
+| Method | Path | Auth | Rate Limit | Description |
+|--------|------|------|------------|-------------|
+| `GET` | `/health` | No | No | Health check with DB connectivity verification |
+| `POST` | `/api/pipeline/run` | Yes | 5/min | Trigger pipeline run (strategy_id, manual_tickers, user_prompt) |
+| `GET` | `/api/pipeline/status/{run_id}` | Yes | No | Get full pipeline result (reconstructs from DB) |
+| `GET` | `/api/pipeline/runs` | Yes | No | List recent pipeline runs (last 100) |
+| `GET` | `/api/pipeline/runs/{run_id}` | Yes | No | Alias for status endpoint |
+| `GET` | `/api/strategies` | Yes | No | List user strategies (excludes templates) |
+| `GET` | `/api/strategies/templates` | Yes* | No | List built-in strategy templates (*no auth enforced) |
+| `GET` | `/api/strategies/{strategy_id}` | Yes | No | Get single strategy by ID |
+| `POST` | `/api/strategies` | Yes | No | Create new strategy (201) |
+| `POST` | `/api/charts/fetch` | Yes | No | On-demand chart image fetch |
+| `GET` | `/api/settings/api-keys/status` | Yes | No | Check which API keys are configured |
+
+**Rate limiting:** Global default 60/min via SlowAPI. Pipeline trigger is 5/min.
+
+**Missing endpoints:** No PUT/PATCH/DELETE for strategies. No CRUD for decisions or outcomes (needed for self-learning loop).
+
+---
+
+## Environment Variables
+
+### Backend (`.env` or Railway env vars)
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `PERPLEXITY_API_KEY` | Yes | Perplexity Agent API (sonar model) |
+| `ANTHROPIC_API_KEY` | Yes | Claude Vision API |
+| `GOOGLE_API_KEY` | Yes | Gemini with Google Search grounding |
+| `OPENAI_API_KEY` | Yes | GPT bull/bear/judge debate |
+| `CHARTIMG_API_KEY` | Yes | Chart-Img v2 chart generation |
+| `FMP_API_KEY` | No | Financial Modeling Prep (optional pre-screening) |
+| `SUPABASE_URL` | Yes (prod) | Supabase project URL |
+| `SUPABASE_KEY` | Yes (prod) | Supabase service_role key (bypasses RLS) |
+| `SUPABASE_JWT_SECRET` | Yes (prod) | For JWT verification (legacy, JWKS preferred) |
+| `ALLOWED_ORIGINS` | Yes (prod) | CORS allowed origins (frontend domain) |
+
+### Frontend (`.env` or Vercel env vars)
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `VITE_API_URL` | Yes | Backend URL (default: `http://localhost:8420`) |
+| `VITE_SUPABASE_URL` | Yes | Supabase project URL |
+| `VITE_SUPABASE_ANON_KEY` | Yes | Supabase anon key for auth |
 
 ---
 
 ## Frontend Conventions
 
-- React functional components with hooks only (no class components)
-- TypeScript strict mode
-- Dark theme only — use CSS variables from `theme/dark.css`
-- TradingView widgets embedded via iframes — recreate iframe on symbol change, don't try to update in place
-- Backend communication via `api/client.ts` using fetch — no external HTTP library needed
+- **React 19** functional components with hooks only (no class components)
+- **TypeScript 5.9** strict mode
+- **Tailwind v4** with `@theme` directive — dark theme only, CSS custom properties in `theme/globals.css`
+- **Color palette:** GitHub Dark inspired — `bg-primary: #0d1117`, `bg-secondary: #161b22`, `accent-green: #3fb950`, `accent-red: #f85149`, `accent-blue: #58a6ff`, `accent-yellow: #d29922`
+- **Vite 8** with React SWC plugin and Tailwind v4 Vite plugin
+- Backend communication via `api/client.ts` using native `fetch` — no external HTTP library
 - All TypeScript interfaces in `types/index.ts` must mirror the Python Pydantic models exactly
+- **Lucide React** for all icons
+- **React Router v7** for client-side routing
+- **Supabase JS SDK** for authentication (email/password, JWT tokens)
+
+### Frontend Views
+
+| Route | View | Status |
+|-------|------|--------|
+| `/` | RecommendationsView | Active — main dashboard with ticker list + 5-tab detail panel |
+| `/history` | HistoryView | Active — pipeline run history table |
+| `/strategies` | StrategiesView | Active — template + user strategy grid |
+| `/insights` | InsightsView | **Stub** — "Coming in Phase 5" |
+| `/settings` | SettingsView | Active — account info + API key status |
+| `/login` | LoginPage | Active — Supabase auth login/signup |
+
+### Detail Panel Tabs (RecommendationsView)
+
+| Tab | Component | Data Source |
+|-----|-----------|-------------|
+| Overview | `OverviewTab` | Perplexity fundamentals (market cap, P/E, highlights, risks) |
+| Chart | `ChartTab` | Claude chart analysis + annotated chart images + PriceLevelMap SVG |
+| Sentiment | `SentimentTab` | Gemini sentiment score, catalysts, sector sentiment |
+| Synthesis | `SynthesisTab` | GPT recommendation, trade params, bull/bear debate cases |
+| Raw Data | `RawTab` | Full pipeline result JSON dump |
+
+### Notable Frontend Features
+- **Multi-mode CommandBar** — auto-classifies input as discovery/analysis/combined/prompt mode with color-coded indicators
+- **Collapsible ticker sidebar** — 320px expanded with full cards, 48px collapsed with just symbols
+- **Ad-hoc chart fetching** — ChartTab can fetch chart images for timeframes not in the pipeline run
+- **SVG PriceLevelMap** — interactive visualization of support/resistance/entry/stop/target levels
+- **Expandable chart lightbox** — click to enlarge chart images with backdrop blur
+- **TradingViewWidget component** — fully built with indicator mapping but **currently not rendered** (reserved for future live chart integration)
 
 ---
 
-## Project Structure Quick Reference
+## Project Structure
 
 ```
-src/backend/                 # Python — ALL business logic
-  pipeline/                  # The 4-stage LLM pipeline
-    stages/                  # One file per LLM provider
-    prompts/                 # Prompt templates (versioned)
-    schemas.py               # Pydantic models (stage contracts)
-    orchestrator.py          # Pipeline execution engine
-  services/                  # Business logic services
-  api/                       # FastAPI route handlers
-  database/                  # PostgreSQL connection and queries
-
-src/frontend/                # React + TypeScript
-  components/                # UI components grouped by view
-  hooks/                     # React hooks for data fetching
-  api/                       # Backend HTTP client
-  types/                     # TypeScript interfaces
-
+signalForge/
+├── CLAUDE.md                        # This file — AI assistant context
+├── README.md                        # Project overview
+├── Dockerfile                       # Python 3.14-slim backend container
+├── railway.toml                     # Railway deployment config
+├── LICENSE                          # AGPL v3.0
+├── .env.example                     # Backend env template
+├── .node-version                    # Node 22
+├── .github/workflows/ci.yml         # GitHub Actions CI
+│
+├── templates/
+│   └── strategies.json              # 7 strategy templates (seed data)
+│
+├── docs/                            # Project documentation
+│   ├── DEPLOY.md                    # Deployment guide (current)
+│   ├── ARCHITECTURE.md              # ⚠️ OUTDATED (still references Tauri/SQLite)
+│   ├── PRD.md                       # ⚠️ PARTIALLY OUTDATED (tech stack section)
+│   ├── backend/                     # Backend docs (api-reference, pipeline, services, database)
+│   ├── frontend/                    # Frontend docs (components, routing)
+│   ├── guides/                      # How-to guides (indicators, templates, prompts)
+│   ├── research/                    # Research notes (Perplexity optimization)
+│   └── plans/                       # Completed/historical plan files
+│
+├── src/backend/                     # Python 3.14 — ALL business logic
+│   ├── main.py                      # FastAPI entry point, lifespan, CORS, rate limiting
+│   ├── config.py                    # Settings from env vars, AppData paths
+│   ├── pyproject.toml               # Dependencies, ruff/ty config
+│   ├── .python-version              # 3.14+freethreaded
+│   │
+│   ├── api/                         # FastAPI route handlers (4 routers)
+│   │   ├── pipeline.py              # /api/pipeline/* endpoints
+│   │   ├── strategies.py            # /api/strategies/* endpoints
+│   │   ├── charts.py                # /api/charts/* endpoints
+│   │   └── settings.py              # /api/settings/* endpoints
+│   │
+│   ├── middleware/
+│   │   └── auth.py                  # JWT validation via Supabase JWKS (ES256)
+│   │
+│   ├── pipeline/                    # LLM pipeline engine
+│   │   ├── orchestrator.py          # Pipeline execution, mode determination, stage wiring
+│   │   ├── schemas.py               # All Pydantic v2 models (stage contracts)
+│   │   ├── validation.py            # JSON extraction, Pydantic validation, retry decorator
+│   │   ├── stages/                  # One file per LLM provider
+│   │   │   ├── perplexity.py        # Stage 1: Agent API + web search + FMP tool
+│   │   │   ├── gemini.py            # Stage 2: Google Search grounding
+│   │   │   ├── claude.py            # Stage 3: Vision API (multi-timeframe)
+│   │   │   └── gpt.py               # Stage 4: Bull/bear/judge debate
+│   │   ├── prompts/                 # Versioned prompt templates
+│   │   │   ├── perplexity_discovery.py  # Discovery mode (v12)
+│   │   │   ├── perplexity_analysis.py   # Analysis mode (v8)
+│   │   │   ├── gemini_sentiment.py      # Sentiment (v2)
+│   │   │   ├── claude_chart.py          # Chart analysis (v4)
+│   │   │   └── gpt_debate.py           # Bull/Bear/Judge (v1/v1/v3)
+│   │   └── tools/
+│   │       └── fmp_tool.py          # FMP screener tool for Perplexity Agent API
+│   │
+│   ├── services/                    # Business logic services
+│   │   ├── keyring_service.py       # API key management (6 providers)
+│   │   ├── strategy.py              # Strategy CRUD + template loading
+│   │   ├── chart_image.py           # Chart-Img v2 API + Supabase Storage uploads
+│   │   ├── fmp_service.py           # FMP stock/crypto screener + enrichment
+│   │   └── reflection.py            # Reflection context loader (read-only)
+│   │
+│   ├── database/
+│   │   ├── connection.py            # Supabase AsyncClient singleton
+│   │   └── migrations/              # 6 SQL migration files (001-006)
+│   │
+│   └── utils/
+│       └── hashing.py               # SHA-256 prompt hashing
+│
+├── src/frontend/                    # React 19 + TypeScript 5.9 + Tailwind v4
+│   ├── vercel.json                  # SPA rewrite rule
+│   ├── .env.example                 # Frontend env template
+│   ├── package.json                 # Vite 8, React 19, React Router 7
+│   │
+│   └── src/
+│       ├── App.tsx                  # Router + AuthProvider + route definitions
+│       ├── main.tsx                 # React root
+│       ├── api/client.ts            # Centralized HTTP client with JWT auth
+│       ├── context/AuthContext.tsx   # Supabase auth context
+│       ├── lib/supabase.ts          # Supabase client initialization
+│       ├── types/index.ts           # ALL TypeScript interfaces (mirrors Pydantic)
+│       ├── theme/globals.css        # Dark theme tokens + Tailwind v4 @theme
+│       ├── hooks/                   # usePipeline, useStrategies, useApiKeyStatus
+│       ├── views/                   # 5 main views + LoginPage
+│       └── components/
+│           ├── auth/                # LoginPage, ProtectedRoute
+│           ├── layout/              # MainLayout, Sidebar, CommandBar
+│           ├── shared/              # AssetTypeBadge, TradingViewWidget
+│           └── recommendations/     # TickerCardList, TickerCard, DetailView, 5 tab components, PriceLevelMap
 ```
 
 ---
@@ -388,16 +685,95 @@ src/frontend/                # React + TypeScript
 ## Cloud Architecture
 
 ```
-Vercel (frontend) ──JWT──→ Railway (FastAPI backend) ──SQL──→ Railway Postgres
+Vercel (React SPA) ──JWT──→ Railway (FastAPI backend) ──PostgREST──→ Supabase PostgreSQL
                                     │
-                                    ├──→ Supabase Auth (JWT verification)
-                                    └──→ Supabase Storage (chart images)
+                                    ├──→ Supabase Auth (JWKS JWT verification)
+                                    ├──→ Supabase Storage (chart image uploads)
+                                    ├──→ Perplexity Agent API (screening)
+                                    ├──→ Google GenAI (sentiment)
+                                    ├──→ Anthropic Vision (chart analysis)
+                                    ├──→ OpenAI (debate synthesis)
+                                    ├──→ Chart-Img v2 (chart generation)
+                                    └──→ FMP API (pre-screening, optional)
 ```
 
-- **Auth flow:** Frontend uses Supabase JS SDK for login/signup → gets JWT → sends JWT in `Authorization: Bearer` header to backend → backend verifies JWT using `SUPABASE_JWT_SECRET` → extracts `user_id` for data isolation.
-- **Chart images:** Backend uploads PNGs to Supabase Storage `charts` bucket → stores public URL in database → frontend loads images directly from Supabase CDN.
+- **Auth flow:** Frontend uses Supabase JS SDK for login/signup → gets JWT → sends JWT in `Authorization: Bearer` header to backend → backend verifies JWT via JWKS endpoint (`PyJWKClient` with 1-hour key cache, ES256 algorithm) → extracts `user_id` for data isolation. In dev mode without Supabase configured, falls back to `"dev-user-local"`.
+- **Database:** Supabase PostgreSQL accessed via PostgREST (HTTPS), not raw SQL connections. Backend uses `supabase` Python SDK with service_role key.
+- **Chart images:** Backend uploads PNGs to Supabase Storage `charts` bucket → stores public URL in stage_outputs → frontend loads images directly from Supabase CDN. Falls back to local filesystem when Supabase is not configured.
 - **API keys:** In production, set as Railway environment variables. In development, loaded from `.env` via `python-dotenv`.
 - **CORS:** Locked to frontend domain via `ALLOWED_ORIGINS` env var.
+
+---
+
+## Strategy System
+
+Strategies are the core configuration unit. A strategy defines:
+- **FMP pre-screening** (optional) — market filters, ratio constraints, crypto toggle
+- **Perplexity screening** — prompt, constraints, max tickers
+- **Gemini news** — recency window, news scope
+- **Claude charts** — indicators, primary/additional/short timeframes, TA focus
+- **GPT synthesis** — trading style, risk params, debate toggle
+
+Users create strategies from templates. Templates are stored in `templates/strategies.json` and loaded on first run via `services/strategy.py → ensure_defaults()`.
+
+### Strategy Templates (7 total)
+
+| Template | Asset Type | Primary TF | Additional TFs | Short TFs | Debate |
+|----------|-----------|------------|----------------|-----------|--------|
+| Momentum Breakout | TSX stocks | D | 4H, W | — | Yes |
+| Value Accumulation | TSX stocks | D | 4H, W | — | Yes |
+| Mean Reversion | TSX stocks | D | 4H, W | — | Yes |
+| Earnings Play | TSX stocks | D | 4H | 1H | Yes |
+| Crypto Swing | Crypto | D | 4H, W | — | Yes |
+| Crypto Intraday Scalp | Crypto | 4H | — | 15m, 1H | **No** |
+| Intraday Scalp | TSX stocks | 4H | — | 15m, 1H | **No** |
+
+All templates include `fmp_screener` config. Scalp templates disable debate for faster execution. Default market focus is Canadian (TSX/TSXV).
+
+When implementing strategy-related features, remember that the strategy config drives prompt construction at every stage. The prompt modules in `pipeline/prompts/` all accept a `StrategyConfig` parameter.
+
+---
+
+## Perplexity Agent API
+
+Perplexity uses the **Agent API** (`responses.create`) instead of the older chat completions API. Key details:
+
+- Model: `perplexity/sonar`
+- Built-in `web_search` tool (always enabled)
+- Optional FMP function-calling tool (when FMP key is configured)
+- Max 3 tool-calling rounds per run
+- Domain-filtered search based on strategy type:
+  - **Canadian stocks**: BNN, Globe and Mail, Financial Post, TMX, etc.
+  - **US stocks**: Seeking Alpha, MarketWatch, Yahoo Finance, etc.
+  - **Crypto**: CoinDesk, The Block, CoinGecko, etc.
+  - **Earnings**: Earnings Whispers, Estimize, etc.
+- Discovery prompts include ET time and market session label (premarket/market hours/after hours)
+- TradingView ticker format enforced (e.g., `TSX:ENB`, not `ENB.TO`)
+
+---
+
+## Exchange/Ticker Resolution
+
+The chart service (`services/chart_image.py`) handles multi-exchange ticker resolution:
+
+- **EXCHANGE_SUFFIX_MAP** converts exchange suffixes to TradingView format: `.TO` → `TSX:`, `.V` → `TSXV:`, `.L` → `LSE:`, etc. (13 exchanges)
+- For bare US tickers, tries NASDAQ → NYSE → AMEX sequentially via Chart-Img API
+- First successful HTTP response wins
+- Exchange prefixes are stripped in the collapsed ticker sidebar for readability
+
+---
+
+## Self-Learning Loop
+
+The reflection engine (`services/reflection.py`) currently only **reads** the latest reflection injection prompt from the `reflections` table. Full reflection **generation** (computing win rates, confidence calibration, sector performance from `outcomes` + `decisions` tables) is planned for Phase 5 (Insights view).
+
+The injection prompt, when populated, gets prepended to the GPT judge system prompt — this is how the system calibrates over time. It should contain concrete stats, not vague advice.
+
+**Phase 5 prerequisites (not yet built):**
+- API endpoints for creating decisions (follow/pass on recommendations)
+- API endpoints for logging outcomes (trade results with entry/exit/PnL)
+- Reflection generation engine to compute metrics
+- Insights view to display performance data
 
 ---
 
@@ -430,6 +806,29 @@ git push -u origin feature/my-feature
 
 ---
 
+## CI/CD
+
+GitHub Actions (`.github/workflows/ci.yml`) runs on push to `main` and on PRs to `main`:
+
+**Backend job:**
+1. `uv run ruff check` — lint check
+2. `uv run ruff format --check` — format check
+3. `uv run ty check` — type check
+
+**Frontend job:**
+1. `bunx tsc --noEmit` — TypeScript type check
+2. `bun run build` — production build
+
+**Note:** CI does NOT currently trigger on pushes to `dev` or feature branches (only `main` and PRs to `main`).
+
+---
+
+## Testing
+
+**There are currently zero test files in the project.** No `test_*.py`, no `conftest.py`, no test directories. The CI workflow only runs linting and type checking, not tests. The `pyproject.toml` has `per-file-ignores` configured for `tests/**` but the directory doesn't exist yet.
+
+---
+
 ## Development Workflow
 
 ```bash
@@ -445,6 +844,9 @@ bun run dev
 uv run ruff format            # format all Python files (Black-compatible)
 uv run ruff check --fix       # lint and auto-fix
 uv run ty check               # type check
+
+# Frontend type check (run from src/frontend/)
+bunx tsc --noEmit
 ```
 
 ---
@@ -453,49 +855,29 @@ uv run ty check               # type check
 
 1. **This app never executes trades.** If you find yourself writing code that places orders, stop. The user executes in TradingView manually.
 
-2. **API keys go in `.env` (dev) or environment variables (production), never in the database or committed config files.** See `.env.example` and `services/keyring_service.py`.
+2. **API keys go in `.env` (dev) or environment variables (production), never in the database or committed config files.** See `.env.example` and `services/keyring_service.py`. There are 6 providers: perplexity, anthropic, google, openai, chartimg, fmp.
 
 3. **Every LLM output must be Pydantic-validated.** No raw JSON dicts flowing through the pipeline. If it's not a validated model, it's a bug.
 
 4. **Prompts are versioned.** When you change a prompt, bump the version constant. The hash gets stored with every pipeline run for performance tracking.
 
-5. **Failed stages don't kill the pipeline.** Use the degraded pattern. GPT should always get a chance to synthesize whatever data is available.
+5. **Failed stages don't kill the pipeline.** Use the degraded pattern. GPT should always get a chance to synthesize whatever data is available. The `DATA AVAILABILITY` section in GPT prompts explicitly notes missing data.
 
-6. **The bull/bear debate is optional per strategy.** Check `strategy.enable_debate` before making 3 GPT calls. If disabled, make a single synthesis call.
+6. **The bull/bear debate is optional per strategy.** Check `strategy.enable_debate` before making 3 GPT calls. If disabled, make a single synthesis call. Scalp templates disable debate for speed.
 
-7. **Chart images are stored in Supabase Storage** in the `charts` bucket, organized as `{user_id}/{run_id}/{ticker}_{timeframe}.png`. Annotated charts (with key-level overlays) go under `{user_id}/{run_id}/annotated/{ticker}_{timeframe}.png`. The public URLs are stored on the `ChartAnalysis` model (`chart_image_path` and `annotated_chart_path`). In local development, images can fall back to local filesystem storage. Never store data files in the project/repo tree.
+7. **Chart images are stored in Supabase Storage** in the `charts` bucket, organized as `{user_id}/{run_id}/{ticker}_{timeframe}.png`. Annotated charts go under `{user_id}/{run_id}/annotated/{ticker}_{timeframe}.png`. Falls back to local filesystem when Supabase is not configured. Never store data files in the project/repo tree.
 
 8. **The frontend never calls LLM APIs directly.** All API communication goes through the Python backend. The frontend only talks to FastAPI.
 
-9. **All API endpoints (except `/health`) require a valid Supabase JWT** in the `Authorization: Bearer` header. The backend verifies the JWT and extracts `user_id` for multi-tenant data isolation.
+9. **All API endpoints (except `/health`) require a valid Supabase JWT** in the `Authorization: Bearer` header. The backend verifies the JWT via JWKS and extracts `user_id` for multi-tenant data isolation. In dev mode, falls back to `"dev-user-local"`.
 
-10. **TradingView widgets are free public iframes.** No API key needed. Dark theme, transparent background, dynamic symbol updates.
+10. **Database is accessed via Supabase PostgREST**, not raw SQL connections. Use the fluent `.table().select().eq()...execute()` pattern from the `supabase` Python SDK.
 
----
+11. **FMP pre-screening is optional.** If `FMP_API_KEY` is not set or `fmp_screener.enabled` is false on the strategy, Stage 0 is skipped entirely. The pipeline works fine without it.
 
-## Strategy System
+12. **Multi-timeframe analysis runs concurrently.** Claude gets primary + additional + short timeframes all at once via `asyncio.gather`. GPT receives all timeframe analyses grouped by ticker.
 
-Strategies are the core configuration unit. A strategy defines:
-- How Perplexity screens (prompt, constraints, max tickers)
-- How Claude analyzes charts (indicators, timeframe, focus)
-- How Gemini reads news (recency window, scope)
-- How GPT decides (trading style, risk params, debate toggle)
-
-Users create strategies from templates. Templates are stored in `templates/strategies.json` and loaded on first run.
-
-When implementing strategy-related features, remember that the strategy config drives prompt construction at every stage. The prompt modules in `pipeline/prompts/` all accept a `StrategyConfig` parameter.
-
----
-
-## Self-Learning Loop
-
-The reflection engine (`services/reflection.py`) queries `outcomes` and `decisions` tables, computes performance metrics, and generates two text blobs:
-1. A human-readable summary for the Insights view
-2. A GPT injection prompt that gets prepended to the judge system prompt
-
-The injection prompt is critical — it's how the system calibrates over time. It should contain concrete stats (win rates, confidence calibration, sector performance) not vague advice.
-
-Reflections are triggered manually or after N outcome entries (configurable in settings).
+13. **TypeScript types must mirror Pydantic models.** The `types/index.ts` file must stay in sync with `pipeline/schemas.py`. Use the schema-sync skill when modifying either file.
 
 ---
 
@@ -512,7 +894,8 @@ Reflections are triggered manually or after N outcome entries (configurable in s
 
 1. Add the template JSON to `templates/strategies.json`
 2. Set `is_template: true` in the strategy object
-3. The template will appear in the TemplateSelector component automatically
+3. Include `fmp_screener` config (set `enabled: false` if not needed)
+4. The template will appear in the TemplateSelector component automatically
 
 ### Changing a prompt
 
@@ -529,3 +912,26 @@ Reflections are triggered manually or after N outcome entries (configurable in s
 4. Add a corresponding prompt file in `pipeline/prompts/`
 5. Add API endpoints if the stage needs direct access
 6. Update the frontend detail view to display the new stage's output
+7. Add the corresponding TypeScript interfaces in `types/index.ts`
+
+### Adding a new API endpoint
+
+1. Add the route handler in the appropriate `api/*.py` router
+2. Use `CurrentUser = Annotated[str, Depends(get_current_user)]` for auth
+3. Define request/response Pydantic models
+4. Add the corresponding method to the frontend `api/client.ts`
+
+---
+
+## Known Gaps / Future Work
+
+- **`docs/ARCHITECTURE.md`** is heavily outdated — still describes Tauri desktop shell, SQLite, sidecar process. Needs full rewrite for cloud architecture.
+- **`docs/PRD.md`** tech stack section is outdated — references Tauri 2.x, SQLite, PyInstaller. Core requirements are still valid.
+- **`chart_images` table** exists in schema but is unused in code — chart paths are stored in stage_outputs. May be vestigial.
+- **No strategy update/delete endpoints** — only list, get, and create exist.
+- **No decisions/outcomes API** — needed for Phase 5 self-learning loop.
+- **Insights view is a stub** — "Coming in Phase 5".
+- **No test infrastructure** — zero test files anywhere in the project.
+- **`TradingViewWidget` component** — fully built with indicator mapping but not rendered in any view.
+- **`App.css`** — leftover Vite template styles, dead code.
+- **`tailwind-merge`** — installed as dependency but not imported by any component.
