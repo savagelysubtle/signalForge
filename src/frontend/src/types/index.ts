@@ -176,6 +176,7 @@ export interface RiskParams {
 
 export interface FmpScreenerConfig {
   enabled: boolean;
+  is_crypto: boolean;
   country: string | null;
   exchange: string | null;
   sector: string | null;

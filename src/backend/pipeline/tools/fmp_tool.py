@@ -1,8 +1,8 @@
-"""FMP stock screener tool definition for Perplexity Agent API.
+"""FMP screener tool definition for Perplexity Agent API.
 
 Defines the function-calling tool schema that Perplexity uses to
-dynamically invoke the FMP screener, plus the execution handler
-that runs the actual API call and formats the result.
+dynamically invoke the FMP screener (stocks or crypto), plus the
+execution handler that runs the actual API call and formats the result.
 """
 
 from __future__ import annotations
@@ -19,33 +19,42 @@ FMP_TOOL_DEFINITION: dict[str, Any] = {
     "type": "function",
     "name": "screen_stocks",
     "description": (
-        "Screen stocks using the Financial Modeling Prep (FMP) API. "
-        "Returns a list of stocks matching the given financial criteria. "
-        "Use this to find stocks by country, exchange, sector, market cap, "
-        "volume, price range, and beta. "
+        "Screen stocks or cryptocurrencies using the Financial Modeling Prep "
+        "(FMP) API. Returns a list of assets matching the given criteria. "
+        "For stocks: filter by country, exchange, sector, market cap, volume, "
+        "price range, and beta. For crypto: set is_crypto=true and filter by "
+        "market cap, volume, and price range. "
         "Useful when the pre-screened candidates don't match the strategy "
-        "requirements well, or when you want to explore a different universe "
-        "of stocks. Each call counts against the FMP rate limit so use "
-        "judiciously — prefer refining parameters over making many calls."
+        "requirements well, or when you want to explore a different universe. "
+        "Each call counts against the FMP rate limit so use judiciously — "
+        "prefer refining parameters over making many calls."
     ),
     "parameters": {
         "type": "object",
         "properties": {
+            "is_crypto": {
+                "type": "boolean",
+                "description": (
+                    "Set to true to screen cryptocurrencies instead of stocks. "
+                    "When true, only market_cap_min/max, volume_min, price_min/max, "
+                    "and limit are used — stock-specific filters are ignored."
+                ),
+            },
             "country": {
                 "type": "string",
-                "description": "Country code (e.g. 'CA' for Canada, 'US' for USA)",
+                "description": "Country code (e.g. 'CA' for Canada, 'US' for USA). Stocks only.",
             },
             "exchange": {
                 "type": "string",
-                "description": "Exchange name (e.g. 'TSX', 'NASDAQ', 'NYSE')",
+                "description": "Exchange name (e.g. 'TSX', 'NASDAQ', 'NYSE'). Stocks only.",
             },
             "sector": {
                 "type": "string",
-                "description": "Sector name (e.g. 'Technology', 'Energy', 'Healthcare')",
+                "description": "Sector name (e.g. 'Technology', 'Energy'). Stocks only.",
             },
             "industry": {
                 "type": "string",
-                "description": "Industry name (e.g. 'Consumer Electronics', 'Oil & Gas')",
+                "description": "Industry name (e.g. 'Consumer Electronics'). Stocks only.",
             },
             "market_cap_min": {
                 "type": "integer",
@@ -61,19 +70,19 @@ FMP_TOOL_DEFINITION: dict[str, Any] = {
             },
             "price_min": {
                 "type": "number",
-                "description": "Minimum stock price in USD (e.g. 5.0 to filter penny stocks)",
+                "description": "Minimum price in USD (e.g. 5.0 to filter penny stocks)",
             },
             "price_max": {
                 "type": "number",
-                "description": "Maximum stock price in USD",
+                "description": "Maximum price in USD",
             },
             "beta_min": {
                 "type": "number",
-                "description": "Minimum beta (volatility relative to market)",
+                "description": "Minimum beta (volatility relative to market). Stocks only.",
             },
             "beta_max": {
                 "type": "number",
-                "description": "Maximum beta",
+                "description": "Maximum beta. Stocks only.",
             },
             "limit": {
                 "type": "integer",
@@ -100,7 +109,9 @@ async def execute_fmp_tool(arguments: dict[str, Any]) -> str:
         ``function_call_output`` sent back to Perplexity.
     """
     try:
+        is_crypto = arguments.get("is_crypto", False)
         results = await screen_stocks_from_params(
+            is_crypto=is_crypto,
             country=arguments.get("country"),
             exchange=arguments.get("exchange"),
             sector=arguments.get("sector"),
@@ -114,7 +125,8 @@ async def execute_fmp_tool(arguments: dict[str, Any]) -> str:
             beta_max=arguments.get("beta_max"),
             limit=arguments.get("limit", 50),
         )
-        logger.info("FMP tool call returned %d stocks", len(results))
+        asset_type = "crypto" if is_crypto else "stocks"
+        logger.info("FMP tool call returned %d %s", len(results), asset_type)
         return json.dumps(results[:30], default=str)
     except Exception as exc:
         logger.warning("FMP tool call failed: %s", exc)

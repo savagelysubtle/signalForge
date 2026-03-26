@@ -188,7 +188,7 @@ def _extract_citations(output_items: list) -> list[str]:
     seen: set[str] = set()
     for item in output_items:
         if getattr(item, "type", None) == "search_results":
-            for result in getattr(item, "results", []):
+            for result in getattr(item, "results", None) or []:
                 url = getattr(result, "url", "")
                 if url and url not in seen:
                     urls.append(url)
@@ -208,7 +208,7 @@ def _extract_text(output_items: list) -> str:
     parts: list[str] = []
     for item in output_items:
         if getattr(item, "type", None) == "message":
-            for content_part in getattr(item, "content", []):
+            for content_part in getattr(item, "content", None) or []:
                 text = getattr(content_part, "text", "")
                 if text:
                     parts.append(text)

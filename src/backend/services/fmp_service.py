@@ -1,18 +1,19 @@
-"""Financial Modeling Prep (FMP) stock screener service.
+"""Financial Modeling Prep (FMP) screener service for stocks and crypto.
 
 Thin async wrapper around the FMP ``/stable/`` API using ``httpx``.
-Provides structured screening, ratio enrichment, and profile lookup
-so the pipeline can pre-filter stocks before Perplexity analysis.
 
-The screener itself only supports basic filters (market cap, volume,
-sector, country, exchange). Financial-ratio filters (P/E, ROE, etc.)
-require a two-step workflow: screen first, then fetch ``ratios-ttm``
-per ticker and filter client-side.
+**Stocks:** ``/stable/company-screener`` with optional ``ratios-ttm``
+enrichment and client-side ratio post-filters.
+
+**Crypto:** FMP has no crypto screener endpoint, so we combine
+``/stable/cryptocurrency-list`` + ``/stable/batch-crypto-quotes``
+and filter client-side by market cap, volume, and price.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from typing import Any
 
@@ -83,6 +84,35 @@ class FmpKeyMetrics(BaseModel):
     peRatioTTM: float | None = None
     enterpriseValueOverEBITDATTM: float | None = None
     revenueGrowthTTM: float | None = None  # May not be in key-metrics-ttm
+
+
+class FmpCryptoListItem(BaseModel):
+    """Single item from the FMP cryptocurrency list endpoint."""
+
+    symbol: str
+    name: str = ""
+    exchange: str = ""
+    exchangeShortName: str = ""
+
+
+class FmpCryptoQuote(BaseModel):
+    """Quote data for a single cryptocurrency from FMP."""
+
+    symbol: str
+    name: str = ""
+    price: float | None = None
+    changesPercentage: float | None = None
+    change: float | None = None
+    dayLow: float | None = None
+    dayHigh: float | None = None
+    yearLow: float | None = None
+    yearHigh: float | None = None
+    marketCap: int | None = None
+    volume: int | None = None
+    avgVolume: int | None = None
+    exchange: str = ""
+    open: float | None = None
+    previousClose: float | None = None
 
 
 class FmpEnrichedStock(BaseModel):
@@ -333,23 +363,125 @@ def _merge_enrichment(
     return stock
 
 
+async def fetch_crypto_list() -> list[FmpCryptoListItem]:
+    """Fetch the full cryptocurrency list from FMP.
+
+    Returns:
+        List of all tradable cryptos (~4,500+). No server-side filtering.
+    """
+    data = await _fmp_get("cryptocurrency-list")
+    if not isinstance(data, list):
+        logger.warning("FMP crypto list returned non-list response: %s", type(data))
+        return []
+    results = []
+    for item in data:
+        with contextlib.suppress(Exception):
+            results.append(FmpCryptoListItem.model_validate(item))
+    return results
+
+
+async def fetch_batch_crypto_quotes() -> list[FmpCryptoQuote]:
+    """Fetch real-time quotes for all cryptocurrencies in a single call.
+
+    Returns:
+        List of crypto quotes with price, volume, market cap.
+    """
+    data = await _fmp_get("batch-crypto-quotes")
+    if not isinstance(data, list):
+        logger.warning("FMP batch crypto quotes returned non-list: %s", type(data))
+        return []
+    results = []
+    for item in data:
+        with contextlib.suppress(Exception):
+            results.append(FmpCryptoQuote.model_validate(item))
+    return results
+
+
+async def screen_crypto(config: FmpScreenerConfig) -> list[FmpEnrichedStock]:
+    """Screen cryptocurrencies using FMP list + batch quotes with client-side filtering.
+
+    FMP has no crypto screener endpoint, so this fetches all crypto
+    quotes and filters by market_cap_min, volume_min, price_min, etc.
+
+    Args:
+        config: Screener configuration with filter thresholds.
+
+    Returns:
+        List of enriched stocks representing crypto assets.
+    """
+    quotes = await fetch_batch_crypto_quotes()
+    logger.info("FMP batch crypto quotes returned %d results", len(quotes))
+
+    if not quotes:
+        return []
+
+    enriched: list[FmpEnrichedStock] = []
+    for q in quotes:
+        if config.market_cap_min is not None and (
+            q.marketCap is None or q.marketCap < config.market_cap_min
+        ):
+            continue
+        if config.market_cap_max is not None and (
+            q.marketCap is not None and q.marketCap > config.market_cap_max
+        ):
+            continue
+        if config.volume_min is not None and (q.volume is None or q.volume < config.volume_min):
+            continue
+        if config.price_min is not None and (q.price is None or q.price < config.price_min):
+            continue
+        if config.price_max is not None and (q.price is not None and q.price > config.price_max):
+            continue
+
+        # Strip "USD" suffix to get the trading symbol (BTCUSD → BTC)
+        ticker = q.symbol.removesuffix("USD") if q.symbol.endswith("USD") else q.symbol
+
+        enriched.append(
+            FmpEnrichedStock(
+                symbol=ticker,
+                company_name=q.name,
+                sector="Crypto",
+                exchange="CRYPTO",
+                market_cap=q.marketCap,
+                price=q.price,
+                volume=q.volume,
+            )
+        )
+
+    # Sort by market cap descending, take top N
+    enriched.sort(key=lambda s: s.market_cap or 0, reverse=True)
+    limited = enriched[: config.limit]
+    logger.info(
+        "FMP crypto screening: %d → %d after filters (limit %d)",
+        len(quotes),
+        len(limited),
+        config.limit,
+    )
+    return limited
+
+
 async def screen_and_enrich(
     config: FmpScreenerConfig,
 ) -> list[FmpEnrichedStock]:
-    """Screen stocks via FMP and optionally enrich with financial ratios.
+    """Screen stocks or crypto via FMP and optionally enrich with ratios.
 
-    Two-step workflow:
-    1. Call ``/stable/company-screener`` with the config's filters.
-    2. For each result, concurrently fetch ``ratios-ttm`` and
-       ``key-metrics-ttm`` for enrichment (if ``enrich_with_ratios``).
-    3. Apply ratio-based post-filters (P/E range, min ROE, etc.).
+    For stocks (``is_crypto=False``):
+      1. Call ``/stable/company-screener`` with the config's filters.
+      2. Concurrently fetch ``ratios-ttm`` and ``key-metrics-ttm``.
+      3. Apply ratio-based post-filters (P/E range, min ROE, etc.).
+
+    For crypto (``is_crypto=True``):
+      Fetch all crypto quotes and filter client-side by market cap,
+      volume, and price. No ratio enrichment.
 
     Args:
         config: FMP screener configuration from the strategy.
 
     Returns:
-        List of enriched stocks that pass all filters.
+        List of enriched stocks/crypto that pass all filters.
     """
+    if config.is_crypto:
+        return await screen_crypto(config)
+
     screener_results = await screen_stocks(config)
     logger.info("FMP screener returned %d raw results", len(screener_results))
 
@@ -387,6 +519,7 @@ async def screen_and_enrich(
 
 async def screen_stocks_from_params(
     *,
+    is_crypto: bool = False,
     country: str | None = None,
     exchange: str | None = None,
     sector: str | None = None,
@@ -400,31 +533,34 @@ async def screen_stocks_from_params(
     beta_max: float | None = None,
     limit: int = 50,
 ) -> list[dict[str, Any]]:
-    """Screen stocks from raw parameters (used by Perplexity tool calls).
+    """Screen stocks or crypto from raw parameters (used by Perplexity tool calls).
 
     This function accepts individual keyword arguments instead of a config
     object, making it suitable for dynamic tool-call execution where
     Perplexity constructs the parameters at runtime.
 
     Args:
-        country: Country code filter (e.g. ``"CA"``, ``"US"``).
-        exchange: Exchange filter (e.g. ``"TSX"``, ``"NASDAQ"``).
-        sector: Sector filter (e.g. ``"Technology"``).
-        industry: Industry filter.
+        is_crypto: If ``True``, screen crypto via batch quotes instead
+            of the stock-only company-screener endpoint.
+        country: Country code filter (e.g. ``"CA"``, ``"US"``). Stocks only.
+        exchange: Exchange filter (e.g. ``"TSX"``, ``"NASDAQ"``). Stocks only.
+        sector: Sector filter (e.g. ``"Technology"``). Stocks only.
+        industry: Industry filter. Stocks only.
         market_cap_min: Minimum market cap.
         market_cap_max: Maximum market cap.
-        price_min: Minimum stock price.
-        price_max: Maximum stock price.
+        price_min: Minimum price.
+        price_max: Maximum price.
         volume_min: Minimum daily volume.
-        beta_min: Minimum beta.
-        beta_max: Maximum beta.
+        beta_min: Minimum beta. Stocks only.
+        beta_max: Maximum beta. Stocks only.
         limit: Maximum results to return.
 
     Returns:
-        List of dicts with stock data (serialisable for tool-call output).
+        List of dicts with asset data (serialisable for tool-call output).
     """
     config = FmpScreenerConfig(
         enabled=True,
+        is_crypto=is_crypto,
         country=country,
         exchange=exchange,
         sector=sector,
@@ -439,5 +575,8 @@ async def screen_stocks_from_params(
         limit=limit,
         enrich_with_ratios=False,
     )
-    results = await screen_stocks(config)
-    return [r.model_dump() for r in results]
+    if is_crypto:
+        results = await screen_crypto(config)
+        return [r.model_dump() for r in results]
+    stock_results = await screen_stocks(config)
+    return [r.model_dump() for r in stock_results]

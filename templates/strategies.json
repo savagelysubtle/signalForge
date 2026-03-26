@@ -131,7 +131,15 @@
     "risk_params": {"max_position_pct": 3.0, "min_risk_reward": 2.5, "max_portfolio_risk_pct": 10.0},
     "enable_debate": true,
     "is_template": true,
-    "fmp_screener": null
+    "fmp_screener": {
+      "enabled": true,
+      "is_crypto": true,
+      "volume_min": 1000000,
+      "market_cap_min": 100000000,
+      "is_actively_trading": true,
+      "limit": 80,
+      "enrich_with_ratios": false
+    }
   },
   {
     "name": "Crypto Intraday Scalp",
@@ -152,7 +160,15 @@
     "risk_params": {"max_position_pct": 2.0, "min_risk_reward": 2.0, "max_portfolio_risk_pct": 8.0},
     "enable_debate": false,
     "is_template": true,
-    "fmp_screener": null
+    "fmp_screener": {
+      "enabled": true,
+      "is_crypto": true,
+      "volume_min": 5000000,
+      "market_cap_min": 500000000,
+      "is_actively_trading": true,
+      "limit": 50,
+      "enrich_with_ratios": false
+    }
   },
   {
     "name": "Intraday Scalp",

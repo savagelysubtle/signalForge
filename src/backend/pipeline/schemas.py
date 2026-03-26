@@ -216,11 +216,17 @@ class FmpScreenerConfig(BaseModel):
     and ratio-based post-filters (applied client-side after fetching
     ratios-ttm). When ``enabled`` is ``False`` (or the field is ``None``
     on StrategyConfig), the FMP pre-screening stage is skipped entirely.
+
+    For crypto strategies, set ``is_crypto=True``. This routes to a
+    different FMP workflow: ``/stable/cryptocurrency-list`` +
+    ``/stable/batch-crypto-quotes`` with client-side filtering instead
+    of the stock-only ``/stable/company-screener`` endpoint.
     """
 
     enabled: bool = False
+    is_crypto: bool = False
 
-    # API-level screener filters
+    # API-level screener filters (stocks only — ignored when is_crypto=True)
     country: str | None = None
     exchange: str | None = None
     sector: str | None = None
@@ -236,7 +242,7 @@ class FmpScreenerConfig(BaseModel):
     is_etf: bool = False
     limit: int = 50
 
-    # Ratio-based post-filters (applied after ratios-ttm fetch)
+    # Ratio-based post-filters (applied after ratios-ttm fetch, stocks only)
     pe_max: float | None = None
     pe_min: float | None = None
     roe_min: float | None = None
