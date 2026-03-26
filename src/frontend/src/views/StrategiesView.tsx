@@ -7,7 +7,7 @@ export function StrategiesView() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-full text-text-secondary">
-        <Loader2 className="w-8 h-8 animate-spin text-accent-blue" />
+        <Loader2 className="w-8 h-8 animate-spin text-accent-lime" />
       </div>
     );
   }

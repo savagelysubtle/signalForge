@@ -160,7 +160,7 @@ export function SynthesisTab({ recommendation }: SynthesisTabProps) {
           <ul className="space-y-1.5">
             {recommendation.key_factors.map((factor, i) => (
               <li key={i} className="flex items-start gap-2 text-sm text-text-primary">
-                <span className="mt-1.5 w-1.5 h-1.5 rounded-full shrink-0 bg-accent-blue" />
+                <span className="mt-1.5 w-1.5 h-1.5 rounded-full shrink-0 bg-accent-cyan" />
                 {factor}
               </li>
             ))}

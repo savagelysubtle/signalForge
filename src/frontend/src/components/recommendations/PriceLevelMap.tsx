@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { ChartAnalysis, Recommendation, TechnicalLevel } from '../../types';
+import type { ChartAnalysis, Recommendation } from '../../types';
 import clsx from 'clsx';
 
 interface PriceLevelMapProps {
@@ -17,8 +17,8 @@ interface PriceLine {
 const LINE_STYLES: Record<PriceLine['type'], { stroke: string; opacity: number; dashArray?: string }> = {
   support: { stroke: '#22c55e', opacity: 1 },
   resistance: { stroke: '#ef4444', opacity: 1 },
-  current: { stroke: '#e2e8f0', opacity: 1 },
-  entry: { stroke: '#3b82f6', opacity: 0.9, dashArray: '6 4' },
+  current: { stroke: '#525252', opacity: 1 },
+  entry: { stroke: '#22d3ee', opacity: 0.9, dashArray: '6 4' },
   stop: { stroke: '#ef4444', opacity: 0.9, dashArray: '6 4' },
   target: { stroke: '#22c55e', opacity: 0.9, dashArray: '6 4' },
 };
@@ -40,7 +40,7 @@ const TREND_COLORS: Record<string, string> = {
   bullish: 'text-accent-green',
   bearish: 'text-accent-red',
   neutral: 'text-accent-yellow',
-  transitioning: 'text-accent-blue',
+  transitioning: 'text-accent-cyan',
 };
 
 function buildPriceLines(analysis: ChartAnalysis, recommendation: Recommendation | null): PriceLine[] {
@@ -112,7 +112,7 @@ function PriceLineRow({
         width={line.label.length * 6.5 + 12}
         height={18}
         rx={4}
-        fill="rgba(15, 15, 20, 0.85)"
+        fill="rgba(0, 0, 0, 0.85)"
         stroke={style.stroke}
         strokeWidth={0.5}
         opacity={effectiveOpacity}
@@ -135,7 +135,7 @@ function PriceLineRow({
         width={line.price.toFixed(2).length * 7 + 12}
         height={18}
         rx={4}
-        fill="rgba(15, 15, 20, 0.85)"
+        fill="rgba(0, 0, 0, 0.85)"
         stroke={style.stroke}
         strokeWidth={0.5}
         opacity={effectiveOpacity}
@@ -159,7 +159,7 @@ function PriceLineRow({
 export function PriceLevelMap({ analysis, recommendation }: PriceLevelMapProps) {
   const lines = useMemo(() => buildPriceLines(analysis, recommendation), [analysis, recommendation]);
 
-  const { minPrice, maxPrice, priceRange } = useMemo(() => {
+  const { minPrice, maxPrice } = useMemo(() => {
     if (lines.length === 0) return { minPrice: 0, maxPrice: 100, priceRange: 100 };
     const prices = lines.map(l => l.price);
     const min = Math.min(...prices);
@@ -235,7 +235,7 @@ export function PriceLevelMap({ analysis, recommendation }: PriceLevelMapProps) 
           {analysis.patterns_detected.map((pattern, i) => (
             <span
               key={i}
-              className="text-[10px] px-2 py-0.5 rounded bg-accent-blue/10 text-accent-blue border border-accent-blue/20"
+              className="text-[10px] px-2 py-0.5 rounded bg-accent-cyan/10 text-accent-cyan border border-accent-cyan/20"
             >
               {pattern}
             </span>
@@ -256,7 +256,7 @@ export function PriceLevelMap({ analysis, recommendation }: PriceLevelMapProps) 
           <defs>
             <linearGradient id="bgGradient" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor="#ef4444" stopOpacity="0.04" />
-              <stop offset="50%" stopColor="#1e1e2e" stopOpacity="0.02" />
+              <stop offset="50%" stopColor="#0a0a0a" stopOpacity="0.02" />
               <stop offset="100%" stopColor="#22c55e" stopOpacity="0.04" />
             </linearGradient>
           </defs>
@@ -327,16 +327,16 @@ export function PriceLevelMap({ analysis, recommendation }: PriceLevelMapProps) 
       {/* Footer legend */}
       <div className="flex items-center justify-center gap-4 px-4 py-2 border-t border-border shrink-0 text-[10px] text-text-secondary">
         <span className="flex items-center gap-1">
-          <span className="w-3 h-0.5 bg-[#22c55e] inline-block rounded" /> Support
+          <span className="w-3 h-0.5 bg-accent-green inline-block rounded" /> Support
         </span>
         <span className="flex items-center gap-1">
-          <span className="w-3 h-0.5 bg-[#ef4444] inline-block rounded" /> Resistance
+          <span className="w-3 h-0.5 bg-accent-red inline-block rounded" /> Resistance
         </span>
         <span className="flex items-center gap-1">
-          <span className="w-3 h-0.5 bg-[#e2e8f0] inline-block rounded" /> Current
+          <span className="w-3 h-0.5 bg-[#525252] inline-block rounded" /> Current
         </span>
         <span className="flex items-center gap-1">
-          <span className="w-3 h-0.5 border-t border-dashed border-[#3b82f6] inline-block" /> Trade
+          <span className="w-3 h-0.5 border-t border-dashed border-accent-cyan inline-block" /> Trade
         </span>
       </div>
     </div>

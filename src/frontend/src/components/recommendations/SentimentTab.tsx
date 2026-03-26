@@ -20,7 +20,7 @@ const IMPACT_COLORS: Record<string, string> = {
 };
 
 const SIGNIFICANCE_STYLES: Record<string, string> = {
-  high: 'bg-accent-blue/15 text-accent-blue',
+  high: 'bg-accent-cyan/15 text-accent-cyan',
   medium: 'bg-bg-tertiary text-text-secondary',
   low: 'bg-bg-tertiary text-text-secondary opacity-70',
 };
@@ -51,7 +51,7 @@ function CatalystRow({ catalyst }: { catalyst: NewsCatalyst }) {
             href={catalyst.url}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-sm text-accent-blue hover:underline leading-snug"
+            className="text-sm text-accent-cyan hover:underline leading-snug"
           >
             {catalyst.headline}
           </a>

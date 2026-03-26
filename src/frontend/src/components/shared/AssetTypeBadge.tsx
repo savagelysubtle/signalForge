@@ -6,7 +6,7 @@ interface AssetTypeBadgeProps {
 
 export function AssetTypeBadge({ type }: AssetTypeBadgeProps) {
   const styles = {
-    stock: 'bg-accent-blue/10 text-accent-blue border-accent-blue/20',
+    stock: 'bg-accent-cyan/10 text-accent-cyan border-accent-cyan/20',
     etf: 'bg-accent-green/10 text-accent-green border-accent-green/20',
     crypto: 'bg-accent-yellow/10 text-accent-yellow border-accent-yellow/20',
   };

@@ -37,7 +37,7 @@ export function TickerCardList({
               className={clsx(
                 "text-[10px] font-bold px-1 py-1.5 rounded transition-colors leading-tight",
                 selectedTicker === ticker.ticker
-                  ? "bg-accent-blue/20 text-accent-blue"
+                  ? "bg-accent-lime/20 text-accent-lime"
                   : "text-text-secondary hover:text-text-primary hover:bg-bg-tertiary"
               )}
             >

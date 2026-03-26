@@ -16,7 +16,7 @@ export function TickerCard({ data, isSelected, onClick }: TickerCardProps) {
       className={clsx(
         "p-4 border rounded-lg cursor-pointer transition-all",
         isSelected 
-          ? "bg-bg-tertiary border-accent-blue" 
+          ? "bg-bg-tertiary border-accent-lime" 
           : "bg-bg-secondary border-border hover:border-text-secondary hover:bg-bg-tertiary/50"
       )}
     >

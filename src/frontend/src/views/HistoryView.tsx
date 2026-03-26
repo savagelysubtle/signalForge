@@ -15,7 +15,7 @@ export function HistoryView() {
   if (isLoadingHistory) {
     return (
       <div className="flex items-center justify-center h-full text-text-secondary">
-        <Loader2 className="w-8 h-8 animate-spin text-accent-blue" />
+        <Loader2 className="w-8 h-8 animate-spin text-accent-lime" />
       </div>
     );
   }
@@ -56,7 +56,7 @@ export function HistoryView() {
                   {run.tickers && run.tickers.length > 0 ? (
                     <div className="flex flex-wrap gap-1">
                       {run.tickers.slice(0, 5).map(t => (
-                        <span key={t} className="px-1.5 py-0.5 rounded bg-accent-blue/10 text-accent-blue text-xs font-mono">
+                        <span key={t} className="px-1.5 py-0.5 rounded bg-accent-cyan/10 text-accent-cyan text-xs font-mono">
                           {t}
                         </span>
                       ))}
@@ -77,7 +77,7 @@ export function HistoryView() {
                     run.status === 'completed' && "bg-accent-green/10 text-accent-green",
                     run.status === 'failed' && "bg-accent-red/10 text-accent-red",
                     run.status === 'partial' && "bg-accent-yellow/10 text-accent-yellow",
-                    run.status === 'running' && "bg-accent-blue/10 text-accent-blue"
+                    run.status === 'running' && "bg-accent-lime/10 text-accent-lime"
                   )}>
                     {run.status}
                   </span>

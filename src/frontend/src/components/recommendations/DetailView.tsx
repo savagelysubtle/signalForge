@@ -46,7 +46,7 @@ export function DetailView({ tickerData, fullResult }: DetailViewProps) {
             className={clsx(
               "px-4 py-3 text-sm font-medium border-b-2 transition-colors",
               activeTab === tab.id 
-                ? "border-accent-blue text-accent-blue" 
+                ? "border-accent-lime text-accent-lime" 
                 : "border-transparent text-text-secondary hover:text-text-primary"
             )}
           >
