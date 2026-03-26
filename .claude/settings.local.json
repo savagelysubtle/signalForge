@@ -46,10 +46,8 @@
       "Bash(powershell.exe -Command \"Stop-Process -Id 23032 -Force; Stop-Process -Id 9564 -Force; Stop-Process -Id 28112 -Force; Stop-Process -Id 19868 -Force; Stop-Process -Id 25892 -Force\")",
       "WebFetch(domain:doc.chart-img.com)",
       "WebSearch",
-<<<<<<< HEAD
       "Bash(xargs grep:*)",
-      "Bash(find /d/Coding/signalForge -name *.sql -o -name *migration* -o -name *schema*)"
-=======
+      "Bash(find /d/Coding/signalForge -name *.sql -o -name *migration* -o -name *schema*)",
       "Bash(bun run:*)",
       "Bash(tasklist:*)",
       "Bash(powershell -Command \"Get-Process -Id 9736,25892,28112,19868,23032,9564 2>\\\\$null | Select-Object Id,ProcessName | Format-Table -AutoSize\")",
@@ -75,7 +73,6 @@
       "Bash(winget install:*)",
       "Read(//c/Program Files/PowerShell/7/**)",
       "Read(//c/Program Files/PowerShell/**)"
->>>>>>> 369280d1888719c63684e29e4d66b9bed56421b7
     ]
   }
 }
