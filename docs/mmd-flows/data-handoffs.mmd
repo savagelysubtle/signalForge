@@ -1,0 +1,111 @@
+%% SignalForge — Data Handoff Sequence
+%% Shows the sequential and parallel execution flow with exact
+%% Pydantic schema types passed between each stage.
+
+sequenceDiagram
+    participant User
+    participant Orchestrator
+    participant FMP as Stage 0: FMP
+    participant Perplexity as Stage 1: Perplexity
+    participant Gemini as Stage 2: Gemini
+    participant Claude as Stage 3: Claude
+    participant GPT_Bull as Stage 4: GPT Bull
+    participant GPT_Bear as Stage 4: GPT Bear
+    participant GPT_Judge as Stage 4: GPT Judge
+    participant ChartImg as Stage 4.5: Annotate
+    participant DB as PostgreSQL
+
+    User->>Orchestrator: run_pipeline(strategy_id, tickers?, prompt?)
+    Orchestrator->>DB: INSERT pipeline_runs (status=running)
+
+    Note over Orchestrator,FMP: Stage 0 — Quantitative Pre-Screening
+
+    Orchestrator->>FMP: screen_and_enrich(FmpScreenerConfig)
+    activate FMP
+    FMP->>FMP: /stable/company-screener
+    FMP->>FMP: Bulk fetch (5 parallel calls)
+    FMP->>FMP: Per-ticker extended enrichment
+    FMP->>FMP: Post-filters + Composite scoring
+    FMP->>FMP: Sector cap + Earnings filter
+    FMP-->>Orchestrator: FmpEnrichedStock[] (scored, ranked)
+    deactivate FMP
+
+    Note over Orchestrator,Perplexity: Stage 1 — Web Research + Selection
+
+    Orchestrator->>Perplexity: run_discovery(config, fmp_candidates)
+    activate Perplexity
+    Perplexity->>Perplexity: Format FMP context + strategy prompt
+    Perplexity->>Perplexity: Agent API (web search + FMP tool)
+    Perplexity->>Perplexity: Validate ScreeningResult (Pydantic)
+    Perplexity-->>Orchestrator: ScreeningResult (tickers[], news_urls[], citations[])
+    deactivate Perplexity
+
+    Orchestrator->>DB: Save stage_output (perplexity)
+
+    Note over Orchestrator,Gemini: Stage 2 — News Sentiment (concurrent per ticker)
+
+    par For each ticker
+        Orchestrator->>Gemini: run_sentiment(ticker, news_urls, config)
+        activate Gemini
+        Gemini->>Gemini: Google Search grounding + provided URLs
+        Gemini->>Gemini: Validate SentimentAnalysis (Pydantic)
+        Gemini-->>Orchestrator: SentimentAnalysis
+        deactivate Gemini
+    end
+
+    Orchestrator->>DB: Save stage_outputs (gemini, per ticker)
+
+    Note over Orchestrator,Claude: Stage 3 — Chart Analysis (concurrent per ticker x timeframe)
+
+    par For each ticker
+        Orchestrator->>ChartImg: fetch_chart_image(ticker, D)
+        ChartImg-->>Claude: PNG (primary timeframe)
+        Orchestrator->>ChartImg: fetch_chart_image(ticker, 4H)
+        ChartImg-->>Claude: PNG (secondary timeframe)
+        Orchestrator->>Claude: run_chart_analysis(image, sentiment, config)
+        activate Claude
+        Claude->>Claude: Vision API reads chart + news context
+        Claude->>Claude: Validate ChartAnalysis (Pydantic)
+        Claude-->>Orchestrator: ChartAnalysis (trend, levels, patterns, bias)
+        deactivate Claude
+    end
+
+    Orchestrator->>DB: Save stage_outputs (claude, per ticker)
+
+    Note over Orchestrator,GPT_Judge: Stage 4 — Debate + Synthesis
+
+    par Bull and Bear run simultaneously
+        Orchestrator->>GPT_Bull: _call_gpt_bull(screening, sentiment, charts)
+        activate GPT_Bull
+        GPT_Bull-->>Orchestrator: DebateCaseList (bull arguments per ticker)
+        deactivate GPT_Bull
+
+        Orchestrator->>GPT_Bear: _call_gpt_bear(screening, sentiment, charts)
+        activate GPT_Bear
+        GPT_Bear-->>Orchestrator: DebateCaseList (bear arguments per ticker)
+        deactivate GPT_Bear
+    end
+
+    Orchestrator->>DB: Save stage_outputs (gpt_bull, gpt_bear)
+
+    Orchestrator->>GPT_Judge: _call_gpt_judge(ALL data + debate + reflection)
+    activate GPT_Judge
+    GPT_Judge->>GPT_Judge: Weigh bull vs bear arguments
+    GPT_Judge->>GPT_Judge: Cross-reference technicals + sentiment
+    GPT_Judge->>GPT_Judge: Apply risk params + position sizing
+    GPT_Judge->>GPT_Judge: Validate RecommendationList (Pydantic)
+    GPT_Judge-->>Orchestrator: Recommendation[] (BUY/SELL/HOLD + trade params)
+    deactivate GPT_Judge
+
+    Orchestrator->>DB: Save recommendations + stage_output (gpt_judge)
+
+    Note over Orchestrator,ChartImg: Stage 4.5 — Annotated Charts (concurrent)
+
+    par For each ChartAnalysis
+        Orchestrator->>ChartImg: fetch_annotated_chart(levels, entry, stop, target)
+        ChartImg-->>Orchestrator: Annotated PNG URL
+    end
+
+    Orchestrator->>DB: Update stage_outputs with annotated_chart_path
+    Orchestrator->>DB: UPDATE pipeline_runs (status=completed)
+    Orchestrator-->>User: PipelineResult (all data + recommendations)

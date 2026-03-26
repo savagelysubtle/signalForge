@@ -243,20 +243,26 @@ def _distribute_citations(result: ScreeningResult, citations: list[str]) -> None
 
 
 def _format_fmp_context(candidates: list[FmpEnrichedStock]) -> str:
-    """Format FMP pre-screened candidates as text for inclusion in prompts.
+    """Format FMP pre-screened candidates as rich text for prompt injection.
+
+    Includes composite scores, insider activity, price momentum, analyst
+    consensus, quality scores, earnings dates, and relative volume when
+    available. Candidates are assumed to be sorted by composite score.
 
     Args:
-        candidates: Enriched stock data from FMP.
+        candidates: Enriched and scored stock data from FMP.
 
     Returns:
-        Formatted text block describing the candidates.
+        Formatted text block for inclusion in Perplexity prompts.
     """
     if not candidates:
         return ""
 
-    lines = ["Pre-screened candidates from FMP financial data:"]
+    lines = ["Pre-screened candidates from FMP (ranked by composite score):"]
     for s in candidates[:30]:
         parts = [f"- {s.symbol}: {s.company_name}"]
+        if s.composite_score is not None:
+            parts.append(f"Score {s.composite_score:.0f}/100")
         if s.price is not None:
             parts.append(f"${s.price:.2f}")
         if s.market_cap is not None:
@@ -266,14 +272,43 @@ def _format_fmp_context(candidates: list[FmpEnrichedStock]) -> str:
                 parts.append(f"MCap ${s.market_cap / 1_000_000:.0f}M")
         if s.volume is not None:
             parts.append(f"Vol {s.volume:,}")
+        if s.relative_volume is not None:
+            parts.append(f"RVOL {s.relative_volume:.1f}x")
         if s.sector:
             parts.append(f"[{s.sector}]")
         if s.pe_ratio is not None:
             parts.append(f"P/E {s.pe_ratio:.1f}")
+        if s.peg_ratio is not None:
+            parts.append(f"PEG {s.peg_ratio:.1f}")
+        if s.roe is not None:
+            parts.append(f"ROE {s.roe:.1f}%")
+        if s.insider_net_buys is not None and s.insider_net_buys > 0:
+            parts.append(f"Insider NET BUY ({s.insider_net_buys})")
+        elif s.insider_net_buys is not None and s.insider_net_buys < 0:
+            parts.append(f"Insider net sell ({s.insider_net_buys})")
+        if s.analyst_consensus:
+            parts.append(f"Analyst: {s.analyst_consensus}")
+        if s.analyst_target_upside is not None:
+            parts.append(f"Target upside {s.analyst_target_upside:+.0f}%")
+        if s.price_change_1d is not None:
+            parts.append(f"1D {s.price_change_1d:+.1f}%")
+        if s.price_change_1m is not None:
+            parts.append(f"1M {s.price_change_1m:+.1f}%")
+        if s.price_change_3m is not None:
+            parts.append(f"3M {s.price_change_3m:+.1f}%")
+        if s.piotroski_score is not None:
+            parts.append(f"Piotroski {s.piotroski_score}/9")
+        if s.earnings_date:
+            parts.append(f"Earnings {s.earnings_date}")
+        if s.earnings_beat_rate is not None:
+            parts.append(f"Beat rate {s.earnings_beat_rate:.0f}%")
         lines.append(" | ".join(parts))
 
     lines.append("")
     lines.append(
+        "These candidates are ranked by a multi-factor composite score combining "
+        "fundamental, momentum, sentiment, and quality signals. Insider buying, "
+        "analyst consensus, and price momentum are pre-validated from FMP data. "
         "Analyze these candidates and select the best matches for the strategy. "
         "You may also use the screen_stocks tool to refine screening with "
         "different parameters if the current candidates don't fit well."

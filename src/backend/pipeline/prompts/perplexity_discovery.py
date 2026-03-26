@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 from pipeline.schemas import StrategyConfig
 from utils.hashing import prompt_hash
 
-PROMPT_VERSION = "v12"
+PROMPT_VERSION = "v13"
 
 
 def _get_session_context() -> str:
@@ -53,13 +53,22 @@ cutoff — your search results ARE your data. If search results are sparse,
 return the best matches you found.
 
 If pre-screened candidates from FMP financial data are provided below, use
-them as your starting universe — analyze and rank them against the strategy
-criteria. You may also have access to a screen_stocks tool that calls the
-FMP API. Use it if the pre-screened candidates are a poor fit for the
-strategy and you need to search with different parameters (e.g. different
-sector, market cap range, or exchange). Prefer web search for qualitative
-analysis (news, analyst opinions) and the screen_stocks tool for
-quantitative filtering (market cap, volume, price ranges).
+them as your starting universe — they are ranked by a multi-factor composite
+score (0-100) combining fundamental, momentum, sentiment, and quality
+signals. The data includes verified metrics: insider trading activity
+(net buys/sells), analyst consensus and price target upside, price momentum
+(1D/1M/3M changes), Piotroski quality scores, relative volume, and
+upcoming earnings dates with historical beat rates where available.
+
+TRUST THE FMP DATA — these numbers come from verified financial databases,
+not web search. Use web search to supplement with qualitative context
+(recent news, catalysts, management commentary) rather than re-verifying
+the quantitative data already provided.
+
+You may also have access to a screen_stocks tool that calls the FMP API.
+Use it if the pre-screened candidates are a poor fit for the strategy and
+you need to search with different parameters (e.g. different sector, market
+cap range, or exchange).
 
 You must return ONLY valid JSON — no commentary outside the JSON structure.
 

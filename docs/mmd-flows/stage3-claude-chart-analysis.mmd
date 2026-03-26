@@ -1,0 +1,52 @@
+%% SignalForge — Stage 3: Claude Vision Chart Analysis
+%% Shows chart image generation via Chart-Img v2, concurrent
+%% multi-timeframe analysis per ticker, and how Gemini's news
+%% context is injected into Claude's chart reading prompt.
+
+flowchart TD
+    subgraph INPUTS["Inputs"]
+        TICKERS["Ticker list from Perplexity"]
+        SENTIMENT["SentimentAnalysis[]\nfrom Gemini"]
+        CONFIG["Strategy Config:\nchart_indicators,\nchart_timeframe,\nsecondary_timeframe,\nta_focus"]
+    end
+
+    TICKERS --> CHART_FETCH
+
+    subgraph CHART_FETCH["Chart Image Generation (per ticker x timeframe)"]
+        CHART_IMG["Chart-Img v2 API\n(POST /chart)\n\nGenerates TradingView\nscreenshot with:\n- Ticker symbol\n- Timeframe (D, 4H, W, etc.)\n- Indicators: RSI, MACD,\n  Volume, EMA_50, EMA_200\n- Dark theme"]
+        UPLOAD["Upload PNG to\nSupabase Storage\n(charts bucket)"]
+    end
+
+    CHART_FETCH --> PARALLEL
+
+    subgraph PARALLEL["Concurrent Analysis (per ticker)"]
+        direction TB
+        PRIMARY["Primary Timeframe (D)\nClaude Vision call"]
+        SECONDARY["Secondary Timeframe (4H)\nClaude Vision call\n(runs concurrently with primary)"]
+    end
+
+    subgraph CLAUDE_CALL["Claude Opus 4.6 Vision Call"]
+        PROMPT["build_chart_prompt()\n\nIncludes:\n- Chart image (base64 PNG)\n- Ticker + timeframe\n- Strategy TA focus\n- Indicator list\n- Gemini news context:\n  sentiment_score, label,\n  key catalysts, sector sentiment\n- JSON output format"]
+        VISION["Claude Vision API\n\nAnalyzes the chart image:\n1. Identifies trend direction\n2. Spots chart patterns\n3. Reads indicator values\n4. Identifies support/resistance\n5. Assesses volume profile\n6. Determines overall bias"]
+        VALIDATE["Pydantic Validation\n(ChartAnalysis schema)\nMax 2 retries"]
+    end
+
+    PARALLEL --> PROMPT --> VISION --> VALIDATE
+
+    VALIDATE -->|"Valid"| OUTPUT
+
+    subgraph OUTPUT["ChartAnalysis Output (per ticker per timeframe)"]
+        TREND["trend_direction: bullish/bearish/\nneutral/transitioning\ntrend_strength: strong/moderate/weak"]
+        LEVELS["key_levels: TechnicalLevel[]\n- price, type (support/resistance)\n- strength (strong/moderate/weak)"]
+        PATTERNS["patterns_detected:\ne.g. ascending triangle,\nbull flag, double bottom"]
+        INDICATORS["indicator_readings:\n- RSI: 62 bullish\n- MACD: crossover bullish\n- Volume: increasing bullish"]
+        BIAS["overall_bias:\nstrongly_bullish to strongly_bearish\nconfidence: high/medium/low"]
+        IMG["chart_image_path:\nSupabase CDN URL"]
+    end
+
+    OUTPUT -->|"Chart analysis +\nkey levels flow\nto GPT judge"| GPT["To Stage 4: GPT"]
+    OUTPUT -->|"Key levels used for\nannotated chart overlays"| ANNOT["To Stage 4.5: Annotations"]
+
+    subgraph DEGRADED["Degraded Mode"]
+        FAIL["If Claude fails:\n- GPT proceeds with\n  Perplexity fundamentals +\n  Gemini sentiment only\n- No chart analysis in prompt\n- Judge adjusts confidence"]
+    end

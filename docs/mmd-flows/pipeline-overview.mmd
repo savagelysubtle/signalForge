@@ -1,0 +1,77 @@
+%% SignalForge — Full Pipeline Overview
+%% Shows the high-level flow from strategy input through all 5 stages
+%% to the final dashboard output.
+
+flowchart TB
+    subgraph INPUT["INPUT"]
+        STRAT["Strategy Config\n(strategies.json)"]
+        MANUAL["Manual Tickers\n(optional)"]
+        PROMPT["User Prompt\n(optional)"]
+    end
+
+    subgraph STAGE0["STAGE 0 — FMP Pre-Screening"]
+        FMP_SCREEN["Company Screener\n/stable/company-screener"]
+        BULK["Bulk Enrichment\n(ratios, metrics, scores,\ngrades, price targets)"]
+        EXTEND["Extended Enrichment\n(insider, price change,\nfloat per ticker)"]
+        FILTERS["Post-Filters\n(ratios, quality, momentum,\ninsider, RVOL)"]
+        SCORING["Multi-Factor Scoring\n(Fundamental · Momentum ·\nSentiment · Quality)"]
+        SECTOR_CAP["Sector Concentration\nGuard"]
+        EARNINGS["Earnings Calendar\nFilter (optional)"]
+    end
+
+    subgraph STAGE1["STAGE 1 — Perplexity (Agent API)"]
+        PPLX["Perplexity Sonar\n+ Web Search\n+ FMP Tool Calls"]
+    end
+
+    subgraph STAGE2["STAGE 2 — Gemini (Sentiment)"]
+        GEM["Gemini 2.5 Pro\n+ Google Search\nGrounding"]
+    end
+
+    subgraph STAGE3["STAGE 3 — Claude (Charts)"]
+        CHART_IMG["Chart-Img v2\n(TradingView Screenshots)"]
+        CLAUDE["Claude Opus 4.6\nVision API"]
+    end
+
+    subgraph STAGE4["STAGE 4 — GPT (Debate)"]
+        direction LR
+        BULL["GPT Bull\nAnalyst"]
+        BEAR["GPT Bear\nAnalyst"]
+    end
+
+    JUDGE["GPT Judge\n(Final Synthesis)"]
+
+    subgraph STAGE45["STAGE 4.5 — Annotated Charts"]
+        ANNOT["Chart-Img v2\n+ Key Level Overlays\n(entry/stop/target lines)"]
+    end
+
+    subgraph OUTPUT["OUTPUT"]
+        REC["Recommendations\nBUY / SELL / HOLD\n+ entry, stop, target,\nconfidence, R:R"]
+        DB["PostgreSQL\n(pipeline_runs,\nstage_outputs,\nrecommendations)"]
+        DASH["Dashboard\n(React Frontend)"]
+    end
+
+    STRAT --> FMP_SCREEN
+    FMP_SCREEN --> BULK --> EXTEND --> FILTERS --> SCORING --> SECTOR_CAP --> EARNINGS
+    EARNINGS -->|"Scored candidates\n(FmpEnrichedStock[])"| PPLX
+
+    MANUAL --> PPLX
+    PROMPT --> PPLX
+
+    PPLX -->|"ScreeningResult\n(tickers + fundamentals\n+ news_urls)"| GEM
+    PPLX -->|"ScreeningResult"| CLAUDE
+    PPLX -->|"ScreeningResult"| JUDGE
+
+    GEM -->|"SentimentAnalysis[]\n(per-ticker sentiment\n+ catalysts)"| CLAUDE
+    GEM -->|"SentimentAnalysis[]"| JUDGE
+
+    CHART_IMG -->|"PNG chart images"| CLAUDE
+    CLAUDE -->|"ChartAnalysis[]\n(trend, levels, patterns,\nindicators, bias)"| JUDGE
+
+    BULL -->|"DebateCase[]\n(bull arguments)"| JUDGE
+    BEAR -->|"DebateCase[]\n(bear arguments)"| JUDGE
+
+    JUDGE --> REC
+    REC --> DB
+    REC --> ANNOT
+    ANNOT --> DB
+    DB --> DASH

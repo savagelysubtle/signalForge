@@ -2,7 +2,7 @@
   {
     "name": "Momentum Breakout",
     "description": "High relative volume stocks near 52-week highs with bullish technical breakouts",
-    "screening_prompt": "Canadian TSX stocks strong price momentum analyst upgrades accelerating earnings growth high average daily volume mid-to-large cap making new highs",
+    "screening_prompt": "Canadian TSX stocks strong price momentum analyst upgrades accelerating earnings growth high relative volume mid-to-large cap making new highs confirmed uptrend",
     "constraint_style": "tight",
     "max_tickers": 8,
     "chart_indicators": ["RSI", "MACD", "Volume", "EMA_50", "EMA_200"],
@@ -20,18 +20,28 @@
     "fmp_screener": {
       "enabled": true,
       "country": "CA",
-      "volume_min": 200000,
+      "volume_min": 500000,
       "price_min": 5.0,
       "market_cap_min": 500000000,
+      "beta_min": 1.0,
       "is_actively_trading": true,
       "limit": 50,
-      "enrich_with_ratios": true
+      "enrich_with_ratios": true,
+      "roe_min": 5.0,
+      "price_change_3m_min": 10.0,
+      "rvol_min": 1.5,
+      "require_insider_buying": false,
+      "max_sector_concentration": 3,
+      "weight_fundamental": 15,
+      "weight_momentum": 40,
+      "weight_sentiment": 25,
+      "weight_quality": 20
     }
   },
   {
     "name": "Value Accumulation",
     "description": "Undervalued names with insider buying and strong fundamentals",
-    "screening_prompt": "Canadian TSX stocks undervalued low P/E P/B discount to sector peers recent insider buying growing free cash flow strong balance sheet analyst buy ratings",
+    "screening_prompt": "Canadian TSX stocks undervalued low P/E P/B discount to sector peers recent insider buying growing free cash flow strong balance sheet analyst buy ratings quality businesses at fair prices",
     "constraint_style": "loose",
     "max_tickers": 10,
     "chart_indicators": ["RSI", "MACD", "Volume", "EMA_50", "EMA_200"],
@@ -49,18 +59,32 @@
     "fmp_screener": {
       "enabled": true,
       "country": "CA",
-      "market_cap_min": 200000000,
-      "price_min": 2.0,
+      "market_cap_min": 300000000,
+      "price_min": 3.0,
+      "volume_min": 100000,
       "is_actively_trading": true,
       "limit": 80,
-      "pe_max": 20.0,
-      "enrich_with_ratios": true
+      "enrich_with_ratios": true,
+      "pe_max": 18.0,
+      "pe_min": 3.0,
+      "pb_max": 3.0,
+      "peg_max": 1.5,
+      "roe_min": 8.0,
+      "debt_equity_max": 2.0,
+      "net_profit_margin_min": 5.0,
+      "piotroski_min": 5,
+      "require_insider_buying": true,
+      "max_sector_concentration": 3,
+      "weight_fundamental": 40,
+      "weight_momentum": 10,
+      "weight_sentiment": 20,
+      "weight_quality": 30
     }
   },
   {
     "name": "Mean Reversion",
     "description": "Oversold stocks near support levels primed for a bounce",
-    "screening_prompt": "Canadian TSX stocks recently sold off 15-30% past month strong fundamentals analysts maintain buy ratings insider buying during decline oversold bounce candidates",
+    "screening_prompt": "Canadian TSX stocks recently sold off 15-30% past month strong fundamentals analysts maintain buy ratings insider buying during decline oversold bounce candidates with solid financials and quality scores",
     "constraint_style": "tight",
     "max_tickers": 6,
     "chart_indicators": ["RSI", "MACD", "Volume", "EMA_50", "EMA_200"],
@@ -78,17 +102,29 @@
     "fmp_screener": {
       "enabled": true,
       "country": "CA",
-      "market_cap_min": 300000000,
+      "market_cap_min": 500000000,
       "price_min": 5.0,
+      "volume_min": 200000,
       "is_actively_trading": true,
       "limit": 60,
-      "enrich_with_ratios": true
+      "enrich_with_ratios": true,
+      "roe_min": 5.0,
+      "debt_equity_max": 3.0,
+      "piotroski_min": 4,
+      "price_change_1m_min": -30.0,
+      "price_change_1m_max": -10.0,
+      "require_insider_buying": true,
+      "max_sector_concentration": 2,
+      "weight_fundamental": 20,
+      "weight_momentum": 30,
+      "weight_sentiment": 25,
+      "weight_quality": 25
     }
   },
   {
     "name": "Earnings Play",
     "description": "Stocks reporting earnings within 2 weeks with high implied volatility",
-    "screening_prompt": "Canadian TSX stocks reporting earnings next 2 weeks strong earnings beat history upward estimate revisions analyst attention meaningful catalyst potential",
+    "screening_prompt": "Canadian TSX stocks reporting earnings next 2 weeks strong earnings beat history upward estimate revisions analyst attention meaningful catalyst potential confirmed reporting date",
     "constraint_style": "tight",
     "max_tickers": 5,
     "chart_indicators": ["RSI", "MACD", "Volume", "EMA_50", "EMA_200"],
@@ -106,11 +142,20 @@
     "fmp_screener": {
       "enabled": true,
       "country": "CA",
-      "market_cap_min": 500000000,
-      "volume_min": 100000,
+      "market_cap_min": 750000000,
+      "volume_min": 200000,
+      "price_min": 5.0,
       "is_actively_trading": true,
       "limit": 50,
-      "enrich_with_ratios": true
+      "enrich_with_ratios": true,
+      "roe_min": 5.0,
+      "earnings_within_days": 14,
+      "min_earnings_beat_pct": 60.0,
+      "max_sector_concentration": 2,
+      "weight_fundamental": 25,
+      "weight_momentum": 15,
+      "weight_sentiment": 35,
+      "weight_quality": 25
     }
   },
   {
@@ -138,7 +183,13 @@
       "market_cap_min": 100000000,
       "is_actively_trading": true,
       "limit": 80,
-      "enrich_with_ratios": false
+      "enrich_with_ratios": false,
+      "price_change_1d_min": -5.0,
+      "rvol_min": 1.2,
+      "weight_fundamental": 0,
+      "weight_momentum": 50,
+      "weight_sentiment": 30,
+      "weight_quality": 20
     }
   },
   {
@@ -167,13 +218,19 @@
       "market_cap_min": 500000000,
       "is_actively_trading": true,
       "limit": 50,
-      "enrich_with_ratios": false
+      "enrich_with_ratios": false,
+      "price_change_1d_min": 2.0,
+      "rvol_min": 1.5,
+      "weight_fundamental": 0,
+      "weight_momentum": 60,
+      "weight_sentiment": 20,
+      "weight_quality": 20
     }
   },
   {
     "name": "Intraday Scalp",
     "description": "Short-term momentum scalps on 15-minute charts with tight risk management",
-    "screening_prompt": "Canadian TSX stocks in play today breaking news earnings releases analyst upgrades sector catalysts liquid large-cap mid-cap high daily volume active day trading names",
+    "screening_prompt": "Canadian TSX stocks in play today breaking news earnings releases analyst upgrades sector catalysts liquid large-cap mid-cap high relative volume active day trading names with confirmed price movement",
     "constraint_style": "tight",
     "max_tickers": 5,
     "chart_indicators": ["RSI", "MACD", "Volume", "EMA_50", "EMA_200"],
@@ -192,12 +249,20 @@
     "fmp_screener": {
       "enabled": true,
       "country": "CA",
-      "volume_min": 500000,
-      "price_min": 5.0,
+      "volume_min": 750000,
+      "price_min": 8.0,
       "market_cap_min": 1000000000,
+      "beta_min": 1.2,
       "is_actively_trading": true,
       "limit": 40,
-      "enrich_with_ratios": false
+      "enrich_with_ratios": false,
+      "price_change_1d_min": 1.5,
+      "rvol_min": 2.0,
+      "max_sector_concentration": 2,
+      "weight_fundamental": 5,
+      "weight_momentum": 55,
+      "weight_sentiment": 20,
+      "weight_quality": 20
     }
   }
 ]
