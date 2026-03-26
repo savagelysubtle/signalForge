@@ -215,6 +215,7 @@ async def fetch_chart_image(
     interval = TIMEFRAME_MAP.get(timeframe, "1D")
     studies = _map_indicators(indicators)
     tv_symbols = _to_tradingview_symbols(ticker)
+    logger.info("Chart-Img candidates for '%s': %s", ticker, tv_symbols)
 
     headers = {
         "x-api-key": api_key,
@@ -222,8 +223,10 @@ async def fetch_chart_image(
     }
 
     response = None
+    last_symbol = ticker
     async with httpx.AsyncClient(timeout=30.0) as client:
         for tv_symbol in tv_symbols:
+            last_symbol = tv_symbol
             body: dict = {
                 "symbol": tv_symbol,
                 "interval": interval,
@@ -250,7 +253,7 @@ async def fetch_chart_image(
         logger.error("Chart-Img all candidates failed for %s: %s", ticker, error_detail)
         raise RuntimeError(
             f"Chart-Img HTTP {response.status_code if response else 'N/A'} "
-            f"for {ticker}: {error_detail}"
+            f"for {last_symbol}: {error_detail}"
         )
 
     image_bytes = response.content
