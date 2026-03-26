@@ -1,0 +1,70 @@
+%% SignalForge — Stage 4: GPT Bull/Bear/Judge Debate
+%% Shows how all upstream data converges into the GPT debate system.
+%% Bull and Bear analysts run in parallel; the Judge runs sequentially
+%% after both complete. Final output is the BUY/SELL/HOLD recommendation.
+
+flowchart TD
+    subgraph ALL_DATA["All Upstream Data Converges"]
+        S1["ScreeningResult\n(Perplexity)\nFundamentals, highlights,\nrisk factors"]
+        S2["SentimentAnalysis[]\n(Gemini)\nSentiment scores,\nnews catalysts"]
+        S3["ChartAnalysis[]\n(Claude)\nTrend, levels, patterns,\nbias, indicators"]
+        REFLECT["Reflection Context\n(historical performance\nfrom past outcomes:\nwin rates, calibration,\nsector performance)"]
+    end
+
+    S1 --> DEBATE
+    S2 --> DEBATE
+    S3 --> DEBATE
+
+    subgraph DEBATE["Phase 1: Bull vs Bear (parallel via asyncio.gather)"]
+        direction LR
+        subgraph BULL_CALL["Bull Analyst"]
+            B_PROMPT["build_bull_prompt()\n\nReceives ALL data.\nRole: Find every reason\nto BUY each ticker.\n- Strongest technical setup\n- Best fundamental story\n- Positive catalysts\n- Upside potential"]
+            B_API["GPT 5.4 API Call\ntemp=0.7"]
+            B_VALID["Validate:\nDebateCaseList schema"]
+        end
+
+        subgraph BEAR_CALL["Bear Analyst"]
+            B2_PROMPT["build_bear_prompt()\n\nReceives ALL data.\nRole: Find every reason\nto AVOID each ticker.\n- Bearish technicals\n- Fundamental weaknesses\n- Negative catalysts\n- Downside risk"]
+            B2_API["GPT 5.4 API Call\ntemp=0.7"]
+            B2_VALID["Validate:\nDebateCaseList schema"]
+        end
+    end
+
+    B_PROMPT --> B_API --> B_VALID
+    B2_PROMPT --> B2_API --> B2_VALID
+
+    B_VALID -->|"DebateCase[]\nper ticker:\n- key_arguments[]\n- strongest_signal\n- weakest_counter\n- confidence 0-1"| JUDGE
+    B2_VALID -->|"DebateCase[]\nper ticker"| JUDGE
+
+    REFLECT --> JUDGE
+
+    subgraph JUDGE["Phase 2: Judge Synthesis (sequential after debate)"]
+        J_PROMPT["build_judge_prompt()\n\nReceives EVERYTHING:\n1. Perplexity screening data\n2. Gemini sentiment analysis\n3. Claude chart analysis\n4. Bull debate arguments\n5. Bear debate arguments\n6. Reflection context (past perf)\n7. Strategy risk params\n\nRole: Impartial senior PM\nweighing all evidence"]
+        J_API["GPT 5.4 API Call\ntemp=0.7"]
+        J_VALID["Validate:\nRecommendationList schema"]
+    end
+
+    J_PROMPT --> J_API --> J_VALID
+
+    J_VALID -->|"Valid"| OUTPUT
+
+    subgraph OUTPUT["Recommendation Output (per ticker)"]
+        ACTION["action: BUY | SELL | HOLD"]
+        CONFIDENCE["confidence: 0.0 to 1.0"]
+        TRADE["entry_price: float\nstop_loss: float\ntake_profit: float"]
+        SIZING["position_size_pct: float\nrisk_reward_ratio: float\nholding_period: string"]
+        CASES["bull_case: DebateCase\nbear_case: DebateCase"]
+        REASONING["judge_reasoning: paragraph\nkey_factors: string[]\nwarnings: string[]"]
+    end
+
+    OUTPUT --> SAVE["Save to PostgreSQL\n(recommendations table)"]
+    OUTPUT --> ANNOT["To Stage 4.5:\nAnnotated Charts\n(overlay entry/stop/target\non chart image)"]
+    SAVE --> DASH["Dashboard displays\nrecommendation cards\nwith all trade parameters"]
+
+    subgraph OPTIONAL["Optional: Debate Disabled"]
+        NO_DEBATE["If strategy.enable_debate = false:\nSkip bull/bear phase entirely.\nJudge receives all data directly\nand produces recommendations\nwithout adversarial debate."]
+    end
+
+    subgraph DEGRADED["Degraded Handling"]
+        DEG["Judge prompt explicitly notes\nwhich data sources are missing:\n- 'Sentiment data unavailable'\n- 'Chart analysis unavailable'\nJudge adjusts confidence\nand flags data gaps in warnings"]
+    end

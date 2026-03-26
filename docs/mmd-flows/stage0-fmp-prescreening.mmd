@@ -1,0 +1,66 @@
+%% SignalForge — Stage 0: FMP Pre-Screening Deep Dive
+%% Shows the 9-step quantitative screening flow from raw API call
+%% through bulk enrichment, post-filters, composite scoring, and
+%% sector/earnings guards.
+
+flowchart TD
+    START["Strategy Config\n(FmpScreenerConfig)"] --> SCREENER
+
+    subgraph SCREENER["Step 1: Company Screener API"]
+        API["/stable/company-screener\n\nFilters:\n- country (CA/US)\n- market_cap_min/max\n- price_min/max\n- volume_min\n- beta_min/max\n- sector / industry\n- is_actively_trading\n- limit (default 50)"]
+    end
+
+    SCREENER -->|"Raw screener results\n(symbol, price, mcap,\nbeta, volume, sector)"| BULK_FETCH
+
+    subgraph BULK_FETCH["Step 2: Bulk Enrichment (5 parallel API calls)"]
+        R["/stable/ratios-ttm-bulk\nP/E, PEG, P/B, P/S,\nROE, ROA, D/E, margins"]
+        M["/stable/key-metrics-ttm-bulk\nEV/EBITDA, FCF/share,\nrevenue growth"]
+        S["/stable/scores-bulk\nPiotroski (0-9)\nAltman Z-Score"]
+        G["/stable/upgrades-downgrades-\nconsensus-bulk\nAnalyst buy/sell counts"]
+        T["/stable/price-target-\nsummary-bulk\nTarget high/low/median"]
+    end
+
+    BULK_FETCH --> MERGE["Step 3: Merge into\nFmpEnrichedStock\n(match by symbol)"]
+
+    MERGE --> EXTENDED
+
+    subgraph EXTENDED["Step 4: Per-Ticker Extended Enrichment (parallel)"]
+        INS["/stable/insider-trading/\nstatistics?symbol=X\n-> net buys, buy ratio"]
+        PC["/stable/stock-price-change\n?symbol=X\n-> 1D/1M/3M/6M % change"]
+        SF["/stable/shares-float\n?symbol=X\n-> free float %, shares"]
+    end
+
+    EXTENDED --> POSTFILT
+
+    subgraph POSTFILT["Step 5: Post-Filters (all configurable, all optional)"]
+        F1["Valuation: pe_max, pe_min,\npb_max, ps_max, peg_max"]
+        F2["Profitability: roe_min,\nnet_profit_margin_min"]
+        F3["Leverage: debt_equity_max"]
+        F4["Quality: piotroski_min,\naltman_z_min"]
+        F5["Momentum: price_change_1d_min,\nprice_change_1m_min/max,\nprice_change_3m_min"]
+        F6["Volume: rvol_min\n(volume / avgVolume)"]
+        F7["Insider: require_insider_buying\n(net buys > 0)"]
+    end
+
+    POSTFILT --> SCORE_ENGINE
+
+    subgraph SCORE_ENGINE["Step 6: Multi-Factor Composite Scoring"]
+        direction LR
+        SF1["Fundamental\n(0-100)\nP/E-down PEG-down ROE-up\nMargin-up EV/EBITDA-down"]
+        SM1["Momentum\n(0-100)\nPrice chg 1D-up 1M-up\n3M-up RVOL-up"]
+        SS1["Sentiment\n(0-100)\nInsider Buy-up\nAnalyst Buys-up\nTarget Upside-up"]
+        SQ1["Quality\n(0-100)\nPiotroski-up\nAltman Z-up\nD/E-down Current-up"]
+    end
+
+    SCORE_ENGINE --> COMPOSITE["Composite = Sum(dimension x weight) / Sum(weights)\n\nWeights are strategy-specific:\nMomentum: F=15 M=40 S=25 Q=20\nValue: F=40 M=10 S=20 Q=30\nEarnings: F=30 M=15 S=30 Q=25"]
+
+    COMPOSITE --> SORT["Step 7: Sort by\nComposite Score descending"]
+    SORT --> SECTOR["Step 8: Sector Cap\n(max N per sector)"]
+    SECTOR --> EARN_FILT
+
+    subgraph EARN_FILT["Step 9: Earnings Filter (optional)"]
+        EC["/stable/earnings-calendar\n?from=today&to=+N days"]
+        ES["/stable/earnings?symbol=X\n-> historical beat rate"]
+    end
+
+    EARN_FILT -->|"Final ranked\nFmpEnrichedStock[]\n(up to 50)"| OUTPUT["To Stage 1: Perplexity"]

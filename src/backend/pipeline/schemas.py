@@ -212,15 +212,22 @@ class PipelineResult(BaseModel):
 class FmpScreenerConfig(BaseModel):
     """Strategy-level FMP stock screener configuration.
 
-    Defines both the API-level screener filters (sent directly to FMP)
-    and ratio-based post-filters (applied client-side after fetching
-    ratios-ttm). When ``enabled`` is ``False`` (or the field is ``None``
+    Defines API-level screener filters (sent directly to FMP),
+    ratio-based post-filters (applied client-side), quality/momentum
+    gates, insider trading requirements, and multi-factor scoring
+    weights. When ``enabled`` is ``False`` (or the field is ``None``
     on StrategyConfig), the FMP pre-screening stage is skipped entirely.
 
     For crypto strategies, set ``is_crypto=True``. This routes to a
-    different FMP workflow: ``/stable/cryptocurrency-list`` +
-    ``/stable/batch-crypto-quotes`` with client-side filtering instead
-    of the stock-only ``/stable/company-screener`` endpoint.
+    different FMP workflow using ``/stable/batch-crypto-quotes`` with
+    client-side filtering instead of the stock-only
+    ``/stable/company-screener`` endpoint.
+
+    Attributes:
+        weight_fundamental: Scoring weight for fundamental dimension (0-100).
+        weight_momentum: Scoring weight for momentum dimension (0-100).
+        weight_sentiment: Scoring weight for sentiment dimension (0-100).
+        weight_quality: Scoring weight for quality dimension (0-100).
     """
 
     enabled: bool = False
@@ -247,6 +254,42 @@ class FmpScreenerConfig(BaseModel):
     pe_min: float | None = None
     roe_min: float | None = None
     debt_equity_max: float | None = None
+    pb_max: float | None = None
+    pb_min: float | None = None
+    ps_max: float | None = None
+    ps_min: float | None = None
+    peg_max: float | None = None
+    net_profit_margin_min: float | None = None
+    dividend_yield_min: float | None = None
+
+    # Quality score filters (from /stable/financial-scores)
+    piotroski_min: int | None = None
+    altman_z_min: float | None = None
+
+    # Price change filters (from /stable/stock-price-change, % values)
+    price_change_1d_min: float | None = None
+    price_change_1m_min: float | None = None
+    price_change_1m_max: float | None = None
+    price_change_3m_min: float | None = None
+
+    # Insider activity filter (from /stable/insider-trading/statistics)
+    require_insider_buying: bool = False
+
+    # Relative volume filter (volume / avgVolume from quote data)
+    rvol_min: float | None = None
+
+    # Earnings calendar (from /stable/earnings-calendar)
+    earnings_within_days: int | None = None
+    min_earnings_beat_pct: float | None = None
+
+    # Portfolio construction
+    max_sector_concentration: int | None = None
+
+    # Multi-factor scoring weights (0-100, strategy-specific tuning)
+    weight_fundamental: float | None = None
+    weight_momentum: float | None = None
+    weight_sentiment: float | None = None
+    weight_quality: float | None = None
 
     enrich_with_ratios: bool = True
 

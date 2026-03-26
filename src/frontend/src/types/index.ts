@@ -177,6 +177,8 @@ export interface RiskParams {
 export interface FmpScreenerConfig {
   enabled: boolean;
   is_crypto: boolean;
+
+  // API-level screener filters
   country: string | null;
   exchange: string | null;
   sector: string | null;
@@ -191,10 +193,49 @@ export interface FmpScreenerConfig {
   is_actively_trading: boolean;
   is_etf: boolean;
   limit: number;
+
+  // Ratio-based post-filters
   pe_max: number | null;
   pe_min: number | null;
   roe_min: number | null;
   debt_equity_max: number | null;
+  pb_max: number | null;
+  pb_min: number | null;
+  ps_max: number | null;
+  ps_min: number | null;
+  peg_max: number | null;
+  net_profit_margin_min: number | null;
+  dividend_yield_min: number | null;
+
+  // Quality score filters
+  piotroski_min: number | null;
+  altman_z_min: number | null;
+
+  // Price change filters
+  price_change_1d_min: number | null;
+  price_change_1m_min: number | null;
+  price_change_1m_max: number | null;
+  price_change_3m_min: number | null;
+
+  // Insider activity
+  require_insider_buying: boolean;
+
+  // Relative volume
+  rvol_min: number | null;
+
+  // Earnings
+  earnings_within_days: number | null;
+  min_earnings_beat_pct: number | null;
+
+  // Portfolio construction
+  max_sector_concentration: number | null;
+
+  // Scoring weights
+  weight_fundamental: number | null;
+  weight_momentum: number | null;
+  weight_sentiment: number | null;
+  weight_quality: number | null;
+
   enrich_with_ratios: boolean;
 }
 
