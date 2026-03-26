@@ -25,7 +25,11 @@
       "market_cap_min": 500000000,
       "is_actively_trading": true,
       "limit": 50,
-      "enrich_with_ratios": true
+      "enrich_with_ratios": true,
+      "rvol_min": 1.5,
+      "piotroski_min": 4,
+      "max_per_sector": 3,
+      "scoring_weights": {"fundamental": 0.15, "momentum": 0.40, "sentiment": 0.20, "quality": 0.25}
     }
   },
   {
@@ -53,8 +57,14 @@
       "price_min": 2.0,
       "is_actively_trading": true,
       "limit": 80,
+      "enrich_with_ratios": true,
       "pe_max": 20.0,
-      "enrich_with_ratios": true
+      "roe_min": 8.0,
+      "debt_equity_max": 2.0,
+      "piotroski_min": 5,
+      "require_insider_buying": true,
+      "max_per_sector": 3,
+      "scoring_weights": {"fundamental": 0.40, "momentum": 0.10, "sentiment": 0.25, "quality": 0.25}
     }
   },
   {
@@ -82,7 +92,11 @@
       "price_min": 5.0,
       "is_actively_trading": true,
       "limit": 60,
-      "enrich_with_ratios": true
+      "enrich_with_ratios": true,
+      "piotroski_min": 4,
+      "debt_equity_max": 2.5,
+      "max_per_sector": 2,
+      "scoring_weights": {"fundamental": 0.20, "momentum": 0.15, "sentiment": 0.30, "quality": 0.35}
     }
   },
   {
@@ -110,7 +124,11 @@
       "volume_min": 100000,
       "is_actively_trading": true,
       "limit": 50,
-      "enrich_with_ratios": true
+      "enrich_with_ratios": true,
+      "earnings_within_days": 14,
+      "piotroski_min": 3,
+      "max_per_sector": 2,
+      "scoring_weights": {"fundamental": 0.20, "momentum": 0.20, "sentiment": 0.35, "quality": 0.25}
     }
   },
   {
@@ -197,7 +215,10 @@
       "market_cap_min": 1000000000,
       "is_actively_trading": true,
       "limit": 40,
-      "enrich_with_ratios": false
+      "enrich_with_ratios": true,
+      "rvol_min": 2.0,
+      "max_per_sector": 2,
+      "scoring_weights": {"fundamental": 0.10, "momentum": 0.50, "sentiment": 0.15, "quality": 0.25}
     }
   }
 ]

@@ -18,9 +18,9 @@ import logging
 from typing import Any
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from pipeline.schemas import FmpScreenerConfig
+from pipeline.schemas import FmpScreenerConfig, ScoringWeights
 from services.keyring_service import get_api_key
 
 logger = logging.getLogger(__name__)
@@ -115,11 +115,84 @@ class FmpCryptoQuote(BaseModel):
     previousClose: float | None = None
 
 
-class FmpEnrichedStock(BaseModel):
-    """A screener result enriched with financial ratios and metrics.
+class FmpPriceChange(BaseModel):
+    """Multi-period price change data from /stable/stock-price-change."""
 
-    Combines data from the company-screener, ratios-ttm, and
-    key-metrics-ttm endpoints into a single model for downstream use.
+    symbol: str = ""
+    oneDay: float | None = Field(default=None, alias="1D")
+    fiveDay: float | None = Field(default=None, alias="5D")
+    oneMonth: float | None = Field(default=None, alias="1M")
+    threeMonth: float | None = Field(default=None, alias="3M")
+    sixMonth: float | None = Field(default=None, alias="6M")
+    ytd: float | None = None
+    oneYear: float | None = Field(default=None, alias="1Y")
+    model_config = {"populate_by_name": True}
+
+
+class FmpFinancialScores(BaseModel):
+    """Piotroski and Altman Z from /stable/financial-scores."""
+
+    symbol: str = ""
+    altmanZScore: float | None = None
+    piotroskiScore: int | None = None
+
+
+class FmpInsiderStats(BaseModel):
+    """Insider trading statistics from /stable/insider-trading-statistics."""
+
+    symbol: str = ""
+    totalBought: int = 0
+    totalSold: int = 0
+    totalTransactions: int = 0
+
+
+class FmpEarningsCalendarItem(BaseModel):
+    """Single earnings calendar entry from /stable/earning-calendar."""
+
+    symbol: str
+    date: str = ""
+    eps: float | None = None
+    epsEstimated: float | None = None
+    revenue: float | None = None
+    revenueEstimated: float | None = None
+
+
+class FmpEarningsSurprise(BaseModel):
+    """Earnings surprise data from /stable/earnings-surprises."""
+
+    symbol: str = ""
+    date: str = ""
+    actualEarningResult: float | None = None
+    estimatedEarning: float | None = None
+
+
+class FmpAnalystRecommendation(BaseModel):
+    """Analyst recommendations from /stable/analyst-stock-recommendations."""
+
+    symbol: str = ""
+    analystRatingsBuy: int = 0
+    analystRatingsHold: int = 0
+    analystRatingsSell: int = 0
+    analystRatingsStrongBuy: int = 0
+    analystRatingsStrongSell: int = 0
+
+
+class FmpPriceTargetConsensus(BaseModel):
+    """Price target consensus from /stable/price-target-consensus."""
+
+    symbol: str = ""
+    targetHigh: float | None = None
+    targetLow: float | None = None
+    targetConsensus: float | None = None
+    targetMedian: float | None = None
+
+
+class FmpEnrichedStock(BaseModel):
+    """A screener result enriched with financial ratios, metrics, and signals.
+
+    Combines data from the company-screener, ratios-ttm, key-metrics-ttm,
+    and signal endpoints (price changes, financial scores, insider stats,
+    analyst recommendations, earnings) into a single model for downstream use.
     """
 
     symbol: str
@@ -144,6 +217,40 @@ class FmpEnrichedStock(BaseModel):
     net_profit_margin: float | None = None
     ev_ebitda: float | None = None
     is_actively_trading: bool = True
+
+    # Price momentum (from /stable/stock-price-change)
+    price_change_1d: float | None = None
+    price_change_1m: float | None = None
+    price_change_3m: float | None = None
+    price_change_6m: float | None = None
+
+    # Volume signals
+    avg_volume: int | None = None
+    relative_volume: float | None = None
+
+    # Quality scores (from /stable/financial-scores)
+    piotroski_score: int | None = None
+    altman_z_score: float | None = None
+
+    # Insider activity (from /stable/insider-trading-statistics)
+    insider_net_buys: int | None = None
+    insider_buy_ratio: float | None = None
+
+    # Analyst consensus
+    analyst_consensus: str | None = None
+    analyst_buy_count: int | None = None
+    analyst_target_upside: float | None = None
+
+    # Earnings
+    earnings_date: str | None = None
+    earnings_beat_rate: float | None = None
+
+    # Composite scores (computed by scoring engine)
+    score_fundamental: float | None = None
+    score_momentum: float | None = None
+    score_sentiment: float | None = None
+    score_quality: float | None = None
+    composite_score: float | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -281,23 +388,108 @@ async def fetch_key_metrics_ttm(symbol: str) -> FmpKeyMetrics | None:
     return None
 
 
+async def fetch_price_changes(symbol: str) -> FmpPriceChange | None:
+    """Fetch multi-period price changes for a symbol."""
+    try:
+        data = await _fmp_get("stock-price-change", {"symbol": symbol})
+        if isinstance(data, list) and data:
+            return FmpPriceChange.model_validate(data[0])
+    except Exception as exc:
+        logger.debug("Failed to fetch price-change for %s: %s", symbol, exc)
+    return None
+
+
+async def fetch_financial_scores(symbol: str) -> FmpFinancialScores | None:
+    """Fetch Piotroski and Altman Z-Score for a symbol."""
+    try:
+        data = await _fmp_get("financial-scores", {"symbol": symbol})
+        if isinstance(data, list) and data:
+            return FmpFinancialScores.model_validate(data[0])
+    except Exception as exc:
+        logger.debug("Failed to fetch financial-scores for %s: %s", symbol, exc)
+    return None
+
+
+async def fetch_insider_stats(symbol: str) -> FmpInsiderStats | None:
+    """Fetch insider trading statistics for a symbol."""
+    try:
+        data = await _fmp_get("insider-trading-statistics", {"symbol": symbol})
+        if isinstance(data, list) and data:
+            return FmpInsiderStats.model_validate(data[0])
+    except Exception as exc:
+        logger.debug("Failed to fetch insider stats for %s: %s", symbol, exc)
+    return None
+
+
+async def fetch_earnings_calendar(from_date: str, to_date: str) -> list[FmpEarningsCalendarItem]:
+    """Fetch earnings calendar for a date range (bulk, not per-symbol)."""
+    try:
+        data = await _fmp_get("earning-calendar", {"from": from_date, "to": to_date})
+        if isinstance(data, list):
+            results: list[FmpEarningsCalendarItem] = []
+            for item in data:
+                with contextlib.suppress(Exception):
+                    results.append(FmpEarningsCalendarItem.model_validate(item))
+            return results
+    except Exception as exc:
+        logger.debug("Failed to fetch earnings calendar: %s", exc)
+    return []
+
+
+async def fetch_earnings_surprises(symbol: str) -> list[FmpEarningsSurprise]:
+    """Fetch historical earnings surprises for a symbol."""
+    try:
+        data = await _fmp_get("earnings-surprises", {"symbol": symbol})
+        if isinstance(data, list):
+            results: list[FmpEarningsSurprise] = []
+            for item in data:
+                with contextlib.suppress(Exception):
+                    results.append(FmpEarningsSurprise.model_validate(item))
+            return results
+    except Exception as exc:
+        logger.debug("Failed to fetch earnings surprises for %s: %s", symbol, exc)
+    return []
+
+
+async def fetch_analyst_recommendations(symbol: str) -> FmpAnalystRecommendation | None:
+    """Fetch analyst buy/hold/sell recommendations for a symbol."""
+    try:
+        data = await _fmp_get("analyst-stock-recommendations", {"symbol": symbol})
+        if isinstance(data, list) and data:
+            return FmpAnalystRecommendation.model_validate(data[0])
+    except Exception as exc:
+        logger.debug("Failed to fetch analyst recommendations for %s: %s", symbol, exc)
+    return None
+
+
+async def fetch_price_target_consensus(symbol: str) -> FmpPriceTargetConsensus | None:
+    """Fetch analyst price target consensus for a symbol."""
+    try:
+        data = await _fmp_get("price-target-consensus", {"symbol": symbol})
+        if isinstance(data, list) and data:
+            return FmpPriceTargetConsensus.model_validate(data[0])
+    except Exception as exc:
+        logger.debug("Failed to fetch price target consensus for %s: %s", symbol, exc)
+    return None
+
+
 # ---------------------------------------------------------------------------
 # High-level orchestration
 # ---------------------------------------------------------------------------
 
 
-def _apply_ratio_filters(
+def _apply_post_filters(
     stock: FmpEnrichedStock,
     config: FmpScreenerConfig,
 ) -> bool:
-    """Check whether a stock passes the ratio-based post-filters.
+    """Check whether a stock passes all post-filters (ratios + signals).
 
     Args:
-        stock: Enriched stock with ratio data.
-        config: Screener config containing ratio filter thresholds.
+        stock: Enriched stock with ratio and signal data.
+        config: Screener config containing filter thresholds.
 
     Returns:
-        ``True`` if the stock passes all applicable filters.
+        True if the stock passes all applicable filters.
     """
     if config.pe_max is not None and stock.pe_ratio is not None and stock.pe_ratio > config.pe_max:
         return False
@@ -305,11 +497,44 @@ def _apply_ratio_filters(
         return False
     if config.roe_min is not None and stock.roe is not None and stock.roe < config.roe_min:
         return False
-    return not (
+    if (
         config.debt_equity_max is not None
         and stock.debt_equity is not None
         and stock.debt_equity > config.debt_equity_max
-    )
+    ):
+        return False
+
+    if (
+        config.piotroski_min is not None
+        and stock.piotroski_score is not None
+        and stock.piotroski_score < config.piotroski_min
+    ):
+        return False
+    if config.require_insider_buying and (
+        stock.insider_net_buys is None or stock.insider_net_buys <= 0
+    ):
+        return False
+    if (
+        config.rvol_min is not None
+        and stock.relative_volume is not None
+        and stock.relative_volume < config.rvol_min
+    ):
+        return False
+    if config.earnings_within_days is not None:
+        if not stock.earnings_date:
+            return False
+        from datetime import UTC, datetime
+
+        try:
+            earn_dt = datetime.strptime(stock.earnings_date, "%Y-%m-%d").replace(tzinfo=UTC)
+            now = datetime.now(tz=UTC)
+            days_until = (earn_dt - now).days
+            if days_until < 0 or days_until > config.earnings_within_days:
+                return False
+        except ValueError:
+            return False
+
+    return True
 
 
 def _merge_enrichment(
@@ -459,25 +684,209 @@ async def screen_crypto(config: FmpScreenerConfig) -> list[FmpEnrichedStock]:
     return limited
 
 
+async def _enrich_batch(
+    stocks: list[FmpEnrichedStock],
+) -> list[FmpEnrichedStock]:
+    """Enrich a batch of stocks with signal data from multiple FMP endpoints.
+
+    Fetches price changes, financial scores, insider stats, analyst
+    recommendations, price targets, and earnings surprises for all
+    symbols in parallel.
+
+    Args:
+        stocks: Stocks already enriched with ratios/metrics.
+
+    Returns:
+        Same stocks with signal fields populated.
+    """
+    if not stocks:
+        return stocks
+
+    from datetime import UTC, datetime, timedelta
+
+    today = datetime.now(tz=UTC).date()
+    cal_from = today.isoformat()
+    cal_to = (today + timedelta(days=30)).isoformat()
+    earnings_cal = await fetch_earnings_calendar(cal_from, cal_to)
+    earnings_map: dict[str, str] = {}
+    for item in earnings_cal:
+        if item.symbol not in earnings_map:
+            earnings_map[item.symbol] = item.date
+
+    async def _fetch_signals(stock: FmpEnrichedStock) -> None:
+        sym = stock.symbol
+
+        price_chg, fin_scores, insider, analyst_rec, price_tgt, surprises = await asyncio.gather(
+            fetch_price_changes(sym),
+            fetch_financial_scores(sym),
+            fetch_insider_stats(sym),
+            fetch_analyst_recommendations(sym),
+            fetch_price_target_consensus(sym),
+            fetch_earnings_surprises(sym),
+            return_exceptions=True,
+        )
+
+        if isinstance(price_chg, FmpPriceChange):
+            stock.price_change_1d = price_chg.oneDay
+            stock.price_change_1m = price_chg.oneMonth
+            stock.price_change_3m = price_chg.threeMonth
+            stock.price_change_6m = price_chg.sixMonth
+
+        if isinstance(fin_scores, FmpFinancialScores):
+            stock.piotroski_score = fin_scores.piotroskiScore
+            stock.altman_z_score = fin_scores.altmanZScore
+
+        if isinstance(insider, FmpInsiderStats):
+            stock.insider_net_buys = insider.totalBought - insider.totalSold
+            total = insider.totalTransactions
+            stock.insider_buy_ratio = insider.totalBought / total if total > 0 else None
+
+        if isinstance(analyst_rec, FmpAnalystRecommendation):
+            buy_total = analyst_rec.analystRatingsBuy + analyst_rec.analystRatingsStrongBuy
+            sell_total = analyst_rec.analystRatingsSell + analyst_rec.analystRatingsStrongSell
+            hold = analyst_rec.analystRatingsHold
+            stock.analyst_buy_count = buy_total
+            if buy_total > sell_total:
+                stock.analyst_consensus = "Buy"
+            elif sell_total > buy_total:
+                stock.analyst_consensus = "Sell"
+            elif hold >= buy_total:
+                stock.analyst_consensus = "Hold"
+            else:
+                stock.analyst_consensus = "Hold"
+
+        if (
+            isinstance(price_tgt, FmpPriceTargetConsensus)
+            and price_tgt.targetConsensus is not None
+            and stock.price is not None
+            and stock.price > 0
+        ):
+            stock.analyst_target_upside = (
+                (price_tgt.targetConsensus - stock.price) / stock.price * 100
+            )
+
+        if sym in earnings_map:
+            stock.earnings_date = earnings_map[sym]
+
+        if isinstance(surprises, list) and surprises:
+            beats = sum(
+                1
+                for s in surprises
+                if s.actualEarningResult is not None
+                and s.estimatedEarning is not None
+                and s.actualEarningResult > s.estimatedEarning
+            )
+            stock.earnings_beat_rate = (beats / len(surprises)) * 100 if surprises else None
+
+    await asyncio.gather(*[_fetch_signals(s) for s in stocks], return_exceptions=True)
+    return stocks
+
+
+def _compute_composite_scores(
+    stocks: list[FmpEnrichedStock],
+    weights: ScoringWeights | None = None,
+) -> list[FmpEnrichedStock]:
+    """Compute composite scores using percentile ranking across the pool.
+
+    Each of 4 dimensions is scored 0-100 by ranking the stock's raw
+    value against all candidates. The composite is a weighted average.
+
+    Args:
+        stocks: Enriched stocks with signal data populated.
+        weights: Per-strategy scoring weights. Uses equal weights if None.
+
+    Returns:
+        Same stocks with score_* and composite_score fields populated.
+    """
+    if not stocks:
+        return stocks
+
+    w = weights or ScoringWeights()
+    total_w = w.fundamental + w.momentum + w.sentiment + w.quality
+    if total_w == 0:
+        total_w = 1.0
+
+    def _percentile_rank(
+        values: list[float | None], *, higher_is_better: bool = True
+    ) -> list[float]:
+        """Rank values as 0-100 percentiles. None values get 50 (neutral)."""
+        valid = [(i, v) for i, v in enumerate(values) if v is not None]
+        result = [50.0] * len(values)
+        if not valid:
+            return result
+        sorted_vals = sorted(valid, key=lambda x: x[1], reverse=not higher_is_better)
+        for rank, (idx, _) in enumerate(sorted_vals):
+            if higher_is_better:
+                result[idx] = ((len(valid) - 1 - rank) / max(len(valid) - 1, 1)) * 100
+            else:
+                result[idx] = (rank / max(len(valid) - 1, 1)) * 100
+        return result
+
+    # Fundamental: ROE, net_profit_margin, Piotroski
+    roe_ranks = _percentile_rank([s.roe for s in stocks])
+    margin_ranks = _percentile_rank([s.net_profit_margin for s in stocks])
+    piotroski_ranks = _percentile_rank(
+        [float(s.piotroski_score) if s.piotroski_score is not None else None for s in stocks]
+    )
+
+    # Momentum: price_change_1m, price_change_3m, relative_volume
+    mom_1m_ranks = _percentile_rank([s.price_change_1m for s in stocks])
+    mom_3m_ranks = _percentile_rank([s.price_change_3m for s in stocks])
+    rvol_ranks = _percentile_rank([s.relative_volume for s in stocks])
+
+    # Sentiment: insider_net_buys, analyst_buy_count, analyst_target_upside
+    insider_ranks = _percentile_rank(
+        [float(s.insider_net_buys) if s.insider_net_buys is not None else None for s in stocks]
+    )
+    analyst_ranks = _percentile_rank(
+        [float(s.analyst_buy_count) if s.analyst_buy_count is not None else None for s in stocks]
+    )
+    upside_ranks = _percentile_rank([s.analyst_target_upside for s in stocks])
+
+    # Quality: altman_z_score, current_ratio, debt_equity (lower is better)
+    altman_ranks = _percentile_rank([s.altman_z_score for s in stocks])
+    current_ranks = _percentile_rank([s.current_ratio for s in stocks])
+    debt_ranks = _percentile_rank([s.debt_equity for s in stocks], higher_is_better=False)
+
+    for i, stock in enumerate(stocks):
+        stock.score_fundamental = (roe_ranks[i] + margin_ranks[i] + piotroski_ranks[i]) / 3
+        stock.score_momentum = (mom_1m_ranks[i] + mom_3m_ranks[i] + rvol_ranks[i]) / 3
+        stock.score_sentiment = (insider_ranks[i] + analyst_ranks[i] + upside_ranks[i]) / 3
+        stock.score_quality = (altman_ranks[i] + current_ranks[i] + debt_ranks[i]) / 3
+
+        stock.composite_score = (
+            w.fundamental * stock.score_fundamental
+            + w.momentum * stock.score_momentum
+            + w.sentiment * stock.score_sentiment
+            + w.quality * stock.score_quality
+        ) / total_w
+
+    return stocks
+
+
 async def screen_and_enrich(
     config: FmpScreenerConfig,
 ) -> list[FmpEnrichedStock]:
-    """Screen stocks or crypto via FMP and optionally enrich with ratios.
+    """Screen stocks or crypto via FMP and enrich with full signal data.
 
-    For stocks (``is_crypto=False``):
-      1. Call ``/stable/company-screener`` with the config's filters.
-      2. Concurrently fetch ``ratios-ttm`` and ``key-metrics-ttm``.
-      3. Apply ratio-based post-filters (P/E range, min ROE, etc.).
+    For stocks (is_crypto=False):
+      1. Call /stable/company-screener with API-level filters.
+      2. Fetch ratios-ttm and key-metrics-ttm per symbol.
+      3. If enrich_with_ratios: fetch signal data (price changes, insider,
+         Piotroski, analyst, earnings) via _enrich_batch().
+      4. Compute composite scores with strategy-specific weights.
+      5. Apply all post-filters (ratio + signal).
+      6. Sort by composite score descending.
+      7. Apply sector concentration guard if configured.
 
-    For crypto (``is_crypto=True``):
-      Fetch all crypto quotes and filter client-side by market cap,
-      volume, and price. No ratio enrichment.
+    For crypto (is_crypto=True):
+      Fetch crypto quotes and filter client-side. No signal enrichment.
 
     Args:
         config: FMP screener configuration from the strategy.
 
     Returns:
-        List of enriched stocks/crypto that pass all filters.
+        List of enriched stocks that pass all filters, scored and sorted.
     """
     if config.is_crypto:
         return await screen_crypto(config)
@@ -491,30 +900,65 @@ async def screen_and_enrich(
     if not config.enrich_with_ratios:
         return [_merge_enrichment(s, None, None) for s in screener_results]
 
-    async def _enrich_one(
-        sr: FmpScreenerResult,
-    ) -> FmpEnrichedStock:
+    async def _enrich_one(sr: FmpScreenerResult) -> FmpEnrichedStock:
         ratios, metrics = await asyncio.gather(
             fetch_ratios_ttm(sr.symbol),
             fetch_key_metrics_ttm(sr.symbol),
         )
         return _merge_enrichment(sr, ratios, metrics)
 
-    enriched = await asyncio.gather(*[_enrich_one(sr) for sr in screener_results])
+    enriched = list(await asyncio.gather(*[_enrich_one(sr) for sr in screener_results]))
 
-    has_ratio_filters = any(
-        getattr(config, f) is not None for f in ("pe_max", "pe_min", "roe_min", "debt_equity_max")
+    enriched = await _enrich_batch(enriched)
+    logger.info("FMP signal enrichment complete for %d stocks", len(enriched))
+
+    enriched = _compute_composite_scores(enriched, config.scoring_weights)
+
+    has_filters = (
+        any(
+            getattr(config, f) is not None
+            for f in (
+                "pe_max",
+                "pe_min",
+                "roe_min",
+                "debt_equity_max",
+                "piotroski_min",
+                "rvol_min",
+                "earnings_within_days",
+            )
+        )
+        or config.require_insider_buying
     )
-    if has_ratio_filters:
-        filtered = [s for s in enriched if _apply_ratio_filters(s, config)]
+    if has_filters:
+        filtered = [s for s in enriched if _apply_post_filters(s, config)]
         logger.info(
-            "FMP ratio filters: %d → %d stocks after filtering",
+            "FMP post-filters: %d → %d stocks",
             len(enriched),
             len(filtered),
         )
-        return filtered
+        enriched = filtered
 
-    return list(enriched)
+    enriched.sort(key=lambda s: s.composite_score or 0, reverse=True)
+
+    if config.max_per_sector is not None:
+        sector_counts: dict[str, int] = {}
+        capped: list[FmpEnrichedStock] = []
+        for s in enriched:
+            sector = s.sector or "Unknown"
+            count = sector_counts.get(sector, 0)
+            if count < config.max_per_sector:
+                capped.append(s)
+                sector_counts[sector] = count + 1
+        if len(capped) < len(enriched):
+            logger.info(
+                "Sector cap (%d/sector): %d → %d stocks",
+                config.max_per_sector,
+                len(enriched),
+                len(capped),
+            )
+            enriched = capped
+
+    return enriched[: config.limit]
 
 
 async def screen_stocks_from_params(
@@ -532,6 +976,14 @@ async def screen_stocks_from_params(
     beta_min: float | None = None,
     beta_max: float | None = None,
     limit: int = 50,
+    pe_max: float | None = None,
+    roe_min: float | None = None,
+    debt_equity_max: float | None = None,
+    piotroski_min: int | None = None,
+    require_insider_buying: bool = False,
+    rvol_min: float | None = None,
+    earnings_within_days: int | None = None,
+    enrich_with_ratios: bool = False,
 ) -> list[dict[str, Any]]:
     """Screen stocks or crypto from raw parameters (used by Perplexity tool calls).
 
@@ -554,6 +1006,14 @@ async def screen_stocks_from_params(
         beta_min: Minimum beta. Stocks only.
         beta_max: Maximum beta. Stocks only.
         limit: Maximum results to return.
+        pe_max: Maximum P/E ratio filter.
+        roe_min: Minimum ROE filter.
+        debt_equity_max: Maximum debt/equity ratio filter.
+        piotroski_min: Minimum Piotroski F-Score filter.
+        require_insider_buying: If ``True``, only stocks with net insider buys.
+        rvol_min: Minimum relative volume filter.
+        earnings_within_days: Only stocks with earnings within N days.
+        enrich_with_ratios: If ``True``, run full signal enrichment pipeline.
 
     Returns:
         List of dicts with asset data (serialisable for tool-call output).
@@ -573,10 +1033,20 @@ async def screen_stocks_from_params(
         beta_min=beta_min,
         beta_max=beta_max,
         limit=limit,
-        enrich_with_ratios=False,
+        pe_max=pe_max,
+        roe_min=roe_min,
+        debt_equity_max=debt_equity_max,
+        piotroski_min=piotroski_min,
+        require_insider_buying=require_insider_buying,
+        rvol_min=rvol_min,
+        earnings_within_days=earnings_within_days,
+        enrich_with_ratios=enrich_with_ratios,
     )
     if is_crypto:
         results = await screen_crypto(config)
+        return [r.model_dump() for r in results]
+    if enrich_with_ratios:
+        results = await screen_and_enrich(config)
         return [r.model_dump() for r in results]
     stock_results = await screen_stocks(config)
     return [r.model_dump() for r in stock_results]
