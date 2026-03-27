@@ -4,6 +4,7 @@ import { OverviewTab } from './OverviewTab';
 import { ChartTab } from './ChartTab';
 import { SentimentTab } from './SentimentTab';
 import { SynthesisTab } from './SynthesisTab';
+import { FeedbackTab } from './FeedbackTab';
 import { RawTab } from './RawTab';
 import { motion, AnimatePresence } from 'motion/react';
 import clsx from 'clsx';
@@ -13,7 +14,7 @@ interface DetailViewProps {
   fullResult: PipelineResult;
 }
 
-type TabType = 'overview' | 'chart' | 'sentiment' | 'synthesis' | 'raw';
+type TabType = 'overview' | 'chart' | 'sentiment' | 'synthesis' | 'feedback' | 'raw';
 
 export function DetailView({ tickerData, fullResult }: DetailViewProps) {
   const [activeTab, setActiveTab] = useState<TabType>('overview');
@@ -27,6 +28,7 @@ export function DetailView({ tickerData, fullResult }: DetailViewProps) {
     { id: 'chart', label: 'Chart' },
     { id: 'sentiment', label: 'Sentiment' },
     { id: 'synthesis', label: 'Synthesis' },
+    { id: 'feedback', label: 'Feedback' },
     { id: 'raw', label: 'Raw Data' },
   ];
 
@@ -78,6 +80,7 @@ export function DetailView({ tickerData, fullResult }: DetailViewProps) {
               />
             )}
             {activeTab === 'sentiment' && <SentimentTab sentiment={sentiment} />}
+            {activeTab === 'feedback' && <FeedbackTab recommendation={recommendation} />}
             {activeTab === 'raw' && <RawTab data={fullResult} />}
             {activeTab === 'synthesis' && <SynthesisTab recommendation={recommendation} />}
           </motion.div>

@@ -383,9 +383,14 @@ export interface RecommendationWithStatus {
   decision_reason: string;
   decided_at: string | null;
   outcome_id: string | null;
+  outcome_entry_price: number | null;
+  outcome_exit_price: number | null;
+  outcome_shares: number | null;
   outcome_pnl_dollars: number | null;
   outcome_pnl_percent: number | null;
+  outcome_holding_days: number | null;
   outcome_exit_reason: string;
+  outcome_notes: string;
   outcome_logged_at: string | null;
 }
 

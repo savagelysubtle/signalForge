@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
 import { api } from "../api/client";
+import { notifyFeedbackChanged, useFeedbackSync } from "../lib/feedbackSync";
 import type {
   ReflectionResponse,
   PerformanceOverview,
@@ -40,11 +41,14 @@ export function useInsights() {
     }
   }, []);
 
+  useFeedbackSync(fetchAll);
+
   const recordDecision = useCallback(
     async (recommendationId: string, body: DecisionCreate) => {
       setError(null);
       try {
         await api.createDecision(recommendationId, body);
+        notifyFeedbackChanged();
         await fetchAll();
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to record decision");
@@ -59,9 +63,25 @@ export function useInsights() {
       setError(null);
       try {
         await api.createOutcome(decisionId, body);
+        notifyFeedbackChanged();
         await fetchAll();
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to log outcome");
+        throw e;
+      }
+    },
+    [fetchAll],
+  );
+
+  const undoDecision = useCallback(
+    async (decisionId: string) => {
+      setError(null);
+      try {
+        await api.deleteDecision(decisionId);
+        notifyFeedbackChanged();
+        await fetchAll();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Failed to undo decision");
         throw e;
       }
     },
@@ -91,6 +111,7 @@ export function useInsights() {
     fetchAll,
     recordDecision,
     logOutcome,
+    undoDecision,
     generateReflection,
   };
 }

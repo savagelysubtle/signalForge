@@ -95,11 +95,18 @@ export const api = {
     return request<DecisionResponse[]>(`/api/decisions?${params}`);
   },
   getDecision: (id: string) => request<DecisionResponse>(`/api/decisions/${id}`),
+  deleteDecision: (id: string) =>
+    request<void>(`/api/decisions/${id}`, { method: "DELETE" }),
 
   // Outcomes
   createOutcome: (decisionId: string, body: OutcomeCreate) =>
     request<OutcomeResponse>(`/api/outcomes/decisions/${decisionId}/outcome`, {
       method: "POST",
+      body: JSON.stringify(body),
+    }),
+  updateOutcome: (outcomeId: string, body: OutcomeCreate) =>
+    request<OutcomeResponse>(`/api/outcomes/${outcomeId}`, {
+      method: "PUT",
       body: JSON.stringify(body),
     }),
   listOutcomes: (limit = 50, offset = 0) =>
@@ -108,6 +115,8 @@ export const api = {
   // Recommendations (trade journal)
   listRecommendations: (limit = 50, offset = 0) =>
     request<RecommendationWithStatus[]>(`/api/recommendations?limit=${limit}&offset=${offset}`),
+  getRecommendationStatus: (id: string) =>
+    request<RecommendationWithStatus>(`/api/recommendations/${id}`),
 
   // Insights
   getPerformanceOverview: () => request<PerformanceOverview>("/api/insights/overview"),

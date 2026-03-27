@@ -523,7 +523,12 @@ class RecommendationWithStatus(BaseModel):
     decision_reason: str = ""
     decided_at: str | None = None
     outcome_id: str | None = None
+    outcome_entry_price: float | None = None
+    outcome_exit_price: float | None = None
+    outcome_shares: int | None = None
     outcome_pnl_dollars: float | None = None
     outcome_pnl_percent: float | None = None
+    outcome_holding_days: int | None = None
     outcome_exit_reason: str = ""
+    outcome_notes: str = ""
     outcome_logged_at: str | None = None

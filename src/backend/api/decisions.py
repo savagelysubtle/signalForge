@@ -34,7 +34,7 @@ async def create_decision(
         .maybe_single()
         .execute()
     )
-    if not rec_resp.data:
+    if not rec_resp or not rec_resp.data:
         raise HTTPException(status_code=404, detail="Recommendation not found")
     rec = rec_resp.data
 
@@ -46,7 +46,7 @@ async def create_decision(
         .maybe_single()
         .execute()
     )
-    if existing.data:
+    if existing and existing.data:
         raise HTTPException(
             status_code=409, detail="Decision already recorded for this recommendation"
         )
@@ -133,6 +133,40 @@ async def list_decisions(
     return results
 
 
+@router.delete("/{decision_id}", status_code=204)
+async def delete_decision(
+    decision_id: str,
+    user_id: CurrentUser,
+) -> None:
+    """Remove a decision (and its outcome, if any) so the user can re-decide.
+
+    Only allowed when there is no outcome yet, OR when the caller
+    explicitly wants to wipe both. Cascade-deletes the linked outcome
+    to keep the data consistent.
+    """
+    client = await get_db()
+
+    existing = (
+        await client.table("decisions")
+        .select("id")
+        .eq("id", decision_id)
+        .eq("user_id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    if not existing or not existing.data:
+        raise HTTPException(status_code=404, detail="Decision not found")
+
+    await (
+        client.table("outcomes")
+        .delete()
+        .eq("decision_id", decision_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    await client.table("decisions").delete().eq("id", decision_id).eq("user_id", user_id).execute()
+
+
 @router.get("/{decision_id}", response_model=DecisionResponse)
 async def get_decision(
     decision_id: str,
@@ -149,7 +183,7 @@ async def get_decision(
         .maybe_single()
         .execute()
     )
-    if not resp.data:
+    if not resp or not resp.data:
         raise HTTPException(status_code=404, detail="Decision not found")
     d = resp.data
 
@@ -160,7 +194,7 @@ async def get_decision(
         .maybe_single()
         .execute()
     )
-    rec = rec_resp.data or {}
+    rec = (rec_resp.data if rec_resp else None) or {}
 
     return DecisionResponse(
         id=d["id"],

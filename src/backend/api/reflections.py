@@ -50,7 +50,7 @@ async def get_latest_reflection(user_id: CurrentUser) -> ReflectionResponse:
         .maybe_single()
         .execute()
     )
-    if not resp.data:
+    if not resp or not resp.data:
         raise HTTPException(status_code=404, detail="No reflections found")
 
     r = resp.data

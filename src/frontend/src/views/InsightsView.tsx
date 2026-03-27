@@ -39,6 +39,7 @@ export function InsightsView() {
     fetchAll,
     recordDecision,
     logOutcome,
+    undoDecision,
     generateReflection,
   } = useInsights();
 
@@ -103,6 +104,7 @@ export function InsightsView() {
         recommendations={recommendations}
         onRecordDecision={recordDecision}
         onLogOutcome={logOutcome}
+        onUndoDecision={undoDecision}
       />
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
@@ -229,10 +231,12 @@ function RecommendationJournal({
   recommendations,
   onRecordDecision,
   onLogOutcome,
+  onUndoDecision,
 }: {
   recommendations: RecommendationWithStatus[];
   onRecordDecision: (recId: string, body: DecisionCreate) => Promise<void>;
   onLogOutcome: (decisionId: string, body: OutcomeCreate) => Promise<void>;
+  onUndoDecision: (decisionId: string) => Promise<void>;
 }) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -273,6 +277,7 @@ function RecommendationJournal({
               onToggle={() => setExpandedId(expandedId === rec.id ? null : rec.id)}
               onRecordDecision={onRecordDecision}
               onLogOutcome={onLogOutcome}
+              onUndoDecision={onUndoDecision}
             />
           ))}
         </div>
@@ -297,6 +302,7 @@ function JournalRow({
   onToggle,
   onRecordDecision,
   onLogOutcome,
+  onUndoDecision,
 }: {
   rec: RecommendationWithStatus;
   index: number;
@@ -304,6 +310,7 @@ function JournalRow({
   onToggle: () => void;
   onRecordDecision: (recId: string, body: DecisionCreate) => Promise<void>;
   onLogOutcome: (decisionId: string, body: OutcomeCreate) => Promise<void>;
+  onUndoDecision: (decisionId: string) => Promise<void>;
 }) {
   const status = getRowStatus(rec);
 
@@ -395,6 +402,7 @@ function JournalRow({
               status={status}
               onRecordDecision={onRecordDecision}
               onLogOutcome={onLogOutcome}
+              onUndoDecision={onUndoDecision}
             />
           </motion.div>
         )}
@@ -455,12 +463,26 @@ function ExpandedRow({
   status,
   onRecordDecision,
   onLogOutcome,
+  onUndoDecision,
 }: {
   rec: RecommendationWithStatus;
   status: RowStatus;
   onRecordDecision: (recId: string, body: DecisionCreate) => Promise<void>;
   onLogOutcome: (decisionId: string, body: OutcomeCreate) => Promise<void>;
+  onUndoDecision: (decisionId: string) => Promise<void>;
 }) {
+  const [isUndoing, setIsUndoing] = useState(false);
+
+  const handleUndo = async () => {
+    if (!rec.decision_id) return;
+    setIsUndoing(true);
+    try {
+      await onUndoDecision(rec.decision_id);
+    } finally {
+      setIsUndoing(false);
+    }
+  };
+
   return (
     <div className="px-5 pb-4 pt-1 bg-bg-concrete/50 border-t border-border-subtle">
       {/* Trade params summary */}
@@ -480,15 +502,23 @@ function ExpandedRow({
       {status === "pending" && <DecisionForm recId={rec.id} onSubmit={onRecordDecision} />}
 
       {status === "following" && rec.decision_id && (
-        <OutcomeForm decisionId={rec.decision_id} onSubmit={onLogOutcome} />
+        <div className="space-y-3">
+          <OutcomeForm decisionId={rec.decision_id} onSubmit={onLogOutcome} />
+          <UndoButton isUndoing={isUndoing} onUndo={handleUndo} label="Undo Follow" />
+        </div>
       )}
 
-      {status === "passed" && rec.decision_reason && (
-        <div className="bg-bg-concrete rounded-lg px-3 py-2 border border-border-subtle">
-          <span className="text-[10px] text-text-muted font-display uppercase tracking-wider">
-            Reason for passing
-          </span>
-          <p className="text-xs text-text-secondary font-body mt-1">{rec.decision_reason}</p>
+      {status === "passed" && (
+        <div className="space-y-3">
+          {rec.decision_reason && (
+            <div className="bg-bg-concrete rounded-lg px-3 py-2 border border-border-subtle">
+              <span className="text-[10px] text-text-muted font-display uppercase tracking-wider">
+                Reason for passing
+              </span>
+              <p className="text-xs text-text-secondary font-body mt-1">{rec.decision_reason}</p>
+            </div>
+          )}
+          <UndoButton isUndoing={isUndoing} onUndo={handleUndo} label="Undo Pass" />
         </div>
       )}
 
@@ -524,6 +554,27 @@ function ExpandedRow({
         </div>
       )}
     </div>
+  );
+}
+
+function UndoButton({
+  isUndoing,
+  onUndo,
+  label,
+}: {
+  isUndoing: boolean;
+  onUndo: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      onClick={onUndo}
+      disabled={isUndoing}
+      className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[10px] font-display font-medium text-text-muted hover:text-accent-loss transition-colors"
+    >
+      {isUndoing ? <Loader2 className="w-3 h-3 animate-spin" /> : <X className="w-3 h-3" />}
+      {label}
+    </button>
   );
 }
 

@@ -34,7 +34,7 @@ async def create_outcome(
         .maybe_single()
         .execute()
     )
-    if not dec_resp.data:
+    if not dec_resp or not dec_resp.data:
         raise HTTPException(status_code=404, detail="Decision not found")
 
     dec = dec_resp.data
@@ -52,7 +52,7 @@ async def create_outcome(
         .maybe_single()
         .execute()
     )
-    if existing.data:
+    if existing and existing.data:
         raise HTTPException(status_code=409, detail="Outcome already recorded for this decision")
 
     rec_resp = (
@@ -62,7 +62,7 @@ async def create_outcome(
         .maybe_single()
         .execute()
     )
-    ticker = rec_resp.data["ticker"] if rec_resp.data else ""
+    ticker = rec_resp.data["ticker"] if rec_resp and rec_resp.data else ""
 
     outcome_id = uuid.uuid4().hex
     row = {
@@ -84,6 +84,59 @@ async def create_outcome(
 
     inserted = await client.table("outcomes").select("*").eq("id", outcome_id).single().execute()
     o = inserted.data
+
+    return OutcomeResponse(
+        id=o["id"],
+        user_id=o["user_id"],
+        decision_id=o["decision_id"],
+        recommendation_id=o["recommendation_id"],
+        ticker=o["ticker"],
+        entry_price=o.get("entry_price"),
+        exit_price=o.get("exit_price"),
+        shares=o.get("shares"),
+        pnl_dollars=o.get("pnl_dollars"),
+        pnl_percent=o.get("pnl_percent"),
+        holding_days=o.get("holding_days"),
+        exit_reason=o.get("exit_reason") or "",
+        notes=o.get("notes") or "",
+        logged_at=str(o["logged_at"]),
+    )
+
+
+@router.put("/{outcome_id}", response_model=OutcomeResponse)
+async def update_outcome(
+    outcome_id: str,
+    body: OutcomeCreate,
+    user_id: CurrentUser,
+) -> OutcomeResponse:
+    """Update an existing trade outcome."""
+    client = await get_db()
+
+    existing = (
+        await client.table("outcomes")
+        .select("id, decision_id, recommendation_id, ticker")
+        .eq("id", outcome_id)
+        .eq("user_id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    if not existing or not existing.data:
+        raise HTTPException(status_code=404, detail="Outcome not found")
+
+    updates: dict = {
+        "entry_price": body.entry_price,
+        "exit_price": body.exit_price,
+        "shares": body.shares,
+        "pnl_dollars": body.pnl_dollars,
+        "pnl_percent": body.pnl_percent,
+        "holding_days": body.holding_days,
+        "exit_reason": body.exit_reason,
+        "notes": body.notes,
+    }
+    await client.table("outcomes").update(updates).eq("id", outcome_id).execute()
+
+    updated = await client.table("outcomes").select("*").eq("id", outcome_id).single().execute()
+    o = updated.data
 
     return OutcomeResponse(
         id=o["id"],
