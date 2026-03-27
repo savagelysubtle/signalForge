@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Play, Loader2, XCircle,
   Search, Crosshair, Layers, MessageSquare,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import clsx from 'clsx';
@@ -10,7 +11,53 @@ import { useStrategies } from '../../hooks/useStrategies';
 import { usePipeline } from '../../hooks/usePipeline';
 import { classifyInput, deriveRunMode } from '../../lib/classifyInput';
 import type { RunMode } from '../../lib/classifyInput';
+import type { ScreenerOverrides } from '../../types';
 import logoIcon from '../../assets/signalforge-logo-icon.svg';
+
+const COUNTRY_OPTIONS = [
+  { value: '', label: 'Any Country' },
+  { value: 'CA', label: 'Canada' },
+  { value: 'US', label: 'United States' },
+  { value: 'GB', label: 'United Kingdom' },
+  { value: 'DE', label: 'Germany' },
+  { value: 'AU', label: 'Australia' },
+] as const;
+
+const EXCHANGE_OPTIONS = [
+  { value: '', label: 'Any Exchange' },
+  { value: 'TSX', label: 'TSX' },
+  { value: 'TSXV', label: 'TSXV' },
+  { value: 'NYSE', label: 'NYSE' },
+  { value: 'NASDAQ', label: 'NASDAQ' },
+  { value: 'AMEX', label: 'AMEX' },
+  { value: 'LSE', label: 'LSE' },
+  { value: 'ASX', label: 'ASX' },
+  { value: 'XETR', label: 'XETR' },
+] as const;
+
+const SECTOR_OPTIONS = [
+  { value: '', label: 'Any Sector' },
+  { value: 'Technology', label: 'Technology' },
+  { value: 'Healthcare', label: 'Healthcare' },
+  { value: 'Financial Services', label: 'Financials' },
+  { value: 'Energy', label: 'Energy' },
+  { value: 'Consumer Cyclical', label: 'Consumer Cyclical' },
+  { value: 'Consumer Defensive', label: 'Consumer Defensive' },
+  { value: 'Industrials', label: 'Industrials' },
+  { value: 'Basic Materials', label: 'Basic Materials' },
+  { value: 'Communication Services', label: 'Communication' },
+  { value: 'Utilities', label: 'Utilities' },
+  { value: 'Real Estate', label: 'Real Estate' },
+] as const;
+
+const MARKET_CAP_OPTIONS = [
+  { value: '', label: 'Any Cap', min: null, max: null },
+  { value: 'micro', label: 'Micro (<$300M)', min: null, max: 300_000_000 },
+  { value: 'small', label: 'Small ($300M-$2B)', min: 300_000_000, max: 2_000_000_000 },
+  { value: 'mid', label: 'Mid ($2B-$10B)', min: 2_000_000_000, max: 10_000_000_000 },
+  { value: 'large', label: 'Large ($10B-$100B)', min: 10_000_000_000, max: 100_000_000_000 },
+  { value: 'mega', label: 'Mega (>$100B)', min: 100_000_000_000, max: null },
+] as const;
 
 const MODE_CONFIG: Record<RunMode, { label: string; color: string; icon: React.ReactNode }> = {
   none: { label: '', color: '', icon: null },
@@ -35,6 +82,11 @@ export function SearchScreen() {
 
   const [selectedStrategy, setSelectedStrategy] = useState<string>('');
   const [inputText, setInputText] = useState<string>('');
+  const [showFilters, setShowFilters] = useState(false);
+  const [filterCountry, setFilterCountry] = useState('');
+  const [filterExchange, setFilterExchange] = useState('');
+  const [filterSector, setFilterSector] = useState('');
+  const [filterMarketCap, setFilterMarketCap] = useState('');
 
   const allStrategies = [...templates, ...strategies].filter(
     (s, i, arr) => arr.findIndex((t) => t.id === s.id) === i,
@@ -52,15 +104,29 @@ export function SearchScreen() {
 
   const modeConfig = MODE_CONFIG[runMode];
 
+  const buildOverrides = (): ScreenerOverrides | undefined => {
+    const capOption = MARKET_CAP_OPTIONS.find(o => o.value === filterMarketCap);
+    const overrides: ScreenerOverrides = {};
+    if (filterCountry) overrides.country = filterCountry;
+    if (filterExchange) overrides.exchange = filterExchange;
+    if (filterSector) overrides.sector = filterSector;
+    if (capOption && capOption.min !== null) overrides.market_cap_min = capOption.min;
+    if (capOption && capOption.max !== null) overrides.market_cap_max = capOption.max;
+    return Object.keys(overrides).length > 0 ? overrides : undefined;
+  };
+
+  const activeFilterCount = [filterCountry, filterExchange, filterSector, filterMarketCap].filter(Boolean).length;
+
   const handleRun = async () => {
     if (runMode === 'none') return;
 
     const strategyId = selectedStrategy || undefined;
     const tickers = parsedTickers.length > 0 ? parsedTickers : undefined;
     const userPrompt = inputKind === 'prompt' ? inputText.trim() : undefined;
+    const overrides = buildOverrides();
 
     try {
-      const result = await runPipeline(strategyId, tickers, userPrompt);
+      const result = await runPipeline(strategyId, tickers, userPrompt, overrides);
       navigate(`/?run=${result.run_id}`);
     } catch (err) {
       console.error(err);
@@ -133,6 +199,81 @@ export function SearchScreen() {
               </span>
             )}
           </div>
+        </motion.div>
+
+        {/* Screener filter overrides */}
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, delay: 0.15, ease: 'easeOut' }}
+          className="w-full mb-4"
+        >
+          <button
+            onClick={() => setShowFilters(!showFilters)}
+            className="flex items-center gap-1.5 text-[11px] font-display text-text-muted uppercase tracking-wider mb-2 hover:text-text-secondary transition-colors"
+          >
+            <SlidersHorizontal className="w-3 h-3" />
+            Screener Filters
+            {activeFilterCount > 0 && (
+              <span className="bg-accent-signal/20 text-accent-signal text-[9px] px-1.5 py-0.5 rounded-full font-bold">
+                {activeFilterCount}
+              </span>
+            )}
+          </button>
+
+          {showFilters && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.2, ease: 'easeOut' }}
+              className="grid grid-cols-2 lg:grid-cols-4 gap-2 mb-2"
+            >
+              <select
+                value={filterCountry}
+                onChange={(e) => setFilterCountry(e.target.value)}
+                disabled={isRunning}
+                className="bg-bg-concrete border border-border-gutter rounded-md px-2.5 py-2 text-xs text-text-primary font-body focus:outline-none focus:border-accent-signal transition-colors appearance-none cursor-pointer"
+              >
+                {COUNTRY_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+
+              <select
+                value={filterExchange}
+                onChange={(e) => setFilterExchange(e.target.value)}
+                disabled={isRunning}
+                className="bg-bg-concrete border border-border-gutter rounded-md px-2.5 py-2 text-xs text-text-primary font-body focus:outline-none focus:border-accent-signal transition-colors appearance-none cursor-pointer"
+              >
+                {EXCHANGE_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+
+              <select
+                value={filterSector}
+                onChange={(e) => setFilterSector(e.target.value)}
+                disabled={isRunning}
+                className="bg-bg-concrete border border-border-gutter rounded-md px-2.5 py-2 text-xs text-text-primary font-body focus:outline-none focus:border-accent-signal transition-colors appearance-none cursor-pointer"
+              >
+                {SECTOR_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+
+              <select
+                value={filterMarketCap}
+                onChange={(e) => setFilterMarketCap(e.target.value)}
+                disabled={isRunning}
+                className="bg-bg-concrete border border-border-gutter rounded-md px-2.5 py-2 text-xs text-text-primary font-body focus:outline-none focus:border-accent-signal transition-colors appearance-none cursor-pointer"
+              >
+                {MARKET_CAP_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </motion.div>
+          )}
         </motion.div>
 
         {/* Strategy cards */}

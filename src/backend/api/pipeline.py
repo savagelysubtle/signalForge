@@ -21,6 +21,7 @@ from pipeline.schemas import (
     FundamentalData,
     PipelineResult,
     Recommendation,
+    ScreenerOverrides,
     ScreeningResult,
     SentimentAnalysis,
 )
@@ -34,6 +35,7 @@ class PipelineRunRequest(BaseModel):
     strategy_id: str | None = None
     manual_tickers: list[str] = Field(default_factory=list)
     user_prompt: str | None = None
+    screener_overrides: ScreenerOverrides | None = None
 
 
 class PipelineRunResponse(BaseModel):
@@ -57,6 +59,7 @@ async def trigger_pipeline_run(
         manual_tickers=tickers,
         user_prompt=user_prompt,
         user_id=user_id,
+        screener_overrides=body.screener_overrides,
     )
     return PipelineRunResponse(run_id=result.run_id, status="completed")
 
@@ -70,10 +73,11 @@ async def get_pipeline_status(run_id: str, user_id: CurrentUser) -> PipelineResu
         .select("*")
         .eq("id", run_id)
         .eq("user_id", user_id)
-        .maybe_single()
+        .limit(1)
         .execute()
     )
-    row = resp.data
+    rows = resp.data if resp else []
+    row = rows[0] if rows else None
     if not row:
         raise HTTPException(status_code=404, detail=f"Pipeline run '{run_id}' not found")
 
@@ -221,10 +225,10 @@ async def _load_screening(
         .eq("run_id", run_id)
         .eq("stage", "perplexity")
         .limit(1)
-        .maybe_single()
         .execute()
     )
-    row = resp.data
+    rows = resp.data if resp else []
+    row = rows[0] if rows else None
     if row and row["raw_response"]:
         try:
             return ScreeningResult.model_validate_json(row["raw_response"])

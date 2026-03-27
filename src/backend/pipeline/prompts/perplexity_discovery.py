@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 from pipeline.schemas import StrategyConfig
 from utils.hashing import prompt_hash
 
-PROMPT_VERSION = "v13"
+PROMPT_VERSION = "v15"
 
 
 def _get_session_context() -> str:
@@ -37,13 +37,143 @@ def _get_session_context() -> str:
     return f"{time_str} ({session})"
 
 
-DISCOVERY_SYSTEM_PROMPT = """\
-You are a financial research analyst specializing in market screening
-with a focus on the Canadian market (TSX, TSXV). Unless the user
-explicitly requests a different market or region, default to Canadian-listed
-securities. You may include US or international tickers only when
-the screening criteria specifically call for them or when there are no
-suitable Canadian matches.
+_MARKET_INTROS: dict[str, str] = {
+    "CA": (
+        "You are a financial research analyst specializing in market screening "
+        "with a focus on the Canadian market (TSX, TSXV). Unless the user "
+        "explicitly requests a different market or region, default to "
+        "Canadian-listed securities."
+    ),
+    "US": (
+        "You are a financial research analyst specializing in US equity markets "
+        "(NYSE, NASDAQ, AMEX). Focus on US-listed securities. You may include "
+        "Canadian or international tickers only when there are no suitable "
+        "US matches."
+    ),
+    "global": (
+        "You are a financial research analyst with global market expertise. "
+        "Consider equities from any exchange or region. Prefer liquid markets "
+        "(US, Canada, Europe, Australia) unless the strategy specifies otherwise."
+    ),
+    "crypto": (
+        "You are a financial research analyst specializing in cryptocurrency "
+        "markets. Focus on tokens listed on major exchanges with sufficient "
+        "liquidity. Cover both established Layer 1s and emerging protocols."
+    ),
+}
+
+_EXCHANGE_TO_COUNTRY: dict[str, str] = {
+    "TSX": "CA",
+    "TSXV": "CA",
+    "NYSE": "US",
+    "NASDAQ": "US",
+    "AMEX": "US",
+    "LSE": "GB",
+    "ASX": "AU",
+    "XETR": "DE",
+}
+
+
+def _derive_market_key(
+    country: str | None = None,
+    exchange: str | None = None,
+    is_crypto: bool = False,
+) -> str:
+    """Derive the market intro key from effective FMP config values."""
+    if is_crypto:
+        return "crypto"
+    if exchange and exchange in _EXCHANGE_TO_COUNTRY:
+        return _EXCHANGE_TO_COUNTRY[exchange]
+    if country:
+        return country
+    return "CA"
+
+
+def _build_market_constraint(
+    market_key: str,
+    country: str | None = None,
+    exchange: str | None = None,
+) -> str:
+    """Build an explicit market constraint paragraph for the system prompt.
+
+    Tells Perplexity which exchanges/countries are allowed so it doesn't
+    add out-of-market picks from web search.
+    """
+    if market_key == "crypto":
+        return ""
+    if market_key == "CA":
+        return (
+            "\nMARKET CONSTRAINT: ALL tickers must be Canadian-listed (TSX or TSXV). "
+            "Do NOT include US-listed stocks (NYSE, NASDAQ, AMEX) even if the company "
+            "has Canadian operations. If a company is dual-listed, use the TSX/TSXV "
+            "ticker (e.g. TSX:SHOP not SHOP). Only return tickers with TSX: or TSXV: prefix."
+        )
+    if market_key == "US":
+        return (
+            "\nMARKET CONSTRAINT: ALL tickers must be US-listed (NYSE, NASDAQ, or AMEX). "
+            "Do NOT include foreign-listed stocks. Return plain US symbols without "
+            "exchange prefix (e.g. AAPL, MSFT)."
+        )
+    if exchange:
+        return (
+            f"\nMARKET CONSTRAINT: ALL tickers must be listed on {exchange}. "
+            f"Do NOT include tickers from other exchanges."
+        )
+    if country:
+        return (
+            f"\nMARKET CONSTRAINT: ALL tickers must be listed in {country}. "
+            f"Do NOT include tickers from other countries/markets."
+        )
+    return ""
+
+
+def build_system_prompt(
+    country: str | None = None,
+    exchange: str | None = None,
+    sector: str | None = None,
+    is_crypto: bool = False,
+) -> str:
+    """Build the discovery system prompt with dynamic market context.
+
+    Args:
+        country: Effective country code (after overrides).
+        exchange: Effective exchange (after overrides).
+        sector: Effective sector filter (after overrides).
+        is_crypto: Whether this is a crypto strategy.
+
+    Returns:
+        Complete system prompt string.
+    """
+    market_key = _derive_market_key(country, exchange, is_crypto)
+    intro = _MARKET_INTROS.get(market_key, _MARKET_INTROS["CA"])
+
+    sector_hint = ""
+    if sector:
+        sector_hint = f"\n\nFOCUS SECTOR: {sector}. Prioritize companies in the {sector} sector."
+
+    exchange_hint = ""
+    if exchange:
+        exchange_hint = f" Prioritize securities listed on {exchange}."
+
+    if sector:
+        diversity_block = (
+            f"DIVERSITY REQUIREMENT: Since the strategy targets {sector}, ensure your "
+            f"picks span at least 3 different industries or sub-sectors WITHIN {sector}. "
+            f"Avoid clustering all picks in the same narrow niche."
+        )
+    else:
+        diversity_block = (
+            "DIVERSITY REQUIREMENT: Ensure your picks span at least 3 different sectors "
+            "or industries. Avoid returning multiple tickers from the same narrow "
+            "sub-sector unless the strategy explicitly targets one sector."
+        )
+
+    market_constraint = _build_market_constraint(market_key, country, exchange)
+
+    return f"""\
+{intro}{exchange_hint}
+{sector_hint}
+{diversity_block}
 
 CRITICAL — YOU HAVE LIVE WEB SEARCH AND TOOLS:
 You have real-time web search built in. You MUST use your search capabilities
@@ -63,8 +193,10 @@ upcoming earnings dates with historical beat rates where available.
 TRUST THE FMP DATA — these numbers come from verified financial databases,
 not web search. Use web search to supplement with qualitative context
 (recent news, catalysts, management commentary) rather than re-verifying
-the quantitative data already provided.
-
+the quantitative data already provided. You may include additional picks
+from web search beyond the FMP list, but they MUST respect the market
+constraint below.
+{market_constraint}
 You may also have access to a screen_stocks tool that calls the FMP API.
 Use it if the pre-screened candidates are a poor fit for the strategy and
 you need to search with different parameters (e.g. different sector, market
@@ -78,11 +210,11 @@ array is NEVER acceptable — always return at least your best candidates
 with any caveats noted in key_highlights. Partial data is valuable.
 
 Return a JSON object with this exact structure:
-{
+{{
   "mode": "discovery",
   "strategy_name": "<strategy name or null>",
   "tickers": [
-    {
+    {{
       "ticker": "<SYMBOL>",
       "company_name": "<full name>",
       "asset_type": "stock" | "etf" | "crypto",
@@ -99,10 +231,10 @@ Return a JSON object with this exact structure:
       "key_highlights": ["<highlight 1>", "<highlight 2>"],
       "risk_factors": ["<risk 1>", "<risk 2>"],
       "sources": ["<url or source name>"]
-    }
+    }}
   ],
   "screening_summary": "<brief summary of screening rationale and methodology>"
-}
+}}
 
 ANTI-HALLUCINATION RULES (for financial metrics only):
 - If you cannot verify a specific number (pe_ratio, revenue_growth, etc.)
@@ -126,6 +258,9 @@ Ticker format rules (CRITICAL -- use TradingView format):
 - Crypto: plain symbol (e.g. BTC, ETH, SOL)
 - NEVER return Yahoo Finance format with suffixes like .TO, .V, .L
 """
+
+
+DISCOVERY_SYSTEM_PROMPT = build_system_prompt(country="CA")
 
 
 def build_discovery_prompt(config: StrategyConfig) -> str:

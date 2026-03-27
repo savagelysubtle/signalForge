@@ -29,8 +29,10 @@ from pipeline.prompts.perplexity_discovery import get_prompt_hash as discovery_h
 from pipeline.schemas import (
     ChartAnalysis,
     ChartError,
+    FmpScreenerConfig,
     PipelineResult,
     Recommendation,
+    ScreenerOverrides,
     StrategyConfig,
 )
 from pipeline.stages.claude import run_chart_analysis
@@ -62,6 +64,7 @@ async def run_pipeline(
     manual_tickers: list[str] | None = None,
     user_prompt: str | None = None,
     user_id: str,
+    screener_overrides: ScreenerOverrides | None = None,
 ) -> PipelineResult:
     """Execute the analysis pipeline.
 
@@ -123,6 +126,40 @@ async def run_pipeline(
         .execute()
     )
 
+    # Apply screener overrides to FMP config (dashboard dropdowns)
+    if screener_overrides and screener_overrides.has_any():
+        if config and config.fmp_screener:
+            config.fmp_screener = screener_overrides.apply_to(config.fmp_screener)
+            logger.info(
+                "Applied screener overrides to strategy '%s': %s",
+                config.name,
+                screener_overrides.model_dump(exclude_none=True),
+            )
+        elif config:
+            config.fmp_screener = screener_overrides.apply_to(
+                FmpScreenerConfig(enabled=True, country="CA")
+            )
+            logger.info(
+                "Created FMP config on strategy '%s' from overrides: %s",
+                config.name,
+                screener_overrides.model_dump(exclude_none=True),
+            )
+        else:
+            fmp_config = screener_overrides.apply_to(
+                FmpScreenerConfig(enabled=True, country="CA", enrich_with_ratios=True, limit=50)
+            )
+            config = StrategyConfig(
+                id="overrides",
+                name="Custom Filters",
+                description="Pipeline run with dashboard screener filters",
+                screening_prompt=_build_override_screening_prompt(screener_overrides),
+                fmp_screener=fmp_config,
+            )
+            logger.info(
+                "Created synthetic strategy from screener overrides: %s",
+                screener_overrides.model_dump(exclude_none=True),
+            )
+
     # Stage 0: FMP Pre-Screening (if strategy has fmp_screener config)
     fmp_candidates: list[FmpEnrichedStock] | None = None
     fmp_enabled = (
@@ -181,7 +218,9 @@ async def run_pipeline(
                 return await run_discovery(config, fmp_candidates=fmp_candidates)
             if mode == "discovery" and not config:
                 default_prompt = "trending Canadian TSX stocks and top TSX market movers today"
-                return await run_prompted_discovery(default_prompt, None)
+                return await run_prompted_discovery(
+                    default_prompt, None, fmp_candidates=fmp_candidates
+                )
             if mode == "analysis":
                 return await run_analysis(manual_tickers or [], config)
             if mode == "combined" and config:
@@ -556,6 +595,48 @@ async def _save_recommendations(
     ]
     await client.table("recommendations").insert(rows).execute()
     logger.info("Saved %d recommendations for run %s", len(recommendations), run_id)
+
+
+def _build_override_screening_prompt(overrides: ScreenerOverrides) -> str:
+    """Build a screening prompt from dashboard filter overrides.
+
+    Constructs a search-query-style prompt that reflects the user's
+    chosen country, exchange, sector, and market cap filters.
+
+    Args:
+        overrides: The screener overrides from the dashboard.
+
+    Returns:
+        A screening prompt string for Perplexity.
+    """
+    parts: list[str] = []
+
+    country_names = {"CA": "Canadian", "US": "US", "GB": "UK", "DE": "German", "AU": "Australian"}
+    if overrides.country:
+        parts.append(country_names.get(overrides.country, overrides.country))
+
+    if overrides.exchange:
+        parts.append(f"{overrides.exchange} listed")
+
+    parts.append("stocks")
+
+    if overrides.sector:
+        parts.append(f"in the {overrides.sector} sector")
+
+    cap_labels = {
+        (None, 300_000_000): "micro-cap",
+        (300_000_000, 2_000_000_000): "small-cap",
+        (2_000_000_000, 10_000_000_000): "mid-cap",
+        (10_000_000_000, 100_000_000_000): "large-cap",
+        (100_000_000_000, None): "mega-cap",
+    }
+    for (lo, hi), label in cap_labels.items():
+        if overrides.market_cap_min == lo and overrides.market_cap_max == hi:
+            parts.insert(-1 if "sector" not in " ".join(parts) else len(parts), label)
+            break
+
+    parts.append("strong fundamentals momentum analyst upgrades")
+    return " ".join(parts)
 
 
 def _determine_mode(

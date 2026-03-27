@@ -34,6 +34,7 @@ from pipeline.prompts.perplexity_discovery import (
     DISCOVERY_SYSTEM_PROMPT,
     build_discovery_prompt,
     build_prompted_discovery_prompt,
+    build_system_prompt,
 )
 from pipeline.prompts.perplexity_discovery import get_prompt_hash as discovery_hash
 from pipeline.schemas import ScreeningResult, StrategyConfig
@@ -122,6 +123,16 @@ def _get_domain_set(config: StrategyConfig) -> list[str]:
         return _DOMAIN_SETS["crypto"]
     if "earnings" in config.name.lower():
         return _DOMAIN_SETS["earnings"]
+
+    fmp = config.fmp_screener
+    if fmp:
+        if fmp.is_crypto:
+            return _DOMAIN_SETS["crypto"]
+        if fmp.country == "US" or fmp.exchange in ("NYSE", "NASDAQ", "AMEX"):
+            return _DOMAIN_SETS["us_stock"]
+        if fmp.country == "CA" or fmp.exchange in ("TSX", "TSXV"):
+            return _DOMAIN_SETS["canadian"]
+
     text = config.screening_prompt.lower()
     if "canadian" in text or "tsx" in text:
         return _DOMAIN_SETS["canadian"]
@@ -503,6 +514,27 @@ async def _call_with_retry(
 # ---------------------------------------------------------------------------
 
 
+def _build_dynamic_system_prompt(config: StrategyConfig | None) -> str:
+    """Build a market-context-aware system prompt from the strategy's FMP config.
+
+    Args:
+        config: Strategy config (may be None for default behavior).
+
+    Returns:
+        System prompt string tailored to the effective market/sector focus.
+    """
+    if not config or not config.fmp_screener:
+        return DISCOVERY_SYSTEM_PROMPT
+
+    fmp = config.fmp_screener
+    return build_system_prompt(
+        country=fmp.country,
+        exchange=fmp.exchange,
+        sector=fmp.sector,
+        is_crypto=fmp.is_crypto,
+    )
+
+
 async def run_discovery(
     config: StrategyConfig,
     *,
@@ -518,6 +550,8 @@ async def run_discovery(
     Returns:
         Tuple of (validated ScreeningResult or None, metadata dict).
     """
+    system_prompt = _build_dynamic_system_prompt(config)
+
     base_prompt = build_discovery_prompt(config)
     fmp_context = _format_fmp_context(fmp_candidates) if fmp_candidates else ""
     user_prompt = f"{base_prompt}\n\n{fmp_context}" if fmp_context else base_prompt
@@ -532,15 +566,13 @@ async def run_discovery(
         "mode": "discovery",
         "model": AGENT_MODEL,
         "prompt_hash": discovery_hash(),
-        "prompt_text": f"{DISCOVERY_SYSTEM_PROMPT}\n---\n{user_prompt}",
+        "prompt_text": f"{system_prompt}\n---\n{user_prompt}",
         "fmp_candidates_count": len(fmp_candidates) if fmp_candidates else 0,
     }
 
     start = time.perf_counter()
     try:
-        result, citations = await _call_with_retry(
-            DISCOVERY_SYSTEM_PROMPT, user_prompt, tools=tools
-        )
+        result, citations = await _call_with_retry(system_prompt, user_prompt, tools=tools)
         metadata["duration_ms"] = int((time.perf_counter() - start) * 1000)
         metadata["status"] = "success" if result else "validation_failed"
         if result is not None:
@@ -578,6 +610,8 @@ async def run_prompted_discovery(
     Returns:
         Tuple of (validated ScreeningResult or None, metadata dict).
     """
+    system_prompt = _build_dynamic_system_prompt(config)
+
     base_prompt = build_prompted_discovery_prompt(user_prompt, config)
     fmp_context = _format_fmp_context(fmp_candidates) if fmp_candidates else ""
     prompt = f"{base_prompt}\n\n{fmp_context}" if fmp_context else base_prompt
@@ -592,13 +626,13 @@ async def run_prompted_discovery(
         "mode": "prompt",
         "model": AGENT_MODEL,
         "prompt_hash": discovery_hash(),
-        "prompt_text": f"{DISCOVERY_SYSTEM_PROMPT}\n---\n{prompt}",
+        "prompt_text": f"{system_prompt}\n---\n{prompt}",
         "fmp_candidates_count": len(fmp_candidates) if fmp_candidates else 0,
     }
 
     start = time.perf_counter()
     try:
-        result, citations = await _call_with_retry(DISCOVERY_SYSTEM_PROMPT, prompt, tools=tools)
+        result, citations = await _call_with_retry(system_prompt, prompt, tools=tools)
         metadata["duration_ms"] = int((time.perf_counter() - start) * 1000)
         metadata["status"] = "success" if result else "validation_failed"
         if result is not None:

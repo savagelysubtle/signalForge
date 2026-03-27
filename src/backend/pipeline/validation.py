@@ -24,6 +24,16 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
 
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def _strip_control_chars(text: str) -> str:
+    """Remove ASCII control characters that LLMs sometimes embed in JSON strings.
+
+    Preserves tab (0x09), newline (0x0a), and carriage return (0x0d) which are
+    valid JSON whitespace.
+    """
+    return _CONTROL_CHAR_RE.sub("", text)
 
 
 def extract_json(text: str) -> str:
@@ -74,6 +84,7 @@ def validate_llm_json(raw_text: str, schema: type[T]) -> T:  # noqa: UP047
         ValidationError: If the JSON does not match the schema.
     """
     json_str = extract_json(raw_text)
+    json_str = _strip_control_chars(json_str)
     data = json.loads(json_str)
     return schema.model_validate(data)
 

@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { api } from '../api/client';
-import type { PipelineResult, PipelineRunSummary } from '../types';
+import type { PipelineResult, PipelineRunSummary, ScreenerOverrides } from '../types';
 
 export function usePipeline() {
   const [isRunning, setIsRunning] = useState(false);
@@ -13,6 +13,7 @@ export function usePipeline() {
     strategyId?: string,
     manualTickers?: string[],
     userPrompt?: string,
+    screenerOverrides?: ScreenerOverrides,
   ) => {
     setIsRunning(true);
     setError(null);
@@ -21,6 +22,7 @@ export function usePipeline() {
         strategy_id: strategyId,
         manual_tickers: manualTickers,
         user_prompt: userPrompt,
+        screener_overrides: screenerOverrides,
       });
       
       // After run completes, fetch the full result

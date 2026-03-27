@@ -346,6 +346,67 @@ class FmpScreenerConfig(BaseModel):
     enrich_with_ratios: bool = True
 
 
+class ScreenerOverrides(BaseModel):
+    """Runtime overrides for FMP screener filters.
+
+    Sent from the dashboard UI to override strategy-level defaults
+    for country, exchange, sector, industry, and market cap range.
+    ``None`` values are ignored (strategy defaults apply).
+
+    Attributes:
+        country: ISO country code override (e.g. "CA", "US").
+        exchange: Exchange override (e.g. "TSX", "NYSE", "NASDAQ").
+        sector: FMP sector override (e.g. "Technology", "Energy").
+        industry: FMP industry override.
+        market_cap_min: Minimum market cap override.
+        market_cap_max: Maximum market cap override.
+    """
+
+    country: str | None = None
+    exchange: str | None = None
+    sector: str | None = None
+    industry: str | None = None
+    market_cap_min: int | None = None
+    market_cap_max: int | None = None
+
+    def apply_to(self, config: FmpScreenerConfig) -> FmpScreenerConfig:
+        """Return a copy of *config* with non-None overrides merged in.
+
+        Args:
+            config: The base FMP screener config from the strategy.
+
+        Returns:
+            New FmpScreenerConfig with overrides applied.
+        """
+        data = config.model_dump()
+        for field in (
+            "country",
+            "exchange",
+            "sector",
+            "industry",
+            "market_cap_min",
+            "market_cap_max",
+        ):
+            val = getattr(self, field)
+            if val is not None:
+                data[field] = val
+        return FmpScreenerConfig.model_validate(data)
+
+    def has_any(self) -> bool:
+        """Return True if at least one override field is set."""
+        return any(
+            getattr(self, f) is not None
+            for f in (
+                "country",
+                "exchange",
+                "sector",
+                "industry",
+                "market_cap_min",
+                "market_cap_max",
+            )
+        )
+
+
 # ---------------------------------------------------------------------------
 # Strategy Config
 # ---------------------------------------------------------------------------

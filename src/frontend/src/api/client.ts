@@ -4,6 +4,7 @@ import type {
   PipelineRunSummary,
   StrategyConfig,
   ApiKeyStatus,
+  ScreenerOverrides,
 } from "../types";
 
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8420";
@@ -42,6 +43,7 @@ export const api = {
     strategy_id?: string;
     manual_tickers?: string[];
     user_prompt?: string;
+    screener_overrides?: ScreenerOverrides;
   }) =>
     request<{ run_id: string; status: string }>("/api/pipeline/run", {
       method: "POST",

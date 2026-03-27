@@ -89,6 +89,29 @@ _US_EXCHANGE_FALLBACKS = ["NASDAQ", "NYSE", "AMEX"]
 
 _CANADIAN_EXCHANGE_FALLBACKS = ["TSX", "TSXV"]
 
+_TRUST_UNIT_SUFFIXES = ("-UN", "-U", "-DB", "-PR", "-WT", "-RT")
+
+
+def _fix_canadian_symbol(symbol: str) -> str:
+    """Convert FMP/LLM hyphenated suffixes to TradingView dot format.
+
+    Canadian trust units, preferred shares, warrants, and debentures use
+    hyphen separators in FMP data (``REI-UN``) but dots on TradingView
+    (``REI.UN``).
+
+    Args:
+        symbol: The symbol portion (after the exchange prefix).
+
+    Returns:
+        Symbol with hyphens converted to dots for known suffixes.
+    """
+    for suffix in _TRUST_UNIT_SUFFIXES:
+        if symbol.endswith(suffix):
+            return symbol[: -len(suffix)] + "." + suffix[1:]
+    if "-" in symbol and symbol.split("-")[-1] in ("A", "B", "C", "D", "E", "H"):
+        return symbol.replace("-", ".")
+    return symbol
+
 
 def _to_tradingview_symbols(ticker: str) -> list[str]:
     """Convert ticker to one or more TradingView ``EXCHANGE:SYMBOL`` candidates.
@@ -99,24 +122,32 @@ def _to_tradingview_symbols(ticker: str) -> list[str]:
 
     Canadian tickers (TSX/TSXV prefixed or .TO/.V suffixed) get both TSX and
     TSXV as candidates, since Perplexity may guess the wrong exchange.
+    US exchanges are appended as final fallbacks for Canadian-prefixed tickers
+    because LLMs sometimes mislabel US stocks with a TSX prefix.
 
     The ticker is normalized first to strip whitespace and convert Yahoo
     suffixes, so malformed input like ``TSX: CVE`` or ``ENB.TO`` is handled.
+    Canadian trust-unit hyphens are converted to dots (``REI-UN`` → ``REI.UN``).
 
     Examples:
-        TSX:ENB    -> ["TSX:ENB", "TSXV:ENB"]
-        TSXV:NVX   -> ["TSXV:NVX", "TSX:NVX"]
+        TSX:ENB    -> ["TSX:ENB", "TSXV:ENB", "NASDAQ:ENB", "NYSE:ENB", "AMEX:ENB"]
+        TSX:REI-UN -> ["TSX:REI.UN", "TSXV:REI.UN"]
+        TSXV:NVX   -> ["TSXV:NVX", "TSX:NVX", "NASDAQ:NVX", "NYSE:NVX", "AMEX:NVX"]
         AC.TO      -> ["TSX:AC", "TSXV:AC"]
         AAPL       -> ["NASDAQ:AAPL", "NYSE:AAPL", "AMEX:AAPL"]
-        TSX: CVE   -> ["TSX:CVE", "TSXV:CVE"]
+        TSX: CVE   -> ["TSX:CVE", "TSXV:CVE", "NASDAQ:CVE", "NYSE:CVE", "AMEX:CVE"]
     """
     ticker = normalize_ticker(ticker)
     if ":" in ticker:
         exchange, symbol = ticker.split(":", 1)
         if exchange in _CANADIAN_EXCHANGE_FALLBACKS:
-            return [f"{ex}:{symbol}" for ex in _CANADIAN_EXCHANGE_FALLBACKS if ex == exchange] + [
-                f"{ex}:{symbol}" for ex in _CANADIAN_EXCHANGE_FALLBACKS if ex != exchange
-            ]
+            symbol = _fix_canadian_symbol(symbol)
+            candidates = [
+                f"{ex}:{symbol}" for ex in _CANADIAN_EXCHANGE_FALLBACKS if ex == exchange
+            ] + [f"{ex}:{symbol}" for ex in _CANADIAN_EXCHANGE_FALLBACKS if ex != exchange]
+            if not any(c in symbol for c in (".", "-")):
+                candidates += [f"{ex}:{symbol}" for ex in _US_EXCHANGE_FALLBACKS]
+            return candidates
         return [ticker]
     for suffix, exchange in EXCHANGE_SUFFIX_MAP.items():
         if ticker.endswith(suffix):

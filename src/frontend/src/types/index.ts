@@ -175,6 +175,15 @@ export interface RiskParams {
   max_portfolio_risk_pct: number;
 }
 
+export interface ScreenerOverrides {
+  country?: string | null;
+  exchange?: string | null;
+  sector?: string | null;
+  industry?: string | null;
+  market_cap_min?: number | null;
+  market_cap_max?: number | null;
+}
+
 export interface ScoringWeights {
   fundamental: number;
   momentum: number;
