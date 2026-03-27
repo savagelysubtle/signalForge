@@ -5,6 +5,7 @@ import { ChartTab } from './ChartTab';
 import { SentimentTab } from './SentimentTab';
 import { SynthesisTab } from './SynthesisTab';
 import { RawTab } from './RawTab';
+import { motion, AnimatePresence } from 'motion/react';
 import clsx from 'clsx';
 
 interface DetailViewProps {
@@ -30,24 +31,24 @@ export function DetailView({ tickerData, fullResult }: DetailViewProps) {
   ];
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-bg-primary overflow-hidden">
+    <div className="flex-1 flex flex-col h-full overflow-hidden">
       {/* Header */}
-      <div className="px-6 py-4 border-b border-border bg-bg-secondary shrink-0">
-        <h2 className="text-2xl font-bold text-text-primary">{tickerData.ticker}</h2>
-        <p className="text-sm text-text-secondary">{tickerData.company_name}</p>
+      <div className="px-6 py-4 border-b border-border-gutter bg-bg-asphalt/70 backdrop-blur-sm shrink-0">
+        <h2 className="text-2xl font-display font-bold text-text-primary">{tickerData.ticker}</h2>
+        <p className="text-sm text-text-secondary font-body">{tickerData.company_name}</p>
       </div>
 
       {/* Tabs */}
-      <div className="flex border-b border-border px-4 shrink-0 bg-bg-secondary">
+      <div className="flex border-b border-border-gutter px-4 shrink-0 bg-bg-asphalt">
         {tabs.map(tab => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
             className={clsx(
-              "px-4 py-3 text-sm font-medium border-b-2 transition-colors",
-              activeTab === tab.id 
-                ? "border-accent-lime text-accent-lime" 
-                : "border-transparent text-text-secondary hover:text-text-primary"
+              "px-4 py-3 text-sm font-medium border-b-2 transition-colors font-body",
+              activeTab === tab.id
+                ? "border-accent-signal text-accent-signal"
+                : "border-transparent text-text-muted hover:text-text-primary"
             )}
           >
             {tab.label}
@@ -57,31 +58,41 @@ export function DetailView({ tickerData, fullResult }: DetailViewProps) {
 
       {/* Content */}
       <div className="flex-1 overflow-hidden relative">
-        {activeTab === 'overview' && <OverviewTab data={tickerData} />}
-        {activeTab === 'chart' && (
-          <ChartTab
-            ticker={tickerData.ticker}
-            chartAnalyses={chartAnalyses}
-            chartErrors={chartErrors}
-            chartIndicators={fullResult.chart_indicators ?? []}
-            recommendation={recommendation}
-          />
-        )}
-        {activeTab === 'sentiment' && <SentimentTab sentiment={sentiment} />}
-        {activeTab === 'raw' && <RawTab data={fullResult} />}
-        
-        {activeTab === 'synthesis' && <SynthesisTab recommendation={recommendation} />}
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={activeTab}
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            transition={{ duration: 0.15, ease: 'easeOut' }}
+            className="h-full"
+          >
+            {activeTab === 'overview' && <OverviewTab data={tickerData} />}
+            {activeTab === 'chart' && (
+              <ChartTab
+                ticker={tickerData.ticker}
+                chartAnalyses={chartAnalyses}
+                chartErrors={chartErrors}
+                chartIndicators={fullResult.chart_indicators ?? []}
+                recommendation={recommendation}
+              />
+            )}
+            {activeTab === 'sentiment' && <SentimentTab sentiment={sentiment} />}
+            {activeTab === 'raw' && <RawTab data={fullResult} />}
+            {activeTab === 'synthesis' && <SynthesisTab recommendation={recommendation} />}
+          </motion.div>
+        </AnimatePresence>
       </div>
 
       {/* Footer Metadata */}
-      <div className="border-t border-border p-4 bg-bg-secondary shrink-0 text-xs text-text-secondary flex justify-between items-center">
+      <div className="border-t border-border-gutter p-4 bg-bg-asphalt shrink-0 text-xs text-text-muted flex justify-between items-center">
         <div className="truncate max-w-3xl" title={fullResult.screening?.screening_summary}>
-          <span className="font-semibold text-text-primary mr-2">Summary:</span>
-          {fullResult.screening?.screening_summary || 'No summary available.'}
+          <span className="font-semibold text-text-secondary mr-2">Summary:</span>
+          <span className="text-text-secondary">{fullResult.screening?.screening_summary || 'No summary available.'}</span>
         </div>
-        <div className="flex gap-4 ml-4 shrink-0">
-          <span>Mode: {fullResult.mode}</span>
-          <span>Duration: {fullResult.total_duration_seconds.toFixed(1)}s</span>
+        <div className="flex gap-4 ml-4 shrink-0 font-display">
+          <span>Mode: <span className="text-text-secondary">{fullResult.mode}</span></span>
+          <span>Duration: <span className="text-text-secondary">{fullResult.total_duration_seconds.toFixed(1)}s</span></span>
         </div>
       </div>
     </div>

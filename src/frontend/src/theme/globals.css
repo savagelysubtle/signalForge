@@ -1,34 +1,207 @@
 @import "tailwindcss";
+@import "@fontsource-variable/jetbrains-mono";
+
+/* ============================================================
+   Urban Finance Design System — SignalForge
+   ============================================================ */
 
 @theme {
-  --color-bg-primary: #000000;
-  --color-bg-secondary: #0a0a0a;
-  --color-bg-tertiary: #141414;
-  --color-border: #1c1c1c;
-  --color-text-primary: #e5e5e5;
-  --color-text-secondary: #737373;
-  --color-accent-lime: #84cc16;
-  --color-accent-cyan: #22d3ee;
-  --color-accent-green: #22c55e;
-  --color-accent-red: #ef4444;
-  --color-accent-yellow: #eab308;
+  /* === Surfaces === */
+  --color-bg-void: #08090d;
+  --color-bg-asphalt: #0f1118;
+  --color-bg-concrete: #181c27;
+  --color-bg-steel: #232838;
+  --color-bg-elevated: #2a3040;
+
+  /* === Borders === */
+  --color-border-subtle: #1e2433;
+  --color-border-gutter: #2a3040;
+  --color-border-strong: #3a4258;
+
+  /* === Text === */
+  --color-text-primary: #e8ecf4;
+  --color-text-secondary: #8b95aa;
+  --color-text-muted: #505a6e;
+
+  /* === Signal Accents === */
+  --color-accent-profit: #00e59b;
+  --color-accent-loss: #ff3b5c;
+  --color-accent-signal: #4d8dff;
+  --color-accent-alert: #ffb224;
+  --color-accent-electric: #a855f7;
+
+  /* === Dim Accents (12% opacity tinted backgrounds) === */
+  --color-accent-profit-dim: rgba(0, 229, 155, 0.12);
+  --color-accent-loss-dim: rgba(255, 59, 92, 0.12);
+  --color-accent-signal-dim: rgba(77, 141, 255, 0.12);
+  --color-accent-alert-dim: rgba(255, 178, 36, 0.12);
+  --color-accent-electric-dim: rgba(168, 85, 247, 0.12);
+
+  /* === Glass === */
+  --color-glass-light: rgba(255, 255, 255, 0.04);
+  --color-glass-medium: rgba(255, 255, 255, 0.08);
+  --color-glass-heavy: rgba(255, 255, 255, 0.12);
+
+  /* === Font Families === */
+  --font-display: 'JetBrains Mono Variable', 'JetBrains Mono', monospace;
+  --font-body: 'Satoshi', system-ui, sans-serif;
 }
 
+/* === CSS Custom Properties (for non-Tailwind usage) === */
 :root {
-  --bg-primary: #000000;
-  --bg-secondary: #0a0a0a;
-  --bg-tertiary: #141414;
-  --border: #1c1c1c;
-  --text-primary: #e5e5e5;
-  --text-secondary: #737373;
-  --accent-lime: #84cc16;
-  --accent-cyan: #22d3ee;
-  --accent-green: #22c55e;
-  --accent-red: #ef4444;
-  --accent-yellow: #eab308;
+  --bg-void: #08090d;
+  --bg-asphalt: #0f1118;
+  --bg-concrete: #181c27;
+  --bg-steel: #232838;
+  --bg-elevated: #2a3040;
+  --border-subtle: #1e2433;
+  --border-gutter: #2a3040;
+  --border-strong: #3a4258;
+  --text-primary: #e8ecf4;
+  --text-secondary: #8b95aa;
+  --text-muted: #505a6e;
+  --accent-profit: #00e59b;
+  --accent-loss: #ff3b5c;
+  --accent-signal: #4d8dff;
+  --accent-alert: #ffb224;
+  --accent-electric: #a855f7;
 }
 
+/* === Base === */
 body {
-  background-color: var(--bg-primary);
+  background-color: var(--bg-void);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* === Typography Utilities === */
+.font-display {
+  font-family: var(--font-display);
+}
+
+.font-body {
+  font-family: var(--font-body);
+}
+
+/* === Background Layer: Grid Pattern === */
+.bg-grid {
+  background-image:
+    linear-gradient(rgba(77, 141, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(77, 141, 255, 0.04) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
+
+.bg-grid-fade {
+  background-image:
+    linear-gradient(rgba(77, 141, 255, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(77, 141, 255, 0.05) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse 70% 50% at 50% 50%, black 30%, transparent 100%);
+  -webkit-mask-image: radial-gradient(ellipse 70% 50% at 50% 50%, black 30%, transparent 100%);
+}
+
+/* === Background Layer: Noise Texture === */
+.bg-noise::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  opacity: 0.02;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 256px 256px;
+  pointer-events: none;
+  mix-blend-mode: overlay;
+  z-index: 0;
+}
+
+/* === Background Layer: Candlestick Motif === */
+.bg-candle-motif {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='120'%3E%3Crect x='27' y='10' width='6' height='30' rx='1' fill='%2300e59b' opacity='0.05'/%3E%3Cline x1='30' y1='0' x2='30' y2='10' stroke='%2300e59b' stroke-width='1' opacity='0.03'/%3E%3Cline x1='30' y1='40' x2='30' y2='55' stroke='%2300e59b' stroke-width='1' opacity='0.03'/%3E%3Crect x='27' y='70' width='6' height='25' rx='1' fill='%23ff3b5c' opacity='0.05'/%3E%3Cline x1='30' y1='60' x2='30' y2='70' stroke='%23ff3b5c' stroke-width='1' opacity='0.03'/%3E%3Cline x1='30' y1='95' x2='30' y2='110' stroke='%23ff3b5c' stroke-width='1' opacity='0.03'/%3E%3C/svg%3E");
+  background-size: 60px 120px;
+}
+
+/* === Background Layer: Decorative Chart Line === */
+.bg-chart-line::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 200' preserveAspectRatio='none'%3E%3Cpath d='M0,150 C200,120 300,180 400,100 C500,20 600,140 700,80 C800,20 900,120 1000,60 C1050,40 1100,90 1200,50' fill='none' stroke='%234d8dff' stroke-width='1.5' opacity='0.06'/%3E%3Cpath d='M0,150 C200,120 300,180 400,100 C500,20 600,140 700,80 C800,20 900,120 1000,60 C1050,40 1100,90 1200,50' fill='url(%23g)' opacity='0.03'/%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0%25' stop-color='%234d8dff'/%3E%3Cstop offset='100%25' stop-color='transparent'/%3E%3C/linearGradient%3E%3C/defs%3E%3C/svg%3E") no-repeat bottom center;
+  background-size: 100% 200px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* === Background Layer: Urban Finance Scene === */
+.bg-urban-finance {
+  background-image: url('../assets/bg-urban-finance.jpg');
+  background-size: cover;
+  background-position: center center;
+  background-repeat: no-repeat;
+  filter: brightness(0.35) contrast(1.3) saturate(0.7);
+}
+
+/* === Glow Utilities === */
+.glow-signal {
+  background: radial-gradient(
+    ellipse 300px 200px at 50% 0%,
+    rgba(77, 141, 255, 0.08) 0%,
+    transparent 70%
+  );
+}
+
+.glow-profit {
+  background: radial-gradient(
+    ellipse 300px 200px at 50% 0%,
+    rgba(0, 229, 155, 0.06) 0%,
+    transparent 70%
+  );
+}
+
+.glow-electric {
+  background: radial-gradient(
+    ellipse 300px 200px at 50% 0%,
+    rgba(168, 85, 247, 0.06) 0%,
+    transparent 70%
+  );
+}
+
+/* === Glass Panel === */
+.glass-panel {
+  background: rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border-subtle);
+}
+
+/* === Scrollbar Styling === */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-gutter);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-strong);
+}
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-gutter) transparent;
+}
+
+/* === Selection === */
+::selection {
+  background: rgba(77, 141, 255, 0.3);
   color: var(--text-primary);
 }

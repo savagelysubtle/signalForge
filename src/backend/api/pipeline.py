@@ -24,6 +24,7 @@ from pipeline.schemas import (
     ScreeningResult,
     SentimentAnalysis,
 )
+from utils.ticker import normalize_tickers
 
 limiter = Limiter(key_func=get_remote_address)
 router = APIRouter(prefix="/pipeline", tags=["pipeline"])
@@ -48,7 +49,7 @@ async def trigger_pipeline_run(
     user_id: CurrentUser,
 ) -> PipelineRunResponse:
     """Trigger a new pipeline analysis run."""
-    tickers = body.manual_tickers if body.manual_tickers else None
+    tickers = normalize_tickers(body.manual_tickers) if body.manual_tickers else None
     user_prompt = body.user_prompt.strip() if body.user_prompt else None
 
     result = await run_pipeline(

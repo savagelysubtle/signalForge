@@ -1,0 +1,501 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <!-- Filters -->
+    <filter id="glow-soft" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="6" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glow-wide" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="30"/>
+    </filter>
+    <filter id="fog" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="45"/>
+    </filter>
+    <filter id="bokeh-lg" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="12"/>
+    </filter>
+    <filter id="bokeh-md" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="6"/>
+    </filter>
+    <filter id="bokeh-sm" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="2.5"/>
+    </filter>
+    <filter id="brace-glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+
+    <!-- Sky: heavy overcast, cold -->
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a1e2a"/>
+      <stop offset="15%" stop-color="#151924"/>
+      <stop offset="35%" stop-color="#10131c"/>
+      <stop offset="55%" stop-color="#0c0f16"/>
+      <stop offset="100%" stop-color="#080a10"/>
+    </linearGradient>
+    <!-- Cloud layer -->
+    <linearGradient id="clouds" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2a3040" stop-opacity="0.4"/>
+      <stop offset="50%" stop-color="#1e2430" stop-opacity="0.2"/>
+      <stop offset="100%" stop-color="#10131c" stop-opacity="0"/>
+    </linearGradient>
+
+    <!-- Building fills: cold steel palette -->
+    <linearGradient id="steel-dark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#13161e"/><stop offset="100%" stop-color="#0a0c12"/>
+    </linearGradient>
+    <linearGradient id="steel-mid" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#191d28"/><stop offset="100%" stop-color="#0e1118"/>
+    </linearGradient>
+    <linearGradient id="steel-glass" x1="0" y1="0" x2="0.2" y2="1">
+      <stop offset="0%" stop-color="#1c2030"/><stop offset="40%" stop-color="#161a24"/><stop offset="100%" stop-color="#0d1018"/>
+    </linearGradient>
+    <linearGradient id="steel-fg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1e2232"/><stop offset="100%" stop-color="#111420"/>
+    </linearGradient>
+    <!-- Glass reflection: cold blue sheen -->
+    <linearGradient id="glass-cold" x1="0" y1="0" x2="0.8" y2="0.6">
+      <stop offset="0%" stop-color="#5a7faa" stop-opacity="0.05"/>
+      <stop offset="40%" stop-color="#8b95aa" stop-opacity="0.02"/>
+      <stop offset="70%" stop-color="#5a7faa" stop-opacity="0.04"/>
+      <stop offset="100%" stop-color="#8b95aa" stop-opacity="0.01"/>
+    </linearGradient>
+
+    <!-- Chart gradients (subtle — secondary to architecture) -->
+    <linearGradient id="chart1" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#4d8dff" stop-opacity="0"/>
+      <stop offset="12%" stop-color="#4d8dff" stop-opacity="0.6"/>
+      <stop offset="50%" stop-color="#4d8dff" stop-opacity="0.7"/>
+      <stop offset="88%" stop-color="#4d8dff" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#4d8dff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="chart-fill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#4d8dff" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#4d8dff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="ground-fog" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0a0c12" stop-opacity="0"/>
+      <stop offset="35%" stop-color="#0a0c12" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#0a0c12" stop-opacity="0.75"/>
+    </linearGradient>
+  </defs>
+
+  <!-- ============ SKY ============ -->
+  <rect width="1920" height="1080" fill="url(#sky)"/>
+  <!-- Overcast cloud mass -->
+  <rect width="1920" height="350" fill="url(#clouds)"/>
+  <!-- Cloud shapes -->
+  <g filter="url(#fog)">
+    <ellipse cx="500" cy="80" rx="500" ry="120" fill="#252a36" opacity="0.35"/>
+    <ellipse cx="1100" cy="100" rx="600" ry="140" fill="#222838" opacity="0.3"/>
+    <ellipse cx="1600" cy="70" rx="400" ry="100" fill="#2a3040" opacity="0.25"/>
+    <ellipse cx="300" cy="140" rx="350" ry="90" fill="#1e2430" opacity="0.3"/>
+    <ellipse cx="900" cy="60" rx="450" ry="110" fill="#282e3c" opacity="0.2"/>
+    <ellipse cx="1400" cy="130" rx="380" ry="95" fill="#232838" opacity="0.25"/>
+  </g>
+
+  <!-- ============ DISTANT SKYLINE (silhouette) ============ -->
+  <g opacity="0.3">
+    <rect x="180" y="420" width="30" height="380" fill="#0e1118"/>
+    <rect x="240" y="400" width="45" height="400" fill="#0d1016"/>
+    <rect x="350" y="430" width="25" height="370" fill="#0e1118"/>
+    <rect x="480" y="410" width="35" height="390" fill="#0d1016"/>
+    <rect x="600" y="420" width="28" height="380" fill="#0e1118"/>
+    <rect x="680" y="400" width="32" height="400" fill="#0d1016"/>
+    <rect x="850" y="410" width="30" height="390" fill="#0e1118"/>
+    <rect x="950" y="420" width="38" height="380" fill="#0d1016"/>
+    <rect x="1080" y="430" width="25" height="370" fill="#0e1118"/>
+    <rect x="1200" y="410" width="32" height="390" fill="#0d1016"/>
+    <rect x="1350" y="400" width="40" height="400" fill="#0e1118"/>
+    <rect x="1480" y="420" width="28" height="380" fill="#0d1016"/>
+    <rect x="1580" y="410" width="35" height="390" fill="#0e1118"/>
+    <rect x="1700" y="425" width="30" height="375" fill="#0d1016"/>
+  </g>
+
+  <!-- ============ MID-GROUND (warm lit buildings — the golden core) ============ -->
+  <g opacity="0.7">
+    <!-- Dense mid-city block with warm amber windows -->
+    <rect x="380" y="340" width="70" height="460" fill="url(#steel-mid)" rx="1"/>
+    <rect x="460" y="350" width="55" height="450" fill="url(#steel-mid)" rx="1"/>
+    <rect x="530" y="330" width="65" height="470" fill="url(#steel-mid)" rx="1"/>
+    <rect x="610" y="360" width="50" height="440" fill="url(#steel-dark)" rx="1"/>
+    <rect x="670" y="340" width="60" height="460" fill="url(#steel-mid)" rx="1"/>
+
+    <rect x="820" y="320" width="80" height="480" fill="url(#steel-mid)" rx="1"/>
+    <rect x="910" y="340" width="55" height="460" fill="url(#steel-mid)" rx="1"/>
+    <rect x="975" y="350" width="70" height="450" fill="url(#steel-dark)" rx="1"/>
+    <rect x="1060" y="330" width="60" height="470" fill="url(#steel-mid)" rx="1"/>
+    <rect x="1130" y="350" width="50" height="450" fill="url(#steel-mid)" rx="1"/>
+
+    <rect x="1250" y="340" width="65" height="460" fill="url(#steel-mid)" rx="1"/>
+    <rect x="1330" y="360" width="50" height="440" fill="url(#steel-dark)" rx="1"/>
+    <rect x="1400" y="340" width="60" height="460" fill="url(#steel-mid)" rx="1"/>
+    <rect x="1480" y="350" width="55" height="450" fill="url(#steel-mid)" rx="1"/>
+
+    <!-- Dense warm window clusters (the amber city glow from image) -->
+    <g opacity="1">
+      <!-- Block 1 -->
+      <rect x="388" y="358" width="3" height="4" fill="#ffb224" opacity="0.35"/>
+      <rect x="398" y="365" width="3" height="4" fill="#ffb224" opacity="0.28"/>
+      <rect x="408" y="355" width="3" height="4" fill="#ffb224" opacity="0.32"/>
+      <rect x="418" y="370" width="3" height="4" fill="#ffb224" opacity="0.22"/>
+      <rect x="428" y="360" width="3" height="4" fill="#ffb224" opacity="0.3"/>
+      <rect x="388" y="382" width="3" height="4" fill="#ffb224" opacity="0.25"/>
+      <rect x="408" y="388" width="3" height="4" fill="#ffb224" opacity="0.3"/>
+      <rect x="430" y="385" width="3" height="4" fill="#ffb224" opacity="0.2"/>
+      <rect x="395" y="408" width="3" height="4" fill="#ffb224" opacity="0.18"/>
+      <rect x="420" y="412" width="3" height="4" fill="#ffb224" opacity="0.25"/>
+      <rect x="438" y="405" width="3" height="4" fill="#e8ecf4" opacity="0.06"/>
+
+      <!-- Block 2 -->
+      <rect x="468" y="365" width="3" height="4" fill="#ffb224" opacity="0.3"/>
+      <rect x="480" y="370" width="3" height="4" fill="#ffb224" opacity="0.25"/>
+      <rect x="495" y="362" width="3" height="4" fill="#ffb224" opacity="0.28"/>
+      <rect x="470" y="392" width="3" height="4" fill="#ffb224" opacity="0.2"/>
+      <rect x="490" y="395" width="3" height="4" fill="#ffb224" opacity="0.3"/>
+      <rect x="475" y="420" width="3" height="4" fill="#ffb224" opacity="0.15"/>
+
+      <!-- Block 3 — denser -->
+      <rect x="538" y="345" width="3" height="4" fill="#ffb224" opacity="0.35"/>
+      <rect x="550" y="350" width="3" height="4" fill="#ffb224" opacity="0.3"/>
+      <rect x="562" y="342" width="3" height="4" fill="#ffb224" opacity="0.32"/>
+      <rect x="575" y="355" width="3" height="4" fill="#ffb224" opacity="0.25"/>
+      <rect x="540" y="370" width="3" height="4" fill="#ffb224" opacity="0.28"/>
+      <rect x="555" y="375" width="3" height="4" fill="#ffb224" opacity="0.3"/>
+      <rect x="570" y="368" width="3" height="4" fill="#ffb224" opacity="0.22"/>
+      <rect x="538" y="395" width="3" height="4" fill="#ffb224" opacity="0.2"/>
+      <rect x="560" y="400" width="3" height="4" fill="#ffb224" opacity="0.28"/>
+      <rect x="578" y="392" width="3" height="4" fill="#ffb224" opacity="0.15"/>
+      <rect x="545" y="425" width="3" height="4" fill="#ffb224" opacity="0.18"/>
+      <rect x="568" y="430" width="3" height="4" fill="#ffb224" opacity="0.12"/>
+
+      <!-- More blocks across -->
+      <rect x="828" y="335" width="3" height="4" fill="#ffb224" opacity="0.32"/>
+      <rect x="845" y="340" width="3" height="4" fill="#ffb224" opacity="0.28"/>
+      <rect x="860" y="332" width="3" height="4" fill="#ffb224" opacity="0.3"/>
+      <rect x="878" y="345" width="3" height="4" fill="#ffb224" opacity="0.22"/>
+      <rect x="830" y="360" width="3" height="4" fill="#ffb224" opacity="0.25"/>
+      <rect x="855" y="365" width="3" height="4" fill="#ffb224" opacity="0.3"/>
+      <rect x="882" y="358" width="3" height="4" fill="#ffb224" opacity="0.2"/>
+      <rect x="840" y="388" width="3" height="4" fill="#ffb224" opacity="0.18"/>
+      <rect x="870" y="392" width="3" height="4" fill="#ffb224" opacity="0.25"/>
+
+      <rect x="918" y="355" width="3" height="4" fill="#ffb224" opacity="0.28"/>
+      <rect x="935" y="360" width="3" height="4" fill="#ffb224" opacity="0.22"/>
+      <rect x="950" y="352" width="3" height="4" fill="#ffb224" opacity="0.3"/>
+      <rect x="920" y="380" width="3" height="4" fill="#ffb224" opacity="0.2"/>
+      <rect x="945" y="385" width="3" height="4" fill="#ffb224" opacity="0.25"/>
+
+      <rect x="985" y="365" width="3" height="4" fill="#ffb224" opacity="0.25"/>
+      <rect x="1005" y="370" width="3" height="4" fill="#ffb224" opacity="0.3"/>
+      <rect x="1025" y="362" width="3" height="4" fill="#ffb224" opacity="0.2"/>
+      <rect x="990" y="392" width="3" height="4" fill="#ffb224" opacity="0.18"/>
+      <rect x="1015" y="398" width="3" height="4" fill="#ffb224" opacity="0.22"/>
+
+      <rect x="1068" y="345" width="3" height="4" fill="#ffb224" opacity="0.3"/>
+      <rect x="1085" y="350" width="3" height="4" fill="#ffb224" opacity="0.25"/>
+      <rect x="1100" y="342" width="3" height="4" fill="#ffb224" opacity="0.28"/>
+      <rect x="1070" y="370" width="3" height="4" fill="#ffb224" opacity="0.2"/>
+      <rect x="1095" y="375" width="3" height="4" fill="#ffb224" opacity="0.3"/>
+
+      <rect x="1258" y="355" width="3" height="4" fill="#ffb224" opacity="0.28"/>
+      <rect x="1275" y="360" width="3" height="4" fill="#ffb224" opacity="0.22"/>
+      <rect x="1295" y="352" width="3" height="4" fill="#ffb224" opacity="0.25"/>
+      <rect x="1260" y="382" width="3" height="4" fill="#ffb224" opacity="0.2"/>
+      <rect x="1285" y="388" width="3" height="4" fill="#ffb224" opacity="0.28"/>
+
+      <rect x="1408" y="355" width="3" height="4" fill="#ffb224" opacity="0.3"/>
+      <rect x="1425" y="360" width="3" height="4" fill="#ffb224" opacity="0.25"/>
+      <rect x="1445" y="352" width="3" height="4" fill="#ffb224" opacity="0.22"/>
+      <rect x="1410" y="380" width="3" height="4" fill="#ffb224" opacity="0.18"/>
+      <rect x="1435" y="385" width="3" height="4" fill="#ffb224" opacity="0.25"/>
+
+      <rect x="1488" y="365" width="3" height="4" fill="#ffb224" opacity="0.25"/>
+      <rect x="1505" y="370" width="3" height="4" fill="#ffb224" opacity="0.2"/>
+      <rect x="1520" y="362" width="3" height="4" fill="#ffb224" opacity="0.28"/>
+    </g>
+
+    <!-- Crown lights on mid buildings -->
+    <rect x="540" y="328" width="45" height="3" rx="1" fill="#ffb224" opacity="0.3"/>
+    <rect x="830" y="318" width="60" height="3" rx="1" fill="#ffb224" opacity="0.25"/>
+    <rect x="1070" y="328" width="45" height="3" rx="1" fill="#ffb224" opacity="0.2"/>
+  </g>
+
+  <!-- Warm city glow behind mid-ground -->
+  <g filter="url(#glow-wide)">
+    <ellipse cx="600" cy="420" rx="250" ry="200" fill="#ffb224" opacity="0.06"/>
+    <ellipse cx="950" cy="400" rx="280" ry="220" fill="#ffb224" opacity="0.055"/>
+    <ellipse cx="1350" cy="420" rx="230" ry="200" fill="#ffb224" opacity="0.045"/>
+  </g>
+
+  <!-- ============ FOREGROUND TOWERS (dark steel/glass, close & imposing) ============ -->
+
+  <!-- === LEFT FOREGROUND TOWER (like image3 left building, close crop) === -->
+  <g opacity="0.95">
+    <rect x="-40" y="120" width="200" height="960" fill="url(#steel-fg)" rx="2"/>
+    <rect x="-40" y="120" width="200" height="960" fill="url(#glass-cold)"/>
+    <!-- Diagonal structural brace — bright white like image3 -->
+    <line x1="-40" y1="750" x2="160" y2="180" stroke="#c0cce0" stroke-width="2.5" opacity="0.25" filter="url(#brace-glow)"/>
+    <line x1="-40" y1="950" x2="160" y2="380" stroke="#c0cce0" stroke-width="2" opacity="0.18" filter="url(#brace-glow)"/>
+    <!-- Secondary braces -->
+    <line x1="160" y1="700" x2="-40" y2="250" stroke="#8b95aa" stroke-width="1" opacity="0.08"/>
+    <!-- Floor bands -->
+    <g stroke="#8b95aa" stroke-width="0.4" opacity="0.04">
+      <line x1="-40" y1="180" x2="160" y2="180"/>
+      <line x1="-40" y1="240" x2="160" y2="240"/>
+      <line x1="-40" y1="300" x2="160" y2="300"/>
+      <line x1="-40" y1="360" x2="160" y2="360"/>
+      <line x1="-40" y1="420" x2="160" y2="420"/>
+      <line x1="-40" y1="480" x2="160" y2="480"/>
+      <line x1="-40" y1="540" x2="160" y2="540"/>
+      <line x1="-40" y1="600" x2="160" y2="600"/>
+      <line x1="-40" y1="660" x2="160" y2="660"/>
+      <line x1="-40" y1="720" x2="160" y2="720"/>
+      <line x1="-40" y1="780" x2="160" y2="780"/>
+    </g>
+    <!-- Sparse cold windows -->
+    <rect x="20" y="195" width="3.5" height="5" fill="#8ba8cc" opacity="0.08"/>
+    <rect x="60" y="255" width="3.5" height="5" fill="#8ba8cc" opacity="0.06"/>
+    <rect x="100" y="320" width="3.5" height="5" fill="#ffb224" opacity="0.1"/>
+    <rect x="40" y="370" width="3.5" height="5" fill="#8ba8cc" opacity="0.05"/>
+    <rect x="120" y="430" width="3.5" height="5" fill="#ffb224" opacity="0.08"/>
+    <rect x="30" y="490" width="3.5" height="5" fill="#8ba8cc" opacity="0.06"/>
+    <rect x="90" y="550" width="3.5" height="5" fill="#ffb224" opacity="0.06"/>
+    <rect x="50" y="620" width="3.5" height="5" fill="#8ba8cc" opacity="0.04"/>
+  </g>
+
+  <!-- === CENTER-LEFT TOWER (tall, dark, like the main tower in image3) === -->
+  <g opacity="0.95">
+    <rect x="240" y="80" width="130" height="1000" fill="url(#steel-glass)" rx="2"/>
+    <rect x="240" y="80" width="130" height="1000" fill="url(#glass-cold)"/>
+    <!-- Vertical mullion lines -->
+    <line x1="275" y1="80" x2="275" y2="1080" stroke="#5a7faa" stroke-width="0.3" opacity="0.04"/>
+    <line x1="305" y1="80" x2="305" y2="1080" stroke="#5a7faa" stroke-width="0.3" opacity="0.04"/>
+    <line x1="335" y1="80" x2="335" y2="1080" stroke="#5a7faa" stroke-width="0.3" opacity="0.04"/>
+    <!-- Floor bands -->
+    <g stroke="#8b95aa" stroke-width="0.3" opacity="0.04">
+      <line x1="240" y1="140" x2="370" y2="140"/>
+      <line x1="240" y1="200" x2="370" y2="200"/>
+      <line x1="240" y1="260" x2="370" y2="260"/>
+      <line x1="240" y1="320" x2="370" y2="320"/>
+      <line x1="240" y1="380" x2="370" y2="380"/>
+      <line x1="240" y1="440" x2="370" y2="440"/>
+      <line x1="240" y1="500" x2="370" y2="500"/>
+      <line x1="240" y1="560" x2="370" y2="560"/>
+      <line x1="240" y1="620" x2="370" y2="620"/>
+      <line x1="240" y1="680" x2="370" y2="680"/>
+      <line x1="240" y1="740" x2="370" y2="740"/>
+    </g>
+    <!-- Sparse windows on dark tower -->
+    <rect x="258" y="150" width="3.5" height="5" fill="#8ba8cc" opacity="0.06"/>
+    <rect x="290" y="215" width="3.5" height="5" fill="#ffb224" opacity="0.08"/>
+    <rect x="340" y="280" width="3.5" height="5" fill="#8ba8cc" opacity="0.05"/>
+    <rect x="260" y="340" width="3.5" height="5" fill="#ffb224" opacity="0.06"/>
+    <rect x="320" y="400" width="3.5" height="5" fill="#8ba8cc" opacity="0.04"/>
+    <rect x="280" y="460" width="3.5" height="5" fill="#ffb224" opacity="0.05"/>
+    <rect x="350" y="520" width="3.5" height="5" fill="#8ba8cc" opacity="0.04"/>
+    <!-- Spire -->
+    <line x1="305" y1="80" x2="305" y2="40" stroke="#8b95aa" stroke-width="1.5" opacity="0.2"/>
+    <circle cx="305" cy="38" r="2" fill="#ff3b5c" opacity="0.5"/>
+  </g>
+
+  <!-- === CENTER HERO TOWER (the golden-crowned tower from image3) === -->
+  <g opacity="0.95">
+    <rect x="680" y="140" width="140" height="940" fill="url(#steel-mid)" rx="2"/>
+    <rect x="700" y="100" width="100" height="980" fill="url(#steel-glass)" rx="2"/>
+    <rect x="700" y="100" width="100" height="980" fill="url(#glass-cold)"/>
+    <!-- Heavy warm illumination on upper floors (like the golden building in image3) -->
+    <g opacity="1">
+      <rect x="710" y="115" width="3.5" height="5" fill="#ffb224" opacity="0.4"/>
+      <rect x="725" y="118" width="3.5" height="5" fill="#ffb224" opacity="0.35"/>
+      <rect x="742" y="112" width="3.5" height="5" fill="#ffb224" opacity="0.38"/>
+      <rect x="758" y="120" width="3.5" height="5" fill="#ffb224" opacity="0.3"/>
+      <rect x="775" y="115" width="3.5" height="5" fill="#ffb224" opacity="0.35"/>
+      <rect x="788" y="118" width="3.5" height="5" fill="#e8ecf4" opacity="0.08"/>
+
+      <rect x="712" y="140" width="3.5" height="5" fill="#ffb224" opacity="0.35"/>
+      <rect x="730" y="145" width="3.5" height="5" fill="#ffb224" opacity="0.3"/>
+      <rect x="750" y="138" width="3.5" height="5" fill="#ffb224" opacity="0.32"/>
+      <rect x="770" y="148" width="3.5" height="5" fill="#ffb224" opacity="0.25"/>
+      <rect x="785" y="140" width="3.5" height="5" fill="#ffb224" opacity="0.3"/>
+
+      <rect x="710" y="165" width="3.5" height="5" fill="#ffb224" opacity="0.28"/>
+      <rect x="735" y="170" width="3.5" height="5" fill="#ffb224" opacity="0.32"/>
+      <rect x="755" y="163" width="3.5" height="5" fill="#ffb224" opacity="0.25"/>
+      <rect x="780" y="172" width="3.5" height="5" fill="#ffb224" opacity="0.3"/>
+
+      <rect x="715" y="195" width="3.5" height="5" fill="#ffb224" opacity="0.22"/>
+      <rect x="745" y="200" width="3.5" height="5" fill="#ffb224" opacity="0.28"/>
+      <rect x="772" y="192" width="3.5" height="5" fill="#ffb224" opacity="0.2"/>
+
+      <rect x="720" y="228" width="3.5" height="5" fill="#ffb224" opacity="0.18"/>
+      <rect x="755" y="232" width="3.5" height="5" fill="#ffb224" opacity="0.22"/>
+      <rect x="780" y="225" width="3.5" height="5" fill="#e8ecf4" opacity="0.05"/>
+
+      <!-- Lower floors — dimmer -->
+      <rect x="718" y="280" width="3.5" height="5" fill="#ffb224" opacity="0.12"/>
+      <rect x="760" y="285" width="3.5" height="5" fill="#ffb224" opacity="0.1"/>
+      <rect x="730" y="340" width="3.5" height="5" fill="#ffb224" opacity="0.08"/>
+      <rect x="775" y="345" width="3.5" height="5" fill="#ffb224" opacity="0.06"/>
+      <rect x="710" y="400" width="3.5" height="5" fill="#ffb224" opacity="0.05"/>
+      <rect x="750" y="405" width="3.5" height="5" fill="#8ba8cc" opacity="0.04"/>
+    </g>
+    <!-- Warm glow emanating from the tower -->
+    <rect x="695" y="98" width="110" height="5" rx="2" fill="#ffb224" opacity="0.4"/>
+    <rect x="705" y="92" width="90" height="3" rx="1" fill="#ffb224" opacity="0.25"/>
+    <!-- Spire -->
+    <line x1="750" y1="100" x2="750" y2="55" stroke="#c0cce0" stroke-width="2" opacity="0.2"/>
+    <line x1="750" y1="55" x2="750" y2="35" stroke="#c0cce0" stroke-width="1" opacity="0.15"/>
+    <circle cx="750" cy="33" r="2.5" fill="#ff3b5c" opacity="0.65"/>
+  </g>
+
+  <!-- === RIGHT FOREGROUND TOWERS (dark, close, with diagonal braces) === -->
+
+  <!-- Right-center dark tower -->
+  <g opacity="0.95">
+    <rect x="1150" y="100" width="120" height="980" fill="url(#steel-fg)" rx="2"/>
+    <rect x="1150" y="100" width="120" height="980" fill="url(#glass-cold)"/>
+    <!-- Diagonal braces — bright V-shape like image3 right side -->
+    <line x1="1150" y1="700" x2="1270" y2="150" stroke="#c0cce0" stroke-width="2.5" opacity="0.22" filter="url(#brace-glow)"/>
+    <line x1="1270" y1="700" x2="1150" y2="150" stroke="#c0cce0" stroke-width="2.5" opacity="0.22" filter="url(#brace-glow)"/>
+    <!-- Secondary set lower -->
+    <line x1="1150" y1="980" x2="1270" y2="500" stroke="#c0cce0" stroke-width="1.8" opacity="0.14" filter="url(#brace-glow)"/>
+    <line x1="1270" y1="980" x2="1150" y2="500" stroke="#c0cce0" stroke-width="1.8" opacity="0.14" filter="url(#brace-glow)"/>
+    <!-- Vertical mullions -->
+    <line x1="1185" y1="100" x2="1185" y2="1080" stroke="#5a7faa" stroke-width="0.3" opacity="0.04"/>
+    <line x1="1210" y1="100" x2="1210" y2="1080" stroke="#5a7faa" stroke-width="0.3" opacity="0.04"/>
+    <line x1="1235" y1="100" x2="1235" y2="1080" stroke="#5a7faa" stroke-width="0.3" opacity="0.04"/>
+    <!-- Floor bands -->
+    <g stroke="#8b95aa" stroke-width="0.3" opacity="0.04">
+      <line x1="1150" y1="160" x2="1270" y2="160"/>
+      <line x1="1150" y1="220" x2="1270" y2="220"/>
+      <line x1="1150" y1="280" x2="1270" y2="280"/>
+      <line x1="1150" y1="340" x2="1270" y2="340"/>
+      <line x1="1150" y1="400" x2="1270" y2="400"/>
+      <line x1="1150" y1="460" x2="1270" y2="460"/>
+      <line x1="1150" y1="520" x2="1270" y2="520"/>
+      <line x1="1150" y1="580" x2="1270" y2="580"/>
+      <line x1="1150" y1="640" x2="1270" y2="640"/>
+    </g>
+    <!-- Sparse windows -->
+    <rect x="1170" y="175" width="3.5" height="5" fill="#8ba8cc" opacity="0.06"/>
+    <rect x="1220" y="240" width="3.5" height="5" fill="#ffb224" opacity="0.08"/>
+    <rect x="1250" y="305" width="3.5" height="5" fill="#8ba8cc" opacity="0.05"/>
+    <rect x="1180" y="365" width="3.5" height="5" fill="#ffb224" opacity="0.06"/>
+    <rect x="1240" y="430" width="3.5" height="5" fill="#8ba8cc" opacity="0.04"/>
+    <rect x="1195" y="505" width="3.5" height="5" fill="#ffb224" opacity="0.05"/>
+  </g>
+
+  <!-- Far-right foreground tower -->
+  <g opacity="0.95">
+    <rect x="1760" y="80" width="200" height="1000" fill="url(#steel-fg)" rx="2"/>
+    <rect x="1760" y="80" width="200" height="1000" fill="url(#glass-cold)"/>
+    <!-- Diagonal brace -->
+    <line x1="1760" y1="750" x2="1960" y2="140" stroke="#c0cce0" stroke-width="2.5" opacity="0.2" filter="url(#brace-glow)"/>
+    <line x1="1960" y1="800" x2="1760" y2="200" stroke="#8b95aa" stroke-width="1.2" opacity="0.1"/>
+    <!-- Floor bands -->
+    <g stroke="#8b95aa" stroke-width="0.4" opacity="0.04">
+      <line x1="1760" y1="140" x2="1960" y2="140"/>
+      <line x1="1760" y1="200" x2="1960" y2="200"/>
+      <line x1="1760" y1="260" x2="1960" y2="260"/>
+      <line x1="1760" y1="320" x2="1960" y2="320"/>
+      <line x1="1760" y1="380" x2="1960" y2="380"/>
+      <line x1="1760" y1="440" x2="1960" y2="440"/>
+      <line x1="1760" y1="500" x2="1960" y2="500"/>
+      <line x1="1760" y1="560" x2="1960" y2="560"/>
+      <line x1="1760" y1="620" x2="1960" y2="620"/>
+      <line x1="1760" y1="680" x2="1960" y2="680"/>
+    </g>
+    <!-- Sparse cold windows -->
+    <rect x="1800" y="160" width="3.5" height="5" fill="#8ba8cc" opacity="0.07"/>
+    <rect x="1860" y="225" width="3.5" height="5" fill="#8ba8cc" opacity="0.05"/>
+    <rect x="1820" y="290" width="3.5" height="5" fill="#ffb224" opacity="0.06"/>
+    <rect x="1900" y="350" width="3.5" height="5" fill="#8ba8cc" opacity="0.04"/>
+    <rect x="1840" y="420" width="3.5" height="5" fill="#ffb224" opacity="0.05"/>
+    <rect x="1880" y="500" width="3.5" height="5" fill="#8ba8cc" opacity="0.04"/>
+  </g>
+
+  <!-- === Connecting mid-right towers === -->
+  <g opacity="0.9">
+    <rect x="1400" y="180" width="100" height="900" fill="url(#steel-glass)" rx="2"/>
+    <rect x="1400" y="180" width="100" height="900" fill="url(#glass-cold)"/>
+    <!-- Diagonal brace -->
+    <line x1="1400" y1="680" x2="1500" y2="220" stroke="#c0cce0" stroke-width="2" opacity="0.16" filter="url(#brace-glow)"/>
+    <rect x="1415" y="200" width="3.5" height="5" fill="#ffb224" opacity="0.1"/>
+    <rect x="1450" y="260" width="3.5" height="5" fill="#8ba8cc" opacity="0.06"/>
+    <rect x="1480" y="330" width="3.5" height="5" fill="#ffb224" opacity="0.07"/>
+    <rect x="1420" y="400" width="3.5" height="5" fill="#8ba8cc" opacity="0.04"/>
+
+    <rect x="1550" y="200" width="90" height="880" fill="url(#steel-dark)" rx="2"/>
+    <rect x="1550" y="200" width="90" height="880" fill="url(#glass-cold)"/>
+    <line x1="1550" y1="720" x2="1640" y2="240" stroke="#c0cce0" stroke-width="1.8" opacity="0.14" filter="url(#brace-glow)"/>
+    <rect x="1565" y="220" width="3.5" height="5" fill="#8ba8cc" opacity="0.06"/>
+    <rect x="1600" y="300" width="3.5" height="5" fill="#ffb224" opacity="0.07"/>
+    <rect x="1575" y="380" width="3.5" height="5" fill="#8ba8cc" opacity="0.04"/>
+  </g>
+
+  <!-- ============ ATMOSPHERIC LAYERS ============ -->
+
+  <!-- Mid-level urban haze -->
+  <g filter="url(#fog)">
+    <rect x="0" y="450" width="1920" height="200" fill="#0e1220" opacity="0.3"/>
+  </g>
+
+  <!-- Warm uplight from street level -->
+  <g filter="url(#glow-wide)">
+    <ellipse cx="750" cy="850" rx="500" ry="120" fill="#ffb224" opacity="0.06"/>
+    <ellipse cx="1200" cy="860" rx="400" ry="100" fill="#ffb224" opacity="0.04"/>
+    <ellipse cx="400" cy="860" rx="350" ry="90" fill="#ffb224" opacity="0.035"/>
+  </g>
+
+  <!-- ============ CHART LINES (subtle, secondary to architecture) ============ -->
+  <path d="M0,650 C120,640 200,660 320,610 C440,560 500,590 640,540 C780,490 840,510 960,460 C1080,410 1140,440 1260,390 C1380,340 1440,370 1560,320 C1680,280 1740,300 1920,270"
+        fill="none" stroke="url(#chart1)" stroke-width="1.8" filter="url(#glow-soft)" opacity="0.5"/>
+  <path d="M0,650 C120,640 200,660 320,610 C440,560 500,590 640,540 C780,490 840,510 960,460 C1080,410 1140,440 1260,390 C1380,340 1440,370 1560,320 C1680,280 1740,300 1920,270 L1920,850 L0,850 Z"
+        fill="url(#chart-fill)" opacity="0.3"/>
+
+  <!-- Subtle grid -->
+  <g opacity="0.03" stroke="#4d8dff" stroke-width="0.5">
+    <line x1="0" y1="350" x2="1920" y2="350"/>
+    <line x1="0" y1="450" x2="1920" y2="450"/>
+    <line x1="0" y1="550" x2="1920" y2="550"/>
+    <line x1="0" y1="650" x2="1920" y2="650"/>
+    <line x1="0" y1="750" x2="1920" y2="750"/>
+    <line x1="320" y1="200" x2="320" y2="850"/>
+    <line x1="640" y1="200" x2="640" y2="850"/>
+    <line x1="960" y1="200" x2="960" y2="850"/>
+    <line x1="1280" y1="200" x2="1280" y2="850"/>
+    <line x1="1600" y1="200" x2="1600" y2="850"/>
+  </g>
+
+  <!-- ============ BOKEH (sparse, cold-toned) ============ -->
+  <g filter="url(#bokeh-lg)">
+    <circle cx="180" cy="380" r="20" fill="#5a7faa" opacity="0.08"/>
+    <circle cx="500" cy="300" r="25" fill="#5a7faa" opacity="0.06"/>
+    <circle cx="900" cy="280" r="22" fill="#5a7faa" opacity="0.07"/>
+    <circle cx="1350" cy="320" r="18" fill="#5a7faa" opacity="0.06"/>
+    <circle cx="1700" cy="280" r="15" fill="#5a7faa" opacity="0.08"/>
+    <circle cx="750" cy="200" r="14" fill="#ffb224" opacity="0.06"/>
+    <circle cx="550" cy="400" r="12" fill="#ffb224" opacity="0.04"/>
+    <circle cx="1100" cy="350" r="16" fill="#ffb224" opacity="0.05"/>
+  </g>
+  <g filter="url(#bokeh-md)">
+    <circle cx="350" cy="350" r="4" fill="#5a7faa" opacity="0.2"/>
+    <circle cx="620" cy="310" r="3.5" fill="#c0cce0" opacity="0.18"/>
+    <circle cx="1050" cy="290" r="4.5" fill="#5a7faa" opacity="0.16"/>
+    <circle cx="1450" cy="300" r="4" fill="#c0cce0" opacity="0.15"/>
+    <circle cx="1650" cy="340" r="3" fill="#5a7faa" opacity="0.18"/>
+    <circle cx="750" cy="150" r="3" fill="#ffb224" opacity="0.15"/>
+  </g>
+  <g filter="url(#bokeh-sm)">
+    <circle cx="130" cy="450" r="2" fill="#c0cce0" opacity="0.25"/>
+    <circle cx="420" cy="380" r="2" fill="#5a7faa" opacity="0.3"/>
+    <circle cx="780" cy="280" r="2.5" fill="#c0cce0" opacity="0.22"/>
+    <circle cx="1200" cy="260" r="2" fill="#5a7faa" opacity="0.28"/>
+    <circle cx="1500" cy="350" r="2" fill="#c0cce0" opacity="0.2"/>
+    <circle cx="1830" cy="300" r="2.5" fill="#5a7faa" opacity="0.25"/>
+  </g>
+
+  <!-- ============ GROUND FOG ============ -->
+  <rect x="0" y="720" width="1920" height="360" fill="url(#ground-fog)"/>
+</svg>

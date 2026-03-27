@@ -6,23 +6,23 @@ interface SentimentTabProps {
 }
 
 const LABEL_CONFIG: Record<string, { text: string; color: string; bg: string }> = {
-  strongly_bullish: { text: 'Strongly Bullish', color: 'text-accent-green', bg: 'bg-accent-green/15' },
-  bullish: { text: 'Bullish', color: 'text-accent-green', bg: 'bg-accent-green/10' },
-  neutral: { text: 'Neutral', color: 'text-accent-yellow', bg: 'bg-accent-yellow/10' },
-  bearish: { text: 'Bearish', color: 'text-accent-red', bg: 'bg-accent-red/10' },
-  strongly_bearish: { text: 'Strongly Bearish', color: 'text-accent-red', bg: 'bg-accent-red/15' },
+  strongly_bullish: { text: 'Strongly Bullish', color: 'text-accent-profit', bg: 'bg-accent-profit/15' },
+  bullish: { text: 'Bullish', color: 'text-accent-profit', bg: 'bg-accent-profit/10' },
+  neutral: { text: 'Neutral', color: 'text-accent-alert', bg: 'bg-accent-alert/10' },
+  bearish: { text: 'Bearish', color: 'text-accent-loss', bg: 'bg-accent-loss/10' },
+  strongly_bearish: { text: 'Strongly Bearish', color: 'text-accent-loss', bg: 'bg-accent-loss/15' },
 };
 
 const IMPACT_COLORS: Record<string, string> = {
-  positive: 'text-accent-green',
-  negative: 'text-accent-red',
-  neutral: 'text-accent-yellow',
+  positive: 'text-accent-profit',
+  negative: 'text-accent-loss',
+  neutral: 'text-accent-alert',
 };
 
 const SIGNIFICANCE_STYLES: Record<string, string> = {
-  high: 'bg-accent-cyan/15 text-accent-cyan',
-  medium: 'bg-bg-tertiary text-text-secondary',
-  low: 'bg-bg-tertiary text-text-secondary opacity-70',
+  high: 'bg-accent-signal-dim text-accent-signal',
+  medium: 'bg-bg-concrete text-text-secondary',
+  low: 'bg-bg-concrete text-text-muted',
 };
 
 function scoreToPercent(score: number): number {
@@ -30,20 +30,20 @@ function scoreToPercent(score: number): number {
 }
 
 function scoreBarColor(score: number): string {
-  if (score >= 0.6) return 'bg-accent-green';
-  if (score >= 0.2) return 'bg-accent-green/60';
-  if (score > -0.2) return 'bg-accent-yellow';
-  if (score > -0.6) return 'bg-accent-red/60';
-  return 'bg-accent-red';
+  if (score >= 0.6) return 'bg-accent-profit';
+  if (score >= 0.2) return 'bg-accent-profit/60';
+  if (score > -0.2) return 'bg-accent-alert';
+  if (score > -0.6) return 'bg-accent-loss/60';
+  return 'bg-accent-loss';
 }
 
 function CatalystRow({ catalyst }: { catalyst: NewsCatalyst }) {
   return (
-    <div className="flex items-start gap-3 py-3 border-b border-border last:border-0">
+    <div className="flex items-start gap-3 py-3 border-b border-border-subtle last:border-0">
       <div className={clsx('mt-1 w-2 h-2 rounded-full shrink-0', {
-        'bg-accent-green': catalyst.impact === 'positive',
-        'bg-accent-red': catalyst.impact === 'negative',
-        'bg-accent-yellow': catalyst.impact === 'neutral',
+        'bg-accent-profit': catalyst.impact === 'positive',
+        'bg-accent-loss': catalyst.impact === 'negative',
+        'bg-accent-alert': catalyst.impact === 'neutral',
       })} />
       <div className="flex-1 min-w-0">
         {catalyst.url ? (
@@ -51,7 +51,7 @@ function CatalystRow({ catalyst }: { catalyst: NewsCatalyst }) {
             href={catalyst.url}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-sm text-accent-cyan hover:underline leading-snug"
+            className="text-sm text-accent-signal hover:underline leading-snug"
           >
             {catalyst.headline}
           </a>
@@ -59,7 +59,7 @@ function CatalystRow({ catalyst }: { catalyst: NewsCatalyst }) {
           <p className="text-sm text-text-primary leading-snug">{catalyst.headline}</p>
         )}
         <div className="flex items-center gap-2 mt-1.5">
-          <span className="text-xs text-text-secondary truncate max-w-[200px]">{catalyst.source}</span>
+          <span className="text-xs text-text-muted truncate max-w-[200px]">{catalyst.source}</span>
           <span className={clsx('text-xs capitalize', IMPACT_COLORS[catalyst.impact])}>
             {catalyst.impact}
           </span>
@@ -75,10 +75,10 @@ function CatalystRow({ catalyst }: { catalyst: NewsCatalyst }) {
 export function SentimentTab({ sentiment }: SentimentTabProps) {
   if (!sentiment) {
     return (
-      <div className="flex items-center justify-center h-full text-text-secondary">
+      <div className="flex items-center justify-center h-full text-text-muted">
         <div className="text-center">
-          <h3 className="text-lg font-semibold mb-2">No Sentiment Data</h3>
-          <p>Gemini news analysis was not available for this ticker.</p>
+          <h3 className="text-lg font-semibold mb-2 font-body">No Sentiment Data</h3>
+          <p className="text-sm">Gemini news analysis was not available for this ticker.</p>
         </div>
       </div>
     );
@@ -90,11 +90,11 @@ export function SentimentTab({ sentiment }: SentimentTabProps) {
   return (
     <div className="p-6 overflow-y-auto h-full">
       {/* Score Header */}
-      <div className="bg-bg-tertiary rounded-lg border border-border p-6 mb-6">
+      <div className="bg-bg-concrete rounded-lg border border-border-gutter p-6 mb-6">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <div className="text-xs text-text-secondary mb-1">Sentiment Score</div>
-            <div className={clsx('text-4xl font-bold tabular-nums', label.color)}>
+            <div className="text-xs text-text-muted mb-1 font-body">Sentiment Score</div>
+            <div className={clsx('text-4xl font-display font-bold tabular-nums', label.color)}>
               {sentiment.sentiment_score > 0 ? '+' : ''}{sentiment.sentiment_score.toFixed(2)}
             </div>
           </div>
@@ -103,13 +103,13 @@ export function SentimentTab({ sentiment }: SentimentTabProps) {
           </div>
         </div>
         {/* Score bar */}
-        <div className="w-full h-2 bg-bg-primary rounded-full overflow-hidden">
+        <div className="w-full h-2 bg-bg-void rounded-full overflow-hidden">
           <div
             className={clsx('h-full rounded-full transition-all', scoreBarColor(sentiment.sentiment_score))}
             style={{ width: `${percent}%` }}
           />
         </div>
-        <div className="flex justify-between text-xs text-text-secondary mt-1">
+        <div className="flex justify-between text-xs text-text-muted mt-1 font-display">
           <span>-1.0 Bearish</span>
           <span>0 Neutral</span>
           <span>+1.0 Bullish</span>
@@ -118,38 +118,38 @@ export function SentimentTab({ sentiment }: SentimentTabProps) {
 
       {/* Summary */}
       <div className="mb-6">
-        <h3 className="text-sm font-semibold text-text-secondary mb-2">Analysis Summary</h3>
+        <h3 className="text-sm font-semibold text-text-secondary mb-2 font-body">Analysis Summary</h3>
         <p className="text-sm text-text-primary leading-relaxed">{sentiment.summary}</p>
       </div>
 
       {/* Key Catalysts */}
       <div className="mb-6">
-        <h3 className="text-sm font-semibold text-text-secondary mb-3">
+        <h3 className="text-sm font-semibold text-text-secondary mb-3 font-body">
           Key Catalysts
-          <span className="ml-2 text-xs font-normal text-text-secondary">
+          <span className="ml-2 text-xs font-normal text-text-muted">
             ({sentiment.key_catalysts.length})
           </span>
         </h3>
         {sentiment.key_catalysts.length > 0 ? (
-          <div className="bg-bg-tertiary rounded-lg border border-border px-4">
+          <div className="bg-bg-concrete rounded-lg border border-border-gutter px-4">
             {sentiment.key_catalysts.map((c, i) => (
               <CatalystRow key={i} catalyst={c} />
             ))}
           </div>
         ) : (
-          <p className="text-sm text-text-secondary">No catalysts identified.</p>
+          <p className="text-sm text-text-muted">No catalysts identified.</p>
         )}
       </div>
 
       {/* Sector Sentiment + Recency */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div>
-          <h3 className="text-sm font-semibold text-text-secondary mb-2">Sector Sentiment</h3>
+          <h3 className="text-sm font-semibold text-text-secondary mb-2 font-body">Sector Sentiment</h3>
           <p className="text-sm text-text-primary leading-relaxed">{sentiment.sector_sentiment || 'N/A'}</p>
         </div>
         <div>
-          <h3 className="text-sm font-semibold text-text-secondary mb-2">News Window</h3>
-          <span className="text-sm bg-bg-tertiary px-3 py-1.5 rounded border border-border text-text-primary">
+          <h3 className="text-sm font-semibold text-text-secondary mb-2 font-body">News Window</h3>
+          <span className="text-sm bg-bg-concrete px-3 py-1.5 rounded border border-border-gutter text-text-primary font-display">
             {sentiment.news_recency || 'N/A'}
           </span>
         </div>

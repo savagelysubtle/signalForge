@@ -20,6 +20,7 @@ from supabase import Client, create_client
 from config import paths, settings
 from pipeline.schemas import TechnicalLevel
 from services.keyring_service import get_api_key
+from utils.ticker import normalize_ticker
 
 logger = logging.getLogger(__name__)
 
@@ -99,12 +100,17 @@ def _to_tradingview_symbols(ticker: str) -> list[str]:
     Canadian tickers (TSX/TSXV prefixed or .TO/.V suffixed) get both TSX and
     TSXV as candidates, since Perplexity may guess the wrong exchange.
 
+    The ticker is normalized first to strip whitespace and convert Yahoo
+    suffixes, so malformed input like ``TSX: CVE`` or ``ENB.TO`` is handled.
+
     Examples:
         TSX:ENB    -> ["TSX:ENB", "TSXV:ENB"]
         TSXV:NVX   -> ["TSXV:NVX", "TSX:NVX"]
         AC.TO      -> ["TSX:AC", "TSXV:AC"]
         AAPL       -> ["NASDAQ:AAPL", "NYSE:AAPL", "AMEX:AAPL"]
+        TSX: CVE   -> ["TSX:CVE", "TSXV:CVE"]
     """
+    ticker = normalize_ticker(ticker)
     if ":" in ticker:
         exchange, symbol = ticker.split(":", 1)
         if exchange in _CANADIAN_EXCHANGE_FALLBACKS:
