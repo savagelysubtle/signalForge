@@ -50,7 +50,7 @@ STAGE_TIMEOUTS: dict[str, float] = {
     "fmp": 90.0,
     "perplexity": 180.0,
     "gemini": 120.0,
-    "claude": 180.0,
+    "claude": 360.0,
     "gpt": 180.0,
     "annotate": 60.0,
 }

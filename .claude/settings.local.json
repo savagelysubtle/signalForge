@@ -61,7 +61,10 @@
       "Bash(uv sync:*)",
       "Bash(wc -l src/frontend/src/**/*.tsx src/frontend/src/**/*.ts src/frontend/src/**/*.css)",
       "Bash(find src/frontend/src/ -type f \\\\\\( -name \"*.ts\" -o -name \"*.tsx\" -o -name \"*.css\" \\\\\\) -exec wc -l {} +)",
-      "Bash(bunx tsc:*)"
+      "Bash(bunx tsc:*)",
+      "Bash(for f:*)",
+      "Bash(do)",
+      "Bash(git commit:*)"
     ]
   }
 }
