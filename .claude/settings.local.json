@@ -58,7 +58,10 @@
       "Read(//c/Program Files/PowerShell/**)",
       "Bash(rm -rf .venv)",
       "Bash(uv venv:*)",
-      "Bash(uv sync:*)"
+      "Bash(uv sync:*)",
+      "Bash(wc -l src/frontend/src/**/*.tsx src/frontend/src/**/*.ts src/frontend/src/**/*.css)",
+      "Bash(find src/frontend/src/ -type f \\\\\\( -name \"*.ts\" -o -name \"*.tsx\" -o -name \"*.css\" \\\\\\) -exec wc -l {} +)",
+      "Bash(bunx tsc:*)"
     ]
   }
 }

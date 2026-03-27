@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Navigate } from "react-router-dom";
 import { Loader2 } from "lucide-react";
+import { motion } from "motion/react";
 import { useAuth } from "../../context/AuthContext";
 import heroArtwork from "../../assets/signalforge-hero.svg";
 import logoHorizontal from "../../assets/signalforge-logo-horizontal.svg";
@@ -16,8 +17,8 @@ export function LoginPage() {
 
   if (authLoading) {
     return (
-      <div className="flex items-center justify-center h-screen bg-bg-primary">
-        <Loader2 className="w-8 h-8 animate-spin text-accent-blue" />
+      <div className="flex items-center justify-center h-screen bg-bg-void">
+        <Loader2 className="w-8 h-8 animate-spin text-accent-signal" />
       </div>
     );
   }
@@ -45,21 +46,41 @@ export function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-bg-primary">
-      <div className="mx-auto grid min-h-screen max-w-7xl gap-10 px-6 py-8 lg:grid-cols-[minmax(0,420px)_minmax(0,1fr)] lg:items-center lg:px-8">
+    <div className="min-h-screen bg-bg-void relative overflow-hidden">
+      {/* Background layers */}
+      <div className="absolute inset-0 bg-urban-finance pointer-events-none" />
+      <div className="absolute inset-0 bg-grid-fade pointer-events-none" />
+      <div className="absolute inset-0 bg-noise pointer-events-none" />
+      {/* Radial glow behind form area */}
+      <div className="absolute top-1/2 left-[30%] -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] glow-signal pointer-events-none opacity-50" />
+
+      <div className="relative z-10 mx-auto grid min-h-screen max-w-7xl gap-10 px-6 py-8 lg:grid-cols-[minmax(0,420px)_minmax(0,1fr)] lg:items-center lg:px-8">
         <div className="mx-auto flex w-full max-w-sm flex-col justify-center">
-          <img
+          <motion.img
+            initial={{ opacity: 0, y: -12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, ease: "easeOut" }}
             src={logoHorizontal}
             alt="SignalForge"
             className="mb-4 w-full max-w-[280px]"
           />
-          <p className="mb-8 text-sm text-text-secondary">
+          <motion.p
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, ease: "easeOut", delay: 0.1 }}
+            className="mb-8 text-sm text-text-secondary font-body"
+          >
             Precision signals forged from market structure, sentiment, and AI
             synthesis.
-          </p>
+          </motion.p>
 
-          <div className="rounded-2xl border border-border bg-bg-secondary p-6 shadow-lg shadow-black/20">
-            <h2 className="mb-1 text-lg font-semibold text-text-primary">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6, ease: "easeOut", delay: 0.2 }}
+            className="glass-panel rounded-2xl p-6 shadow-2xl shadow-black/30"
+          >
+            <h2 className="mb-1 text-lg font-semibold text-text-primary font-display">
               {isSignUp ? "Create account" : "Sign in"}
             </h2>
             <p className="mb-6 text-sm text-text-secondary">
@@ -69,13 +90,13 @@ export function LoginPage() {
             </p>
 
             {signUpSuccess ? (
-              <div className="rounded-lg border border-accent-green/20 bg-accent-green/10 p-4 text-sm text-accent-green">
+              <div className="rounded-lg border border-accent-profit/20 bg-accent-profit-dim p-4 text-sm text-accent-profit">
                 Account created. Check your email to confirm, then sign in.
               </div>
             ) : (
               <form onSubmit={handleSubmit} className="space-y-4">
                 {error && (
-                  <div className="rounded-lg border border-accent-red/20 bg-accent-red/10 p-3 text-sm text-accent-red">
+                  <div className="rounded-lg border border-accent-loss/20 bg-accent-loss-dim p-3 text-sm text-accent-loss">
                     {error}
                   </div>
                 )}
@@ -94,7 +115,7 @@ export function LoginPage() {
                     onChange={(e) => setEmail(e.target.value)}
                     required
                     autoComplete="email"
-                    className="w-full rounded-lg border border-border bg-bg-tertiary px-3 py-2 text-sm text-text-primary placeholder-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/50 focus-visible:border-accent-blue"
+                    className="w-full rounded-lg border border-border-gutter bg-bg-concrete px-3 py-2 text-sm text-text-primary placeholder-text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-signal/50 focus-visible:border-accent-signal transition-colors"
                     placeholder="you@example.com"
                   />
                 </div>
@@ -114,7 +135,7 @@ export function LoginPage() {
                     required
                     minLength={6}
                     autoComplete={isSignUp ? "new-password" : "current-password"}
-                    className="w-full rounded-lg border border-border bg-bg-tertiary px-3 py-2 text-sm text-text-primary placeholder-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/50 focus-visible:border-accent-blue"
+                    className="w-full rounded-lg border border-border-gutter bg-bg-concrete px-3 py-2 text-sm text-text-primary placeholder-text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-signal/50 focus-visible:border-accent-signal transition-colors"
                     placeholder="At least 6 characters"
                   />
                 </div>
@@ -122,7 +143,7 @@ export function LoginPage() {
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="flex w-full items-center justify-center gap-2 rounded-lg bg-accent-blue py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-blue/90 disabled:opacity-50"
+                  className="flex w-full items-center justify-center gap-2 rounded-lg bg-accent-signal py-2.5 text-sm font-medium text-bg-void transition-all hover:brightness-110 disabled:opacity-50 font-display"
                 >
                   {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
                   {isSignUp ? "Create account" : "Sign in"}
@@ -137,25 +158,30 @@ export function LoginPage() {
                   setError(null);
                   setSignUpSuccess(false);
                 }}
-                className="text-sm text-accent-blue hover:underline"
+                className="text-sm text-accent-signal hover:underline transition-colors"
               >
                 {isSignUp
                   ? "Already have an account? Sign in"
                   : "Need an account? Sign up"}
               </button>
             </div>
-          </div>
+          </motion.div>
         </div>
 
-        <div className="hidden lg:block">
-          <div className="overflow-hidden rounded-[28px] border border-border bg-bg-secondary/60 p-4 shadow-2xl shadow-black/20">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.97 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.7, ease: "easeOut", delay: 0.35 }}
+          className="hidden lg:block"
+        >
+          <div className="overflow-hidden rounded-[28px] border border-border-subtle bg-bg-asphalt/60 p-4 shadow-2xl shadow-black/30">
             <img
               src={heroArtwork}
               alt="SignalForge brand hero showing forged market signals"
-              className="w-full rounded-3xl border border-border/60 bg-bg-primary"
+              className="w-full rounded-3xl border border-border-subtle/60 bg-bg-void"
             />
           </div>
-        </div>
+        </motion.div>
       </div>
     </div>
   );
