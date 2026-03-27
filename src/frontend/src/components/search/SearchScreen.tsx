@@ -76,27 +76,27 @@ export function SearchScreen() {
   })();
 
   return (
-    <div className="h-full flex flex-col items-center justify-center relative overflow-y-auto px-6 py-12">
+    <div className="min-h-full flex flex-col items-center relative overflow-y-auto px-6 py-6">
       {/* Background decorations */}
       <div className="absolute inset-0 bg-candle-motif opacity-[0.04] pointer-events-none" />
       <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] glow-signal rounded-full opacity-30 pointer-events-none" />
 
-      <div className="relative z-10 w-full max-w-3xl flex flex-col items-center">
+      <div className="relative z-10 w-full max-w-3xl flex flex-col items-center my-auto">
         {/* Hero */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4, ease: 'easeOut' }}
-          className="flex flex-col items-center mb-10"
+          className="flex flex-col items-center mb-6"
         >
-          <div className="relative mb-4">
-            <div className="absolute -inset-4 glow-signal rounded-full opacity-50" />
-            <img src={logoIcon} alt="" className="w-14 h-14 relative" />
+          <div className="relative mb-3">
+            <div className="absolute -inset-3 glow-signal rounded-full opacity-50" />
+            <img src={logoIcon} alt="" className="w-11 h-11 relative" />
           </div>
-          <h1 className="text-3xl font-display font-bold text-text-primary mb-2">
+          <h1 className="text-2xl font-display font-bold text-text-primary mb-1.5">
             What would you like to analyze?
           </h1>
-          <p className="text-text-secondary font-body text-sm">
+          <p className="text-text-secondary font-body text-xs">
             Enter tickers, a prompt, or choose a strategy below
           </p>
         </motion.div>
@@ -106,7 +106,7 @@ export function SearchScreen() {
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4, delay: 0.1, ease: 'easeOut' }}
-          className="w-full mb-6"
+          className="w-full mb-5"
         >
           <div className="relative">
             <input
@@ -120,7 +120,7 @@ export function SearchScreen() {
               onChange={(e) => setInputText(e.target.value)}
               disabled={isRunning}
               onKeyDown={(e) => { if (e.key === 'Enter' && runMode !== 'none') handleRun(); }}
-              className="w-full bg-bg-concrete border border-border-gutter rounded-xl px-5 py-4 text-base text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-signal transition-colors font-body"
+              className="w-full bg-bg-concrete border border-border-gutter rounded-lg px-4 py-3 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-signal transition-colors font-body"
             />
             {runMode !== 'none' && !isRunning && (
               <span className={clsx(
@@ -140,25 +140,25 @@ export function SearchScreen() {
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4, delay: 0.2, ease: 'easeOut' }}
-          className="w-full mb-8"
+          className="w-full mb-6"
         >
-          <h2 className="text-xs font-display text-text-muted uppercase tracking-wider mb-3">
+          <h2 className="text-[11px] font-display text-text-muted uppercase tracking-wider mb-2">
             Strategy
           </h2>
-          <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
             {/* No strategy card */}
             <button
               onClick={() => setSelectedStrategy('')}
               disabled={isRunning}
               className={clsx(
-                "text-left rounded-xl p-4 border transition-all duration-200",
+                "text-left rounded-lg p-3 border transition-all duration-200",
                 !selectedStrategy
                   ? "bg-bg-concrete border-accent-signal/40 ring-1 ring-accent-signal/20"
                   : "bg-bg-concrete border-border-gutter hover:border-accent-signal"
               )}
             >
-              <div className="font-display font-bold text-sm text-text-primary mb-1">No Strategy</div>
-              <p className="text-xs text-text-muted font-body line-clamp-2">
+              <div className="font-display font-bold text-xs text-text-primary mb-0.5">No Strategy</div>
+              <p className="text-[11px] text-text-muted font-body line-clamp-2">
                 Analyze tickers directly or use a prompt
               </p>
             </button>
@@ -169,23 +169,23 @@ export function SearchScreen() {
                 onClick={() => setSelectedStrategy(strategy.id)}
                 disabled={isRunning}
                 className={clsx(
-                  "text-left rounded-xl p-4 border transition-all duration-200",
+                  "text-left rounded-lg p-3 border transition-all duration-200",
                   selectedStrategy === strategy.id
                     ? "bg-bg-concrete border-accent-signal/40 ring-1 ring-accent-signal/20"
                     : "bg-bg-concrete border-border-gutter hover:border-accent-signal"
                 )}
               >
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="font-display font-bold text-sm text-text-primary truncate">
+                <div className="flex items-center gap-1.5 mb-0.5">
+                  <span className="font-display font-bold text-xs text-text-primary truncate">
                     {strategy.name}
                   </span>
                   {strategy.is_template && (
-                    <span className="text-[10px] font-display text-text-muted bg-bg-steel px-1.5 py-0.5 rounded shrink-0">
+                    <span className="text-[9px] font-display text-text-muted bg-bg-steel px-1.5 py-0.5 rounded shrink-0">
                       TPL
                     </span>
                   )}
                 </div>
-                <p className="text-xs text-text-muted font-body line-clamp-2">
+                <p className="text-[11px] text-text-muted font-body line-clamp-1">
                   {strategy.description}
                 </p>
               </button>
@@ -203,9 +203,9 @@ export function SearchScreen() {
           <button
             onClick={handleRun}
             disabled={isRunning || runMode === 'none'}
-            className="flex items-center gap-2.5 bg-accent-signal text-bg-void px-8 py-3 rounded-xl text-base font-bold hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200 font-display"
+            className="flex items-center gap-2 bg-accent-signal text-bg-void px-6 py-2.5 rounded-lg text-sm font-bold hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200 font-display"
           >
-            {isRunning ? <Loader2 className="w-5 h-5 animate-spin" /> : <Play className="w-5 h-5" />}
+            {isRunning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
             {isRunning ? 'Analyzing...' : 'Run Analysis'}
           </button>
 
