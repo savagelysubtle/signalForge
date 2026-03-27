@@ -191,6 +191,7 @@ async def _load_recommendations(
 
         recs.append(
             Recommendation(
+                id=r["id"],
                 ticker=r["ticker"],
                 action=r["action"],
                 confidence=r["confidence"],

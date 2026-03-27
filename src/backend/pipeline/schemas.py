@@ -168,6 +168,7 @@ class DebateCase(BaseModel):
 class Recommendation(BaseModel):
     """Final judge recommendation for a single ticker."""
 
+    id: str = ""
     ticker: str
     action: Literal["BUY", "SELL", "HOLD"]
 
@@ -405,3 +406,124 @@ class StrategyConfig(BaseModel):
 
     # Metadata
     is_template: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Feedback Loop (Phase 5)
+# ---------------------------------------------------------------------------
+
+
+class DecisionCreate(BaseModel):
+    """Request body for recording a decision on a recommendation."""
+
+    decision: Literal["following", "passing"]
+    reason: str = ""
+    reason_category: str = ""
+
+
+class DecisionResponse(BaseModel):
+    """Decision record returned from the API."""
+
+    id: str
+    user_id: str
+    recommendation_id: str
+    decision: Literal["following", "passing"]
+    reason: str = ""
+    reason_category: str = ""
+    decided_at: str
+    ticker: str = ""
+    action: str = ""
+    confidence: float = 0.0
+
+
+class OutcomeCreate(BaseModel):
+    """Request body for logging a trade outcome."""
+
+    entry_price: float | None = None
+    exit_price: float | None = None
+    shares: int | None = None
+    pnl_dollars: float | None = None
+    pnl_percent: float | None = None
+    holding_days: int | None = None
+    exit_reason: str = ""
+    notes: str = ""
+
+
+class OutcomeResponse(BaseModel):
+    """Outcome record returned from the API."""
+
+    id: str
+    user_id: str
+    decision_id: str
+    recommendation_id: str
+    ticker: str
+    entry_price: float | None = None
+    exit_price: float | None = None
+    shares: int | None = None
+    pnl_dollars: float | None = None
+    pnl_percent: float | None = None
+    holding_days: int | None = None
+    exit_reason: str = ""
+    notes: str = ""
+    logged_at: str
+
+
+class ReflectionResponse(BaseModel):
+    """Reflection summary returned from the API."""
+
+    id: str
+    generated_at: str
+    recommendations_analyzed: int
+    decisions_analyzed: int
+    outcomes_analyzed: int
+    date_range_start: str | None
+    date_range_end: str | None
+    summary_text: str
+    injection_prompt: str
+    metrics: dict
+
+
+class PerformanceOverview(BaseModel):
+    """Aggregated performance metrics for the insights dashboard."""
+
+    total_recommendations: int = 0
+    total_decisions: int = 0
+    total_following: int = 0
+    total_passing: int = 0
+    total_outcomes: int = 0
+    wins: int = 0
+    losses: int = 0
+    breakeven: int = 0
+    win_rate: float | None = None
+    total_pnl_dollars: float = 0.0
+    avg_pnl_percent: float | None = None
+    avg_holding_days: float | None = None
+    best_trade: dict | None = None
+    worst_trade: dict | None = None
+    confidence_calibration: list[dict] = Field(default_factory=list)
+
+
+class RecommendationWithStatus(BaseModel):
+    """Recommendation enriched with decision and outcome status for the trade journal."""
+
+    id: str
+    run_id: str
+    ticker: str
+    action: Literal["BUY", "SELL", "HOLD"]
+    confidence: float
+    entry_price: float | None = None
+    stop_loss: float | None = None
+    take_profit: float | None = None
+    risk_reward_ratio: float | None = None
+    holding_period: str = ""
+    judge_reasoning: str = ""
+    created_at: str
+    decision: Literal["following", "passing"] | None = None
+    decision_id: str | None = None
+    decision_reason: str = ""
+    decided_at: str | None = None
+    outcome_id: str | None = None
+    outcome_pnl_dollars: float | None = None
+    outcome_pnl_percent: float | None = None
+    outcome_exit_reason: str = ""
+    outcome_logged_at: str | None = None

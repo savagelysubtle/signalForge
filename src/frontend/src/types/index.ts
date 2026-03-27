@@ -101,6 +101,7 @@ export interface DebateCase {
 }
 
 export interface Recommendation {
+  id: string;
   ticker: string;
   action: "BUY" | "SELL" | "HOLD";
   confidence: number; // 0.0 to 1.0
@@ -246,12 +247,6 @@ export interface FmpScreenerConfig {
 
   enrich_with_ratios: boolean;
 
-  // Signal-based post-filters
-  piotroski_min: number | null;
-  require_insider_buying: boolean;
-  rvol_min: number | null;
-  earnings_within_days: number | null;
-
   // Composite scoring weights
   scoring_weights: ScoringWeights;
 
@@ -280,6 +275,118 @@ export interface StrategyConfig {
   risk_params: RiskParams;
   enable_debate: boolean;
   is_template: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Feedback Loop (Phase 5)
+// ---------------------------------------------------------------------------
+
+export interface DecisionCreate {
+  decision: "following" | "passing";
+  reason?: string;
+  reason_category?: string;
+}
+
+export interface DecisionResponse {
+  id: string;
+  user_id: string;
+  recommendation_id: string;
+  decision: "following" | "passing";
+  reason: string;
+  reason_category: string;
+  decided_at: string;
+  ticker: string;
+  action: string;
+  confidence: number;
+}
+
+export interface OutcomeCreate {
+  entry_price?: number | null;
+  exit_price?: number | null;
+  shares?: number | null;
+  pnl_dollars?: number | null;
+  pnl_percent?: number | null;
+  holding_days?: number | null;
+  exit_reason?: string;
+  notes?: string;
+}
+
+export interface OutcomeResponse {
+  id: string;
+  user_id: string;
+  decision_id: string;
+  recommendation_id: string;
+  ticker: string;
+  entry_price: number | null;
+  exit_price: number | null;
+  shares: number | null;
+  pnl_dollars: number | null;
+  pnl_percent: number | null;
+  holding_days: number | null;
+  exit_reason: string;
+  notes: string;
+  logged_at: string;
+}
+
+export interface ReflectionResponse {
+  id: string;
+  generated_at: string;
+  recommendations_analyzed: number;
+  decisions_analyzed: number;
+  outcomes_analyzed: number;
+  date_range_start: string | null;
+  date_range_end: string | null;
+  summary_text: string;
+  injection_prompt: string;
+  metrics: Record<string, unknown>;
+}
+
+export interface ConfidenceCalibration {
+  bucket: string;
+  count: number;
+  win_rate: number;
+}
+
+export interface PerformanceOverview {
+  total_recommendations: number;
+  total_decisions: number;
+  total_following: number;
+  total_passing: number;
+  total_outcomes: number;
+  wins: number;
+  losses: number;
+  breakeven: number;
+  win_rate: number | null;
+  total_pnl_dollars: number;
+  avg_pnl_percent: number | null;
+  avg_holding_days: number | null;
+  best_trade: { ticker: string; pnl_dollars: number; pnl_percent: number | null } | null;
+  worst_trade: { ticker: string; pnl_dollars: number; pnl_percent: number | null } | null;
+  confidence_calibration: ConfidenceCalibration[];
+}
+
+export interface RecommendationWithStatus {
+  id: string;
+  run_id: string;
+  ticker: string;
+  action: "BUY" | "SELL" | "HOLD";
+  confidence: number;
+  entry_price: number | null;
+  stop_loss: number | null;
+  take_profit: number | null;
+  risk_reward_ratio: number | null;
+  holding_period: string;
+  judge_reasoning: string;
+  created_at: string;
+  decision: "following" | "passing" | null;
+  decision_id: string | null;
+  decision_reason: string;
+  decided_at: string | null;
+  outcome_id: string | null;
+  outcome_pnl_dollars: number | null;
+  outcome_pnl_percent: number | null;
+  outcome_exit_reason: string;
+  outcome_logged_at: string | null;
 }
 
 // ---------------------------------------------------------------------------
