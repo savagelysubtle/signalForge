@@ -109,11 +109,12 @@ async def _analyze_ticker(
     user_id: str = "",
     timeframe_override: str | None = None,
     indicators_override: list[str] | None = None,
+    fmp_context_str: str | None = None,
 ) -> tuple[ChartAnalysis | None, dict]:
     """Run chart analysis for a single ticker and timeframe.
 
-    Fetches the chart image, sends it to Claude Vision with news context,
-    and returns a validated ChartAnalysis.
+    Fetches the chart image, sends it to Claude Vision with news context
+    and FMP fundamental context, and returns a validated ChartAnalysis.
 
     Args:
         ticker: Stock/crypto ticker symbol.
@@ -125,6 +126,7 @@ async def _analyze_ticker(
             strategy's ``chart_timeframe``.
         indicators_override: If set, use these indicators instead of
             the strategy's ``chart_indicators`` (for short-TF analysis).
+        fmp_context_str: Pre-formatted FMP fundamental context, or None.
 
     Returns:
         Tuple of (validated ChartAnalysis or None, metadata dict).
@@ -137,6 +139,7 @@ async def _analyze_ticker(
         sentiment,
         timeframe_override=timeframe_override,
         indicators_override=effective_indicators,
+        fmp_context=fmp_context_str,
     )
     metadata: dict = {
         "stage": "claude",
@@ -183,6 +186,7 @@ async def _analyze_ticker(
             result.chart_image_path = image_path
             metadata["status"] = "success"
             metadata["raw_response"] = result.model_dump_json()
+            metadata["retry_count"] = getattr(result, "_retry_count", 0)
         else:
             metadata["status"] = "validation_failed"
 
@@ -201,30 +205,41 @@ async def run_chart_analysis(
     sentiments: list[SentimentAnalysis],
     run_id: str,
     user_id: str = "",
+    fmp_context: dict | None = None,
 ) -> tuple[list[ChartAnalysis], list[dict]]:
     """Run chart analysis for all tickers in parallel.
 
-    Each ticker gets its own Claude Vision call with a chart screenshot
-    and news context from Gemini. Calls are rate-limited by a semaphore
-    (max 3 concurrent to respect Anthropic rate limits).
+    Each ticker gets its own Claude Vision call with a chart screenshot,
+    news context from Gemini, and fundamental context from FMP. Calls
+    are rate-limited by a semaphore (max 3 concurrent).
 
     Args:
         tickers: List of ticker symbols from screening.
         config: Strategy configuration with chart params.
         sentiments: List of SentimentAnalysis results from Gemini.
         run_id: Pipeline run UUID for chart image filenames.
+        user_id: User UUID for storage path isolation.
+        fmp_context: Mapping of ticker -> FmpEnrichedStock for
+            fundamental context injection into chart prompts.
 
     Returns:
         Tuple of (list of successful ChartAnalysis results,
         list of per-ticker metadata dicts).
     """
+    from pipeline.fmp_context import format_fmp_for_claude
+
     sentiment_map: dict[str, SentimentAnalysis] = {s.ticker: s for s in sentiments}
 
     tasks = []
     task_tickers: list[str] = []
     for ticker in tickers:
         sentiment = sentiment_map.get(ticker)
-        tasks.append(_analyze_ticker(ticker, config, sentiment, run_id, user_id))
+        fmp_str: str | None = None
+        if fmp_context and ticker in fmp_context:
+            fmp_str = format_fmp_for_claude(fmp_context[ticker])
+        tasks.append(
+            _analyze_ticker(ticker, config, sentiment, run_id, user_id, fmp_context_str=fmp_str)
+        )
         task_tickers.append(ticker)
         for extra_tf in config.additional_timeframes:
             if extra_tf != config.chart_timeframe:
@@ -236,6 +251,7 @@ async def run_chart_analysis(
                         run_id,
                         user_id,
                         timeframe_override=extra_tf,
+                        fmp_context_str=fmp_str,
                     )
                 )
                 task_tickers.append(ticker)
@@ -250,6 +266,7 @@ async def run_chart_analysis(
                         user_id,
                         timeframe_override=short_tf,
                         indicators_override=config.short_tf_indicators,
+                        fmp_context_str=fmp_str,
                     )
                 )
                 task_tickers.append(ticker)

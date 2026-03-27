@@ -209,6 +209,26 @@ class PipelineResult(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class ScoringWeights(BaseModel):
+    """Per-strategy weights for the FMP composite scoring engine.
+
+    Each weight is 0.0-1.0 and they should sum to 1.0 (enforced at
+    scoring time via normalisation). Strategies can bias the score
+    toward dimensions that matter most for their trading style.
+
+    Attributes:
+        fundamental: Weight for ROE, margins, Piotroski score.
+        momentum: Weight for price changes and relative volume.
+        sentiment: Weight for insider activity and analyst consensus.
+        quality: Weight for Altman Z-score, debt/equity, current ratio.
+    """
+
+    fundamental: float = 0.25
+    momentum: float = 0.25
+    sentiment: float = 0.25
+    quality: float = 0.25
+
+
 class FmpScreenerConfig(BaseModel):
     """Strategy-level FMP stock screener configuration.
 

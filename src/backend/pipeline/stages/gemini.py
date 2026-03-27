@@ -83,6 +83,7 @@ async def _analyze_ticker(
     ticker: str,
     config: StrategyConfig,
     news_urls: list[str] | None = None,
+    fmp_context_str: str | None = None,
 ) -> tuple[SentimentAnalysis | None, dict]:
     """Run sentiment analysis for a single ticker.
 
@@ -90,11 +91,14 @@ async def _analyze_ticker(
         ticker: Stock/crypto ticker symbol.
         config: Strategy configuration with news_recency and news_scope.
         news_urls: Pre-researched article URLs from Perplexity.
+        fmp_context_str: Pre-formatted FMP company context, or None.
 
     Returns:
         Tuple of (validated SentimentAnalysis or None, metadata dict).
     """
-    user_prompt = build_sentiment_prompt(ticker, config, news_urls=news_urls)
+    user_prompt = build_sentiment_prompt(
+        ticker, config, news_urls=news_urls, fmp_context=fmp_context_str
+    )
     metadata: dict = {
         "stage": "gemini",
         "ticker": ticker,
@@ -110,6 +114,7 @@ async def _analyze_ticker(
         metadata["status"] = "success" if result else "validation_failed"
         if result is not None:
             metadata["raw_response"] = result.model_dump_json()
+            metadata["retry_count"] = getattr(result, "_retry_count", 0)
         return result, metadata
     except Exception as exc:
         metadata["duration_ms"] = int((time.perf_counter() - start) * 1000)
@@ -123,6 +128,7 @@ async def run_sentiment(
     tickers: list[str],
     config: StrategyConfig,
     ticker_news: dict[str, list[str]] | None = None,
+    fmp_context: dict | None = None,
 ) -> tuple[list[SentimentAnalysis], list[dict]]:
     """Run news sentiment analysis for all tickers in parallel.
 
@@ -135,13 +141,25 @@ async def run_sentiment(
         ticker_news: Mapping of ticker -> pre-researched article URLs
             from Perplexity. If None or missing for a ticker, Gemini
             falls back to its own Google Search.
+        fmp_context: Mapping of ticker -> FmpEnrichedStock for company
+            context injection. When present, each ticker's prompt
+            includes company identity, earnings dates, and insider data.
 
     Returns:
         Tuple of (list of successful SentimentAnalysis results,
         list of per-ticker metadata dicts).
     """
+    from pipeline.fmp_context import format_fmp_for_gemini
+
     news_map = ticker_news or {}
-    tasks = [_analyze_ticker(ticker, config, news_urls=news_map.get(ticker)) for ticker in tickers]
+    tasks = []
+    for ticker in tickers:
+        fmp_str: str | None = None
+        if fmp_context and ticker in fmp_context:
+            fmp_str = format_fmp_for_gemini(fmp_context[ticker])
+        tasks.append(
+            _analyze_ticker(ticker, config, news_urls=news_map.get(ticker), fmp_context_str=fmp_str)
+        )
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     sentiments: list[SentimentAnalysis] = []

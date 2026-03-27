@@ -76,6 +76,7 @@ async def get_current_user(authorization: Annotated[str | None, Header()] = None
             signing_key.key,
             algorithms=["ES256"],
             audience="authenticated",
+            leeway=30,  # tolerate up to 30s clock skew
         )
         user_id = payload.get("sub")
         if not user_id:

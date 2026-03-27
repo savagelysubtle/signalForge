@@ -7,6 +7,8 @@ bull/bear/judge debate to produce final trading recommendations.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from pipeline.schemas import (
     ChartAnalysis,
     DebateCase,
@@ -16,9 +18,12 @@ from pipeline.schemas import (
 )
 from utils.hashing import prompt_hash
 
-BULL_PROMPT_VERSION = "v1"
-BEAR_PROMPT_VERSION = "v1"
-JUDGE_PROMPT_VERSION = "v3"
+if TYPE_CHECKING:
+    from services.fmp_service import FmpEnrichedStock
+
+BULL_PROMPT_VERSION = "v2"
+BEAR_PROMPT_VERSION = "v2"
+JUDGE_PROMPT_VERSION = "v4"
 
 # ---------------------------------------------------------------------------
 # System Prompts
@@ -269,6 +274,36 @@ def _format_single_chart(ca: ChartAnalysis) -> str:
     return "\n".join(lines)
 
 
+def _synthesize_timeframes(ticker: str, charts: list[ChartAnalysis]) -> str:
+    """Generate a cross-timeframe synthesis section for GPT.
+
+    Identifies convergence (all timeframes agree) or divergence
+    (timeframes conflict) and highlights the alignment for GPT
+    to factor into its confidence assessment.
+    """
+    biases = {ca.timeframe: ca.overall_bias for ca in charts}
+    all_bullish = all("bullish" in b for b in biases.values())
+    all_bearish = all("bearish" in b for b in biases.values())
+
+    lines = [f"\n#### Multi-Timeframe Synthesis for {ticker}"]
+    lines.append(f"Timeframes analyzed: {', '.join(biases.keys())}")
+    lines.append(f"Bias alignment: {', '.join(f'{tf}={b}' for tf, b in biases.items())}")
+
+    if all_bullish:
+        lines.append("CONVERGENCE: All timeframes bullish — HIGH confidence signal.")
+    elif all_bearish:
+        lines.append("CONVERGENCE: All timeframes bearish — HIGH confidence signal.")
+    else:
+        lines.append("DIVERGENCE: Timeframes show mixed signals — assess carefully.")
+        for tf, bias in biases.items():
+            if "bullish" in bias and any("bearish" in b for b in biases.values()):
+                lines.append(f"  - {tf} is {bias} while other timeframes are bearish")
+            elif "bearish" in bias and any("bullish" in b for b in biases.values()):
+                lines.append(f"  - {tf} is {bias} while other timeframes are bullish")
+
+    return "\n".join(lines)
+
+
 def _format_chart_data(charts: list[ChartAnalysis], tickers: list[str]) -> str:
     """Format Claude chart analysis results for GPT prompts.
 
@@ -292,6 +327,9 @@ def _format_chart_data(charts: list[ChartAnalysis], tickers: list[str]) -> str:
         parts.append(f"\n### {ticker}")
         for ca in ticker_charts:
             parts.append(_format_single_chart(ca))
+
+        if len(ticker_charts) > 1:
+            parts.append(_synthesize_timeframes(ticker, ticker_charts))
 
     return "\n".join(parts)
 
@@ -328,12 +366,26 @@ def _format_sentiment_data(sentiments: list[SentimentAnalysis], tickers: list[st
     return "\n".join(parts)
 
 
+def _format_fmp_data(
+    fmp_context: dict[str, FmpEnrichedStock] | None,
+    tickers: list[str],
+) -> str:
+    """Format structured FMP data for GPT prompts."""
+    if not fmp_context:
+        return "No FMP pre-screening data available."
+
+    from pipeline.fmp_context import format_fmp_for_gpt
+
+    return format_fmp_for_gpt(fmp_context, tickers)
+
+
 def build_bull_prompt(
     tickers: list[str],
     screening: ScreeningResult | None,
     charts: list[ChartAnalysis],
     sentiments: list[SentimentAnalysis],
     config: StrategyConfig,
+    fmp_context: dict[str, FmpEnrichedStock] | None = None,
 ) -> str:
     """Build the user prompt for the bull analyst.
 
@@ -343,6 +395,7 @@ def build_bull_prompt(
         charts: List of ChartAnalysis from Claude (may be empty).
         sentiments: List of SentimentAnalysis from Gemini (may be empty).
         config: Strategy configuration with trading style.
+        fmp_context: FMP enriched stock data keyed by ticker (may be None).
 
     Returns:
         Formatted user prompt string.
@@ -357,6 +410,7 @@ def build_bull_prompt(
 
     parts.append(f"\n{_format_data_availability(tickers, screening, charts, sentiments)}")
     parts.append(f"\n## FUNDAMENTALS (Perplexity)\n{_format_screening_data(screening, tickers)}")
+    parts.append(f"\n## QUANTITATIVE DATA (FMP)\n{_format_fmp_data(fmp_context, tickers)}")
     parts.append(f"\n## TECHNICAL ANALYSIS (Claude)\n{_format_chart_data(charts, tickers)}")
     parts.append(f"\n## NEWS SENTIMENT (Gemini)\n{_format_sentiment_data(sentiments, tickers)}")
     parts.append("\nReturn your bull case as JSON matching the schema in your instructions.")
@@ -370,6 +424,7 @@ def build_bear_prompt(
     charts: list[ChartAnalysis],
     sentiments: list[SentimentAnalysis],
     config: StrategyConfig,
+    fmp_context: dict[str, FmpEnrichedStock] | None = None,
 ) -> str:
     """Build the user prompt for the bear analyst.
 
@@ -379,6 +434,7 @@ def build_bear_prompt(
         charts: List of ChartAnalysis from Claude (may be empty).
         sentiments: List of SentimentAnalysis from Gemini (may be empty).
         config: Strategy configuration with trading style.
+        fmp_context: FMP enriched stock data keyed by ticker (may be None).
 
     Returns:
         Formatted user prompt string.
@@ -393,6 +449,7 @@ def build_bear_prompt(
 
     parts.append(f"\n{_format_data_availability(tickers, screening, charts, sentiments)}")
     parts.append(f"\n## FUNDAMENTALS (Perplexity)\n{_format_screening_data(screening, tickers)}")
+    parts.append(f"\n## QUANTITATIVE DATA (FMP)\n{_format_fmp_data(fmp_context, tickers)}")
     parts.append(f"\n## TECHNICAL ANALYSIS (Claude)\n{_format_chart_data(charts, tickers)}")
     parts.append(f"\n## NEWS SENTIMENT (Gemini)\n{_format_sentiment_data(sentiments, tickers)}")
     parts.append("\nReturn your bear case as JSON matching the schema in your instructions.")
@@ -409,6 +466,7 @@ def build_judge_prompt(
     bear_cases: list[DebateCase] | None,
     reflection_context: str,
     config: StrategyConfig,
+    fmp_context: dict[str, FmpEnrichedStock] | None = None,
 ) -> str:
     """Build the user prompt for the judge/portfolio manager.
 
@@ -421,6 +479,7 @@ def build_judge_prompt(
         bear_cases: Bear debate cases from GPT (or None if debate disabled/failed).
         reflection_context: Historical performance injection prompt (may be empty).
         config: Strategy configuration with risk params.
+        fmp_context: FMP enriched stock data keyed by ticker (may be None).
 
     Returns:
         Formatted user prompt string.
@@ -442,6 +501,7 @@ def build_judge_prompt(
 
     parts.append(f"\n{_format_data_availability(tickers, screening, charts, sentiments)}")
     parts.append(f"\n## FUNDAMENTALS (Perplexity)\n{_format_screening_data(screening, tickers)}")
+    parts.append(f"\n## QUANTITATIVE DATA (FMP)\n{_format_fmp_data(fmp_context, tickers)}")
     parts.append(f"\n## TECHNICAL ANALYSIS (Claude)\n{_format_chart_data(charts, tickers)}")
     parts.append(f"\n## NEWS SENTIMENT (Gemini)\n{_format_sentiment_data(sentiments, tickers)}")
 

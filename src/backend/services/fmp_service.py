@@ -826,22 +826,22 @@ async def fetch_bulk_price_targets() -> dict[str, FmpPriceTargetConsensus]:
 # ---------------------------------------------------------------------------
 
 
-def _apply_ratio_filters(
+def _apply_post_filters(
     stock: FmpEnrichedStock,
     config: FmpScreenerConfig,
 ) -> bool:
-    """Check whether a stock passes the ratio-based post-filters.
+    """Check whether a stock passes all post-filters (ratios + signals).
 
     Applies all configured threshold checks. A filter is only enforced
     when both the config threshold and the stock's data are non-None,
     so missing data never causes a rejection.
 
     Args:
-        stock: Enriched stock with ratio data.
-        config: Screener config containing ratio filter thresholds.
+        stock: Enriched stock with ratio and signal data.
+        config: Screener config containing filter thresholds.
 
     Returns:
-        ``True`` if the stock passes all applicable filters.
+        True if the stock passes all applicable filters.
     """
     checks: list[bool] = [
         not (
@@ -1520,7 +1520,7 @@ async def screen_and_enrich(
 
     # Step 5: apply hard post-filters
     before_filter = len(enriched)
-    enriched = [s for s in enriched if _apply_ratio_filters(s, config)]
+    enriched = [s for s in enriched if _apply_post_filters(s, config)]
     if len(enriched) < before_filter:
         logger.info(
             "Post-filters: %d → %d stocks after filtering",
@@ -1568,6 +1568,14 @@ async def screen_stocks_from_params(
     beta_min: float | None = None,
     beta_max: float | None = None,
     limit: int = 50,
+    pe_max: float | None = None,
+    roe_min: float | None = None,
+    debt_equity_max: float | None = None,
+    piotroski_min: int | None = None,
+    require_insider_buying: bool = False,
+    rvol_min: float | None = None,
+    earnings_within_days: int | None = None,
+    enrich_with_ratios: bool = False,
 ) -> list[dict[str, Any]]:
     """Screen stocks or crypto from raw parameters (used by Perplexity tool calls).
 
@@ -1590,6 +1598,14 @@ async def screen_stocks_from_params(
         beta_min: Minimum beta. Stocks only.
         beta_max: Maximum beta. Stocks only.
         limit: Maximum results to return.
+        pe_max: Maximum P/E ratio filter.
+        roe_min: Minimum ROE filter.
+        debt_equity_max: Maximum debt/equity ratio filter.
+        piotroski_min: Minimum Piotroski F-Score filter.
+        require_insider_buying: If ``True``, only stocks with net insider buys.
+        rvol_min: Minimum relative volume filter.
+        earnings_within_days: Only stocks with earnings within N days.
+        enrich_with_ratios: If ``True``, run full signal enrichment pipeline.
 
     Returns:
         List of dicts with asset data (serialisable for tool-call output).
@@ -1609,10 +1625,20 @@ async def screen_stocks_from_params(
         beta_min=beta_min,
         beta_max=beta_max,
         limit=limit,
-        enrich_with_ratios=False,
+        pe_max=pe_max,
+        roe_min=roe_min,
+        debt_equity_max=debt_equity_max,
+        piotroski_min=piotroski_min,
+        require_insider_buying=require_insider_buying,
+        rvol_min=rvol_min,
+        earnings_within_days=earnings_within_days,
+        enrich_with_ratios=enrich_with_ratios,
     )
     if is_crypto:
         results = await screen_crypto(config)
+        return [r.model_dump() for r in results]
+    if enrich_with_ratios:
+        results = await screen_and_enrich(config)
         return [r.model_dump() for r in results]
     stock_results = await screen_stocks(config)
     return [r.model_dump() for r in stock_results]

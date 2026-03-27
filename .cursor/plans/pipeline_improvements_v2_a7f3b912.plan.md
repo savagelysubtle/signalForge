@@ -13,59 +13,59 @@ todos:
     content:
       Thread FMP candidates through orchestrator to Gemini, Claude, and GPT
       prompts
-    status: pending
+    status: completed
   - id: gemini-fmp-context
     content:
       Inject company name, sector, earnings date, and insider data into Gemini
       prompts
-    status: pending
+    status: completed
   - id: claude-fmp-context
     content:
       Inject earnings date, insider activity, and analyst targets into Claude
       chart prompts
-    status: pending
+    status: completed
   - id: gpt-fmp-context
     content:
       Add structured FMP data section to bull/bear/judge prompts (not just
       Perplexity echo)
-    status: pending
+    status: completed
   - id: multi-tf-synthesis
     content:
       Add multi-timeframe synthesis step after Claude completes all timeframes
       per ticker
-    status: pending
+    status: completed
   - id: stage-timeouts
     content:
       Wrap each orchestrator stage in asyncio.wait_for with configurable
       timeouts
-    status: pending
+    status: completed
   - id: retry-tracking
     content:
       Propagate actual retry count from validation decorator to stage metadata
-    status: pending
+    status: completed
   - id: annotated-chart-errors
     content: Track annotated chart failures in PipelineResult.stage_errors
-    status: pending
+    status: completed
   - id: gpt-semaphore
     content: Add concurrency semaphore to GPT stage
-    status: pending
+    status: completed
   - id: fmp-tool-expansion
     content:
       Expand FMP tool definition to expose new screening fields to Perplexity
-    status: pending
+    status: completed
   - id: strategy-crud
     content: Add update_strategy and delete_strategy to service + API routes
-    status: pending
+    status: completed
   - id: user-prompt-persistence
     content: Persist user_prompt in pipeline_runs DB row for prompt-mode runs
-    status: pending
+    status: completed
   - id: prompt-version-bumps
     content: Bump all prompt versions after content changes
-    status: pending
+    status: completed
   - id: frontend-sync
     content:
       Sync any new StrategyConfig fields or schema changes to TypeScript types
-    status: pending
+    status: completed
 isProject: true
 ---
 
