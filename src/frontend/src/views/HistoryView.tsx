@@ -75,7 +75,7 @@ export function HistoryView() {
                       )}
                     </div>
                   ) : (
-                    <span className="text-text-muted text-xs">\u2014</span>
+                    <span className="text-text-muted text-xs">{'\u2014'}</span>
                   )}
                 </td>
                 <td className="px-4 py-3 capitalize text-text-secondary">{run.mode}</td>

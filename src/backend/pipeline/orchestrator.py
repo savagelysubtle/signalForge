@@ -42,6 +42,7 @@ from services.fmp_service import FmpEnrichedStock, screen_and_enrich
 from services.keyring_service import get_api_key
 from services.reflection import load_reflection_context
 from services.strategy import get_strategy
+from utils.ticker import normalize_ticker, normalize_tickers
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,9 @@ async def run_pipeline(
     """
     run_id = uuid.uuid4().hex
     start = time.perf_counter()
+
+    if manual_tickers:
+        manual_tickers = normalize_tickers(manual_tickers)
 
     mode: Literal["discovery", "analysis", "combined", "prompt"] = _determine_mode(
         strategy_id, manual_tickers, user_prompt
@@ -214,6 +218,8 @@ async def run_pipeline(
         logger.exception("Pipeline Perplexity stage failed")
 
     if screening:
+        for td in screening.tickers:
+            td.ticker = normalize_ticker(td.ticker)
         result.screening = screening
     elif not result.stage_errors:
         result.stage_errors.append(

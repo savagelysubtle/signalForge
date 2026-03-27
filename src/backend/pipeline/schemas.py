@@ -9,7 +9,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from utils.ticker import normalize_ticker
 
 # ---------------------------------------------------------------------------
 # Perplexity Stage (Stage 1)
@@ -21,6 +23,12 @@ class FundamentalData(BaseModel):
 
     ticker: str
     company_name: str = ""
+
+    @field_validator("ticker", mode="before")
+    @classmethod
+    def _clean_ticker(cls, v: str) -> str:
+        return normalize_ticker(v) if isinstance(v, str) else v
+
     asset_type: Literal["stock", "etf", "crypto"] = "stock"
     sector: str = ""
     market_cap: str | None = None
@@ -80,6 +88,12 @@ class ChartAnalysis(BaseModel):
 
     ticker: str
     timeframe: str
+
+    @field_validator("ticker", mode="before")
+    @classmethod
+    def _clean_ticker(cls, v: str) -> str:
+        return normalize_ticker(v) if isinstance(v, str) else v
+
     current_price: float | None = None
     trend_direction: Literal["bullish", "bearish", "neutral", "transitioning"]
     trend_strength: Literal["strong", "moderate", "weak"]
@@ -114,6 +128,12 @@ class SentimentAnalysis(BaseModel):
 
     ticker: str
     sentiment_score: float = Field(ge=-1.0, le=1.0)
+
+    @field_validator("ticker", mode="before")
+    @classmethod
+    def _clean_ticker(cls, v: str) -> str:
+        return normalize_ticker(v) if isinstance(v, str) else v
+
     sentiment_label: Literal[
         "strongly_bearish", "bearish", "neutral", "bullish", "strongly_bullish"
     ]
@@ -133,6 +153,12 @@ class DebateCase(BaseModel):
 
     ticker: str
     stance: Literal["bull", "bear"]
+
+    @field_validator("ticker", mode="before")
+    @classmethod
+    def _clean_ticker(cls, v: str) -> str:
+        return normalize_ticker(v) if isinstance(v, str) else v
+
     key_arguments: list[str] = Field(default_factory=list)
     strongest_signal: str = ""
     weakest_counter: str = ""
@@ -144,6 +170,12 @@ class Recommendation(BaseModel):
 
     ticker: str
     action: Literal["BUY", "SELL", "HOLD"]
+
+    @field_validator("ticker", mode="before")
+    @classmethod
+    def _clean_ticker(cls, v: str) -> str:
+        return normalize_ticker(v) if isinstance(v, str) else v
+
     confidence: float = Field(ge=0.0, le=1.0)
     entry_price: float | None = None
     stop_loss: float | None = None
