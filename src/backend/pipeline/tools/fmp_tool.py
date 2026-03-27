@@ -106,19 +106,6 @@ FMP_TOOL_DEFINITION: dict[str, Any] = {
             },
             "require_insider_buying": {
                 "type": "boolean",
-<<<<<<< HEAD
-                "description": "Only include stocks with net insider buying. Stocks only.",
-            },
-            "rvol_min": {
-                "type": "number",
-                "description": "Minimum relative volume (volume/avgVolume). Stocks only.",
-            },
-            "earnings_within_days": {
-                "type": "integer",
-                "description": (
-                    "Only include stocks reporting earnings within this many days. Stocks only."
-                ),
-=======
                 "description": "Only include stocks with net insider buying activity. Stocks only.",
             },
             "rvol_min": {
@@ -128,7 +115,6 @@ FMP_TOOL_DEFINITION: dict[str, Any] = {
             "earnings_within_days": {
                 "type": "integer",
                 "description": "Only include stocks with earnings within this many days. Stocks only.",
->>>>>>> feature/carbon-lime-theme
             },
         },
     },

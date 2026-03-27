@@ -92,11 +92,7 @@ def format_fmp_for_gpt(
     quality metrics, and earnings data.
 
     Args:
-<<<<<<< HEAD
         fmp_context: Map of ticker symbol → enriched stock.
-=======
-        fmp_context: Map of ticker symbol -> enriched stock.
->>>>>>> feature/carbon-lime-theme
         tickers: Ordered list of tickers to format.
 
     Returns:
