@@ -5,6 +5,13 @@ import type {
   StrategyConfig,
   ApiKeyStatus,
   ScreenerOverrides,
+  DecisionCreate,
+  DecisionResponse,
+  OutcomeCreate,
+  OutcomeResponse,
+  ReflectionResponse,
+  PerformanceOverview,
+  RecommendationWithStatus,
 } from "../types";
 
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8420";
@@ -77,6 +84,47 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+
+  // Decisions
+  createDecision: (recommendationId: string, body: DecisionCreate) =>
+    request<DecisionResponse>(`/api/decisions/recommendations/${recommendationId}/decision`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  listDecisions: (limit = 50, offset = 0, filter?: string) => {
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+    if (filter) params.set("decision_filter", filter);
+    return request<DecisionResponse[]>(`/api/decisions?${params}`);
+  },
+  getDecision: (id: string) => request<DecisionResponse>(`/api/decisions/${id}`),
+  deleteDecision: (id: string) =>
+    request<void>(`/api/decisions/${id}`, { method: "DELETE" }),
+
+  // Outcomes
+  createOutcome: (decisionId: string, body: OutcomeCreate) =>
+    request<OutcomeResponse>(`/api/outcomes/decisions/${decisionId}/outcome`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  updateOutcome: (outcomeId: string, body: OutcomeCreate) =>
+    request<OutcomeResponse>(`/api/outcomes/${outcomeId}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  listOutcomes: (limit = 50, offset = 0) =>
+    request<OutcomeResponse[]>(`/api/outcomes?limit=${limit}&offset=${offset}`),
+
+  // Recommendations (trade journal)
+  listRecommendations: (limit = 50, offset = 0) =>
+    request<RecommendationWithStatus[]>(`/api/recommendations?limit=${limit}&offset=${offset}`),
+  getRecommendationStatus: (id: string) =>
+    request<RecommendationWithStatus>(`/api/recommendations/${id}`),
+
+  // Insights
+  getPerformanceOverview: () => request<PerformanceOverview>("/api/insights/overview"),
+  triggerReflection: () =>
+    request<ReflectionResponse>("/api/insights/reflect", { method: "POST" }),
+  getLatestReflection: () => request<ReflectionResponse>("/api/insights/reflections/latest"),
 
   // Settings
   getApiKeyStatus: () =>

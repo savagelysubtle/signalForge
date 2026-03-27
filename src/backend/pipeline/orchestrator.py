@@ -366,7 +366,7 @@ async def run_pipeline(
     logger.info("Stage 4 GPT: ticker_symbols=%s", ticker_symbols)
     if ticker_symbols:
         try:
-            reflection_context = await load_reflection_context()
+            reflection_context = await load_reflection_context(user_id)
             recommendations, gpt_metadata_list = await asyncio.wait_for(
                 run_debate(
                     ticker_symbols,
