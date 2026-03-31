@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Play, Loader2, XCircle,
   Search, Crosshair, Layers, MessageSquare,
-  SlidersHorizontal, Clock, Sparkles,
+  SlidersHorizontal, Clock, Sparkles, Star,
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import clsx from 'clsx';
@@ -14,6 +14,34 @@ import type { RunMode } from '../../lib/classifyInput';
 import type { ScreenerOverrides } from '../../types';
 import logoIcon from '../../assets/signalforge-logo-icon.svg';
 import { PipelineProgressBar } from './PipelineProgressBar';
+
+const STRATEGY_TYPE_LABELS: Record<string, string> = {
+  intraday: 'Intraday', crypto_intraday: 'Intraday',
+  swing: 'Swing', crypto_swing: 'Crypto',
+  value: 'Value', position: 'Position',
+  event: 'Event', mean_reversion: 'Mean Rev',
+};
+
+const STRATEGY_TYPE_COLORS: Record<string, string> = {
+  Intraday: 'text-accent-alert bg-accent-alert/12 border-accent-alert/30',
+  Swing: 'text-accent-signal bg-accent-signal/12 border-accent-signal/30',
+  Position: 'text-accent-electric bg-accent-electric/12 border-accent-electric/30',
+  Event: 'text-accent-profit bg-accent-profit/12 border-accent-profit/30',
+  'Mean Rev': 'text-accent-alert bg-accent-alert/12 border-accent-alert/30',
+  Value: 'text-accent-electric bg-accent-electric/12 border-accent-electric/30',
+  Crypto: 'text-accent-profit bg-accent-profit/12 border-accent-profit/30',
+};
+
+function getTypeLabel(strategyType?: string, tradingStyle?: string): string {
+  if (strategyType && STRATEGY_TYPE_LABELS[strategyType]) return STRATEGY_TYPE_LABELS[strategyType];
+  if (!tradingStyle) return 'Swing';
+  const lower = tradingStyle.toLowerCase();
+  if (lower.includes('intraday') || lower.includes('scalp')) return 'Intraday';
+  if (lower.includes('position')) return 'Position';
+  if (lower.includes('event')) return 'Event';
+  if (lower.includes('mean') || lower.includes('reversion')) return 'Mean Rev';
+  return 'Swing';
+}
 
 const COUNTRY_OPTIONS = [
   { value: '', label: 'Any Country' },
@@ -100,6 +128,28 @@ export function SearchScreen() {
   const allStrategies = [...templates, ...strategies].filter(
     (s, i, arr) => arr.findIndex((t) => t.id === s.id) === i,
   );
+
+  const GROUP_ORDER = ['Intraday', 'Swing', 'Mean Rev', 'Event', 'Value', 'Position', 'Crypto'] as const;
+
+  const groupedStrategies = useMemo(() => {
+    const groups = new Map<string, typeof allStrategies>();
+    for (const s of allStrategies) {
+      const label = getTypeLabel(s.strategy_type, s.trading_style);
+      const list = groups.get(label) ?? [];
+      list.push(s);
+      groups.set(label, list);
+    }
+    for (const [, list] of groups) {
+      list.sort((a, b) => {
+        if (a.recommended && !b.recommended) return -1;
+        if (!a.recommended && b.recommended) return 1;
+        return a.name.localeCompare(b.name);
+      });
+    }
+    return GROUP_ORDER
+      .filter((g) => groups.has(g))
+      .map((g) => ({ label: g, items: groups.get(g)! }));
+  }, [allStrategies]);
 
   const { kind: inputKind, tickers: parsedTickers } = useMemo(
     () => classifyInput(inputText),
@@ -298,7 +348,7 @@ export function SearchScreen() {
           )}
         </motion.div>
 
-        {/* Strategy cards */}
+        {/* Strategy cards grouped by type */}
         <motion.div
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
@@ -308,53 +358,64 @@ export function SearchScreen() {
           <h2 className="text-[11px] font-display text-text-secondary uppercase tracking-wider mb-2">
             Strategy
           </h2>
-          <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
-            {/* No strategy card */}
-            <button
-              onClick={() => setSelectedStrategy('')}
-              disabled={isRunning}
-              className={clsx(
-                "text-left rounded-lg p-3 border transition-all duration-200",
-                !selectedStrategy
-                  ? "bg-bg-concrete border-accent-signal/40 ring-1 ring-accent-signal/20"
-                  : "bg-bg-concrete border-border-gutter hover:border-accent-signal"
-              )}
-            >
-              <div className="font-display font-bold text-xs text-text-primary mb-0.5">No Strategy</div>
-              <p className="text-[11px] text-text-muted font-body line-clamp-2">
-                Analyze tickers directly or use a prompt
-              </p>
-            </button>
 
-            {allStrategies.map((strategy) => (
-              <button
-                key={strategy.id}
-                onClick={() => setSelectedStrategy(strategy.id)}
-                disabled={isRunning}
-                className={clsx(
-                  "text-left rounded-lg p-3 border transition-all duration-200",
-                  selectedStrategy === strategy.id
-                    ? "bg-bg-concrete border-accent-signal/40 ring-1 ring-accent-signal/20"
-                    : "bg-bg-concrete border-border-gutter hover:border-accent-signal",
-                  isFirstRun && !selectedStrategy && "animate-pulse-border"
-                )}
-              >
-                <div className="flex items-center gap-1.5 mb-0.5">
-                  <span className="font-display font-bold text-xs text-text-primary truncate">
-                    {strategy.name}
-                  </span>
-                  {strategy.is_template && (
-                    <span className="text-[9px] font-display text-text-muted bg-bg-steel px-1.5 py-0.5 rounded shrink-0">
-                      TPL
-                    </span>
-                  )}
-                </div>
-                <p className="text-[11px] text-text-muted font-body line-clamp-1">
-                  {strategy.description}
-                </p>
-              </button>
-            ))}
-          </div>
+          {/* No strategy card */}
+          <button
+            onClick={() => setSelectedStrategy('')}
+            disabled={isRunning}
+            className={clsx(
+              "text-left rounded-lg p-3 border transition-all duration-200 w-full mb-3",
+              !selectedStrategy
+                ? "bg-bg-concrete border-accent-signal/40 ring-1 ring-accent-signal/20"
+                : "bg-bg-concrete border-border-gutter hover:border-accent-signal"
+            )}
+          >
+            <div className="font-display font-bold text-xs text-text-primary mb-0.5">No Strategy</div>
+            <p className="text-[11px] text-text-muted font-body line-clamp-2">
+              Analyze tickers directly or use a prompt
+            </p>
+          </button>
+
+          {groupedStrategies.map(({ label: groupLabel, items }) => (
+            <div key={groupLabel} className="mb-3">
+              <div className="flex items-center gap-2 mb-1.5">
+                <span className={`px-1.5 py-0.5 rounded text-[9px] font-display font-bold uppercase tracking-wider border ${STRATEGY_TYPE_COLORS[groupLabel] ?? ''}`}>
+                  {groupLabel}
+                </span>
+                <span className="text-[10px] text-text-muted font-body">{items.length}</span>
+              </div>
+              <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
+                {items.map((strategy) => (
+                  <button
+                    key={strategy.id}
+                    onClick={() => setSelectedStrategy(strategy.id)}
+                    disabled={isRunning}
+                    className={clsx(
+                      "text-left rounded-lg p-3 border transition-all duration-200",
+                      selectedStrategy === strategy.id
+                        ? "bg-bg-concrete border-accent-signal/40 ring-1 ring-accent-signal/20"
+                        : strategy.recommended
+                          ? "bg-bg-concrete border-accent-alert/30 hover:border-accent-alert/50"
+                          : "bg-bg-concrete border-border-gutter hover:border-accent-signal",
+                      isFirstRun && !selectedStrategy && "animate-pulse-border"
+                    )}
+                  >
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      <span className="font-display font-bold text-xs text-text-primary truncate">
+                        {strategy.name}
+                      </span>
+                      {strategy.recommended && (
+                        <Star className="w-3 h-3 text-accent-alert fill-accent-alert shrink-0" />
+                      )}
+                    </div>
+                    <p className="text-[11px] text-text-muted font-body line-clamp-1">
+                      {strategy.description}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
         </motion.div>
 
         {/* Recent runs quick-access (shown when history exists) */}
