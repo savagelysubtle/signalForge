@@ -110,6 +110,7 @@ async def _analyze_ticker(
     timeframe_override: str | None = None,
     indicators_override: list[str] | None = None,
     fmp_context_str: str | None = None,
+    regime_context: str = "",
 ) -> tuple[ChartAnalysis | None, dict]:
     """Run chart analysis for a single ticker and timeframe.
 
@@ -127,6 +128,7 @@ async def _analyze_ticker(
         indicators_override: If set, use these indicators instead of
             the strategy's ``chart_indicators`` (for short-TF analysis).
         fmp_context_str: Pre-formatted FMP fundamental context, or None.
+        regime_context: Pre-formatted market regime header, or empty.
 
     Returns:
         Tuple of (validated ChartAnalysis or None, metadata dict).
@@ -140,6 +142,7 @@ async def _analyze_ticker(
         timeframe_override=timeframe_override,
         indicators_override=effective_indicators,
         fmp_context=fmp_context_str,
+        regime_context=regime_context,
     )
     metadata: dict = {
         "stage": "claude",
@@ -206,6 +209,7 @@ async def run_chart_analysis(
     run_id: str,
     user_id: str = "",
     fmp_context: dict | None = None,
+    regime_context: str = "",
 ) -> tuple[list[ChartAnalysis], list[dict]]:
     """Run chart analysis for all tickers in parallel.
 
@@ -221,6 +225,7 @@ async def run_chart_analysis(
         user_id: User UUID for storage path isolation.
         fmp_context: Mapping of ticker -> FmpEnrichedStock for
             fundamental context injection into chart prompts.
+        regime_context: Pre-formatted market regime header, or empty.
 
     Returns:
         Tuple of (list of successful ChartAnalysis results,
@@ -238,7 +243,15 @@ async def run_chart_analysis(
         if fmp_context and ticker in fmp_context:
             fmp_str = format_fmp_for_claude(fmp_context[ticker])
         tasks.append(
-            _analyze_ticker(ticker, config, sentiment, run_id, user_id, fmp_context_str=fmp_str)
+            _analyze_ticker(
+                ticker,
+                config,
+                sentiment,
+                run_id,
+                user_id,
+                fmp_context_str=fmp_str,
+                regime_context=regime_context,
+            )
         )
         task_tickers.append(ticker)
         for extra_tf in config.additional_timeframes:
@@ -252,6 +265,7 @@ async def run_chart_analysis(
                         user_id,
                         timeframe_override=extra_tf,
                         fmp_context_str=fmp_str,
+                        regime_context=regime_context,
                     )
                 )
                 task_tickers.append(ticker)
@@ -267,6 +281,7 @@ async def run_chart_analysis(
                         timeframe_override=short_tf,
                         indicators_override=config.short_tf_indicators,
                         fmp_context_str=fmp_str,
+                        regime_context=regime_context,
                     )
                 )
                 task_tickers.append(ticker)

@@ -26,12 +26,15 @@ from pipeline.prompts.gemini_sentiment import get_prompt_hash as gemini_hash
 from pipeline.prompts.gpt_debate import get_bear_hash, get_bull_hash, get_judge_hash
 from pipeline.prompts.perplexity_analysis import get_prompt_hash as analysis_hash
 from pipeline.prompts.perplexity_discovery import get_prompt_hash as discovery_hash
+from pipeline.prompts.regime_classifier import format_regime_header
+from pipeline.prompts.regime_classifier import get_prompt_hash as regime_hash
 from pipeline.schemas import (
     ChartAnalysis,
     ChartError,
     FmpScreenerConfig,
     PipelineResult,
     Recommendation,
+    RegimeOutput,
     ScreenerOverrides,
     StrategyConfig,
 )
@@ -39,6 +42,8 @@ from pipeline.stages.claude import run_chart_analysis
 from pipeline.stages.gemini import run_sentiment
 from pipeline.stages.gpt import run_debate
 from pipeline.stages.perplexity import run_analysis, run_discovery, run_prompted_discovery
+from pipeline.stages.regime import classify_regime
+from pipeline.stages.risk_validator import validate_risks
 from services.chart_image import fetch_annotated_chart
 from services.fmp_service import FmpEnrichedStock, screen_and_enrich
 from services.keyring_service import get_api_key
@@ -60,6 +65,7 @@ STAGE_TIMEOUTS: dict[str, float] = {
 
 async def run_pipeline(
     *,
+    run_id: str | None = None,
     strategy_id: str | None = None,
     manual_tickers: list[str] | None = None,
     user_prompt: str | None = None,
@@ -76,6 +82,9 @@ async def run_pipeline(
     - user_prompt (with or without strategy) → prompt mode
 
     Args:
+        run_id: Optional pre-generated run ID. If omitted, a new UUID is created.
+            Provide this when the caller needs to return the ID to a client before
+            the pipeline starts (fire-and-forget pattern).
         strategy_id: Optional strategy UUID for discovery screening.
         manual_tickers: Optional list of ticker symbols.
         user_prompt: Optional free-form prompt for Perplexity screening.
@@ -84,7 +93,7 @@ async def run_pipeline(
     Returns:
         Completed PipelineResult with screening and sentiment data.
     """
-    run_id = uuid.uuid4().hex
+    run_id = run_id or uuid.uuid4().hex
     start = time.perf_counter()
 
     if manual_tickers:
@@ -203,6 +212,28 @@ async def run_pipeline(
     if fmp_candidates:
         fmp_map = {s.symbol: s for s in fmp_candidates}
 
+    # Stage 0.5: Regime classification (Perplexity web search)
+    regime: RegimeOutput | None = None
+    try:
+        regime, regime_metadata = await asyncio.wait_for(
+            classify_regime(run_id),
+            timeout=STAGE_TIMEOUTS.get("regime", 30),
+        )
+        if regime_metadata:
+            await _save_stage_output(run_id, regime_metadata)
+    except TimeoutError:
+        result.stage_errors.append(
+            {"stage": "regime", "error": "Stage timed out", "type": "TimeoutError"}
+        )
+        logger.error("Regime classifier timed out")
+    except Exception as exc:
+        result.stage_errors.append(
+            {"stage": "regime", "error": str(exc), "type": type(exc).__name__}
+        )
+        logger.warning("Regime classifier failed, continuing without: %s", exc)
+
+    regime_context = format_regime_header(regime) if regime else ""
+
     # Stage 1: Perplexity (screening/research)
     screening = None
     stage_metadata: dict = {}
@@ -288,6 +319,10 @@ async def run_pipeline(
             for t in screening.tickers:
                 ticker_news[t.ticker] = screening.citations[:3]
 
+        ticker_highlights: dict[str, list[str]] = {
+            t.ticker: t.key_highlights for t in screening.tickers if t.key_highlights
+        }
+
         try:
             sentiments, gemini_metadata_list = await asyncio.wait_for(
                 run_sentiment(
@@ -295,6 +330,8 @@ async def run_pipeline(
                     effective_config,
                     ticker_news=ticker_news or None,
                     fmp_context=fmp_map or None,
+                    ticker_highlights=ticker_highlights or None,
+                    regime_context=regime_context,
                 ),
                 timeout=STAGE_TIMEOUTS["gemini"],
             )
@@ -328,6 +365,7 @@ async def run_pipeline(
                     run_id,
                     user_id,
                     fmp_context=fmp_map or None,
+                    regime_context=regime_context,
                 ),
                 timeout=STAGE_TIMEOUTS["claude"],
             )
@@ -377,6 +415,7 @@ async def run_pipeline(
                     reflection_context,
                     run_id,
                     fmp_context=fmp_map or None,
+                    regime_context=regime_context,
                 ),
                 timeout=STAGE_TIMEOUTS["gpt"],
             )
@@ -400,6 +439,16 @@ async def run_pipeline(
             logger.exception("Pipeline GPT stage failed")
 
     logger.info("Stage 4 GPT complete: %d recommendations", len(result.recommendations))
+
+    # Stage 4.7: Deterministic risk validation
+    if result.recommendations:
+        result.recommendations = validate_risks(
+            result.recommendations,
+            effective_config,
+            result.chart_analyses,
+            fmp_context=fmp_map or None,
+        )
+        logger.info("Stage 4.7 risk validation complete")
 
     # Stage 4.5: Generate annotated charts with key-level overlays
     if result.chart_analyses:
@@ -454,6 +503,7 @@ async def run_pipeline(
     elapsed = time.perf_counter() - start
     result.total_duration_seconds = round(elapsed, 2)
     result.prompt_versions = {
+        "regime": regime_hash(),
         "perplexity": discovery_hash() if mode == "discovery" else analysis_hash(),
         "gemini": gemini_hash(),
         "claude": claude_hash(),
@@ -505,6 +555,8 @@ async def _save_stage_output(run_id: str, metadata: dict) -> None:
     }
     if metadata.get("error"):
         row["parsed_output"] = metadata["error"]
+    elif metadata.get("raw_response"):
+        row["parsed_output"] = metadata["raw_response"]
     await client.table("stage_outputs").insert(row).execute()
 
 

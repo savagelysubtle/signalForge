@@ -7,10 +7,12 @@ Claude so that chart analysis is informed by news context.
 
 from __future__ import annotations
 
+from datetime import date
+
 from pipeline.schemas import StrategyConfig
 from utils.hashing import prompt_hash
 
-PROMPT_VERSION = "v3"
+PROMPT_VERSION = "v5"
 
 SENTIMENT_SYSTEM_PROMPT = """\
 You are a financial news analyst specializing in sentiment analysis.
@@ -21,9 +23,10 @@ Google Search grounding, then produce a structured sentiment assessment.
 Workflow:
 1. Use Google Search to access and read EACH of the provided article URLs.
 2. Extract sentiment-relevant information from each article.
-3. After analyzing the provided articles, do ONE additional Google Search for
-   any breaking news about this ticker that may not be covered by the provided
-   URLs (e.g. after-hours developments, analyst upgrades/downgrades).
+3. After reading the provided URLs, perform ONE additional targeted search.
+   A suggested search query is provided in the user prompt. Prioritize
+   discovering: regulatory decisions, earnings surprises, insider activity,
+   analyst upgrades/downgrades, and breaking developments not covered above.
 4. Synthesize all findings into a single sentiment assessment.
 
 If no article URLs are provided, fall back to searching for recent news about
@@ -42,11 +45,17 @@ Return a JSON object with this exact structure:
       "source": "<publication or source name>",
       "url": "<article URL if available, otherwise empty string>",
       "impact": "positive" | "negative" | "neutral",
-      "significance": "high" | "medium" | "low"
+      "significance": "high" | "medium" | "low",
+      "published_date": "<YYYY-MM-DD or 'unknown'>",
+      "hours_ago": <integer or null>
     }
   ],
   "news_recency": "<time window searched, e.g. Past 7 days>",
-  "sector_sentiment": "<brief assessment of broader sector/industry sentiment>",
+  "sector_sentiment": {
+    "label": "strongly_bearish" | "bearish" | "neutral" | "bullish" | "strongly_bullish",
+    "score": <float from -1.0 to 1.0>,
+    "key_driver": "<primary driver of sector sentiment>"
+  },
   "summary": "<2-3 sentence synthesis of the news landscape and sentiment drivers>"
 }
 
@@ -61,6 +70,16 @@ You MUST include at least 3 key catalysts. Each catalyst should reference a
 specific article or news event. Include the article URL in the "url" field
 whenever possible. For each catalyst, assess both its directional impact and
 its significance to the stock's near-term price action.
+
+For each catalyst, estimate when it was published. Set "published_date" to the
+article's publication date (YYYY-MM-DD format) and "hours_ago" to your best
+estimate of hours since publication. If the date cannot be determined, use
+"unknown" for published_date and null for hours_ago.
+
+sector_sentiment must be a structured object with a label, a numeric score
+(-1.0 to 1.0), and the key_driver (a single sentence describing the primary
+factor driving sector-level sentiment). This lets downstream models treat
+company-specific and sector sentiment as independent signals.
 """
 
 _RECENCY_MAP = {
@@ -87,6 +106,8 @@ def build_sentiment_prompt(
     config: StrategyConfig,
     news_urls: list[str] | None = None,
     fmp_context: str | None = None,
+    key_highlights: list[str] | None = None,
+    regime_context: str = "",
 ) -> str:
     """Build the user prompt for per-ticker sentiment analysis.
 
@@ -95,18 +116,30 @@ def build_sentiment_prompt(
         config: The active strategy configuration.
         news_urls: Pre-researched article URLs from Perplexity to analyze.
         fmp_context: Pre-formatted FMP company context string, or None.
+        key_highlights: Top highlights from Perplexity screening, used to
+            build a targeted suggested search query for Gemini's additional
+            search step.
+        regime_context: Pre-formatted market regime header block, or empty.
 
     Returns:
         The formatted user prompt string.
     """
     recency = _RECENCY_MAP.get(config.news_recency, "the past 7 days")
     scope = _SCOPE_MAP.get(config.news_scope, _SCOPE_MAP["company"])
+    today = date.today().isoformat()
 
-    parts: list[str] = [
-        f"Analyze the news sentiment for ticker: {ticker}\n",
-        f"Time window: Search for news from {recency}.",
-        f"Scope: {scope}\n",
-    ]
+    parts: list[str] = []
+
+    if regime_context:
+        parts.append(f"{regime_context}\n")
+
+    parts.extend(
+        [
+            f"Analyze the news sentiment for ticker: {ticker}\n",
+            f"Time window: Search for news from {recency}.",
+            f"Scope: {scope}\n",
+        ]
+    )
 
     if fmp_context:
         parts.append(
@@ -123,6 +156,15 @@ def build_sentiment_prompt(
         for i, url in enumerate(news_urls, 1):
             parts.append(f"  {i}. {url}")
         parts.append("")
+
+    keyword = key_highlights[0] if key_highlights else ""
+    bare_ticker = ticker.split(":")[-1] if ":" in ticker else ticker
+    if keyword:
+        parts.append(f'Suggested additional search: "{bare_ticker} {keyword} {today}"\n')
+    else:
+        parts.append(
+            f'Suggested additional search: "{bare_ticker} latest news analyst rating {today}"\n'
+        )
 
     parts.append("Return your analysis as JSON matching the schema in your instructions.")
     return "\n".join(parts)

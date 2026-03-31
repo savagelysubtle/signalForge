@@ -317,7 +317,7 @@ async def ensure_defaults() -> None:
             ),
             constraint_style="loose",
             max_tickers=10,
-            chart_indicators=["RSI", "MACD", "Volume"],
+            chart_indicators=["RSI", "MACD", "Volume", "EMA_50", "EMA_200", "ATR"],
             chart_timeframe="D",
             news_recency="week",
             news_scope="company",

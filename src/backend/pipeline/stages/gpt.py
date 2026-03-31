@@ -161,6 +161,7 @@ async def run_debate(
     reflection_context: str,
     run_id: str,
     fmp_context: dict | None = None,
+    regime_context: str = "",
 ) -> tuple[list[Recommendation], list[dict]]:
     """Run the GPT debate/synthesis stage for all tickers.
 
@@ -177,6 +178,7 @@ async def run_debate(
         reflection_context: Historical performance injection prompt.
         run_id: Pipeline run UUID for metadata tracking.
         fmp_context: FMP enriched stock data keyed by ticker (may be None).
+        regime_context: Pre-formatted market regime header, or empty.
 
     Returns:
         Tuple of (list of Recommendation results,
@@ -207,11 +209,12 @@ async def run_debate(
         reflection_context,
         config,
         fmp_context=fmp_context,
+        regime_context=regime_context,
     )
     all_metadata.append(judge_metadata)
 
     for rec in recommendations:
-        if rec.action in ("BUY", "SELL"):
+        if rec.action in ("BUY", "SHORT"):
             missing = []
             if rec.entry_price is None:
                 missing.append("entry_price")
@@ -326,6 +329,7 @@ async def _run_judge_phase(
     reflection_context: str,
     config: StrategyConfig,
     fmp_context: dict | None = None,
+    regime_context: str = "",
 ) -> tuple[list[Recommendation], dict]:
     """Run the judge to produce final recommendations.
 
@@ -342,6 +346,7 @@ async def _run_judge_phase(
         reflection_context,
         config,
         fmp_context=fmp_context,
+        regime_context=regime_context,
     )
 
     metadata: dict = {

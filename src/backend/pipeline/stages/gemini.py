@@ -84,6 +84,8 @@ async def _analyze_ticker(
     config: StrategyConfig,
     news_urls: list[str] | None = None,
     fmp_context_str: str | None = None,
+    key_highlights: list[str] | None = None,
+    regime_context: str = "",
 ) -> tuple[SentimentAnalysis | None, dict]:
     """Run sentiment analysis for a single ticker.
 
@@ -92,12 +94,19 @@ async def _analyze_ticker(
         config: Strategy configuration with news_recency and news_scope.
         news_urls: Pre-researched article URLs from Perplexity.
         fmp_context_str: Pre-formatted FMP company context, or None.
+        key_highlights: Top highlights from Perplexity for guided search.
+        regime_context: Pre-formatted market regime header, or empty.
 
     Returns:
         Tuple of (validated SentimentAnalysis or None, metadata dict).
     """
     user_prompt = build_sentiment_prompt(
-        ticker, config, news_urls=news_urls, fmp_context=fmp_context_str
+        ticker,
+        config,
+        news_urls=news_urls,
+        fmp_context=fmp_context_str,
+        key_highlights=key_highlights,
+        regime_context=regime_context,
     )
     metadata: dict = {
         "stage": "gemini",
@@ -129,6 +138,8 @@ async def run_sentiment(
     config: StrategyConfig,
     ticker_news: dict[str, list[str]] | None = None,
     fmp_context: dict | None = None,
+    ticker_highlights: dict[str, list[str]] | None = None,
+    regime_context: str = "",
 ) -> tuple[list[SentimentAnalysis], list[dict]]:
     """Run news sentiment analysis for all tickers in parallel.
 
@@ -144,6 +155,10 @@ async def run_sentiment(
         fmp_context: Mapping of ticker -> FmpEnrichedStock for company
             context injection. When present, each ticker's prompt
             includes company identity, earnings dates, and insider data.
+        ticker_highlights: Mapping of ticker -> key_highlights from
+            Perplexity screening. Used to build targeted search queries
+            for Gemini's additional search step.
+        regime_context: Pre-formatted market regime header, or empty.
 
     Returns:
         Tuple of (list of successful SentimentAnalysis results,
@@ -152,13 +167,21 @@ async def run_sentiment(
     from pipeline.fmp_context import format_fmp_for_gemini
 
     news_map = ticker_news or {}
+    highlights_map = ticker_highlights or {}
     tasks = []
     for ticker in tickers:
         fmp_str: str | None = None
         if fmp_context and ticker in fmp_context:
             fmp_str = format_fmp_for_gemini(fmp_context[ticker])
         tasks.append(
-            _analyze_ticker(ticker, config, news_urls=news_map.get(ticker), fmp_context_str=fmp_str)
+            _analyze_ticker(
+                ticker,
+                config,
+                news_urls=news_map.get(ticker),
+                fmp_context_str=fmp_str,
+                key_highlights=highlights_map.get(ticker),
+                regime_context=regime_context,
+            )
         )
     results = await asyncio.gather(*tasks, return_exceptions=True)
 

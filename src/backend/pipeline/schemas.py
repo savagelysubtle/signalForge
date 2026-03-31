@@ -14,6 +14,34 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from utils.ticker import normalize_ticker
 
 # ---------------------------------------------------------------------------
+# Regime Classifier (Stage 0.5)
+# ---------------------------------------------------------------------------
+
+
+class RegimeOutput(BaseModel):
+    """Market regime assessment from Perplexity web search.
+
+    Provides macro context that flows into all downstream stage prompts
+    to influence screening, sentiment weighting, and confidence thresholds.
+    """
+
+    regime_type: Literal[
+        "trending_bull",
+        "trending_bear",
+        "range_bound",
+        "high_volatility",
+        "risk_off",
+        "sector_rotation",
+    ]
+    vix_estimate: Literal["calm", "normal", "elevated", "fear"]
+    breadth_estimate: Literal["strong", "moderate", "weak", "deteriorating"]
+    dominant_sectors: list[str] = Field(default_factory=list)
+    defensive_rotation: bool = False
+    summary: str = ""
+    implications: str = ""
+
+
+# ---------------------------------------------------------------------------
 # Perplexity Stage (Stage 1)
 # ---------------------------------------------------------------------------
 
@@ -114,17 +142,62 @@ class ChartAnalysis(BaseModel):
 
 
 class NewsCatalyst(BaseModel):
-    """A single news catalyst affecting sentiment."""
+    """A single news catalyst affecting sentiment.
+
+    Attributes:
+        headline: News headline or event description.
+        source: Publication or source name.
+        url: Article URL if available.
+        impact: Directional impact on the stock.
+        significance: Significance to near-term price action.
+        published_date: Article publication date (YYYY-MM-DD) or "unknown".
+        hours_ago: Approximate hours since publication, or None if unknown.
+    """
 
     headline: str
     source: str
     url: str = ""
     impact: Literal["positive", "negative", "neutral"]
     significance: Literal["high", "medium", "low"]
+    published_date: str = ""
+    hours_ago: int | None = None
+
+
+class SectorSentiment(BaseModel):
+    """Structured sector/industry sentiment assessment.
+
+    Attributes:
+        label: Categorical sentiment label for the sector.
+        score: Numeric sentiment score from -1.0 (bearish) to 1.0 (bullish).
+        key_driver: Primary driver of sector sentiment.
+    """
+
+    label: Literal["strongly_bearish", "bearish", "neutral", "bullish", "strongly_bullish"] = (
+        "neutral"
+    )
+    score: float = Field(ge=-1.0, le=1.0, default=0.0)
+    key_driver: str = ""
+
+
+_SENTIMENT_BUCKET = Literal[
+    "strongly_bearish",
+    "bearish",
+    "mildly_bearish",
+    "neutral",
+    "mildly_bullish",
+    "bullish",
+    "strongly_bullish",
+]
 
 
 class SentimentAnalysis(BaseModel):
-    """Complete output from Gemini news sentiment analysis."""
+    """Complete output from Gemini news sentiment analysis.
+
+    Attributes:
+        sentiment_bucket: Fine-grained bucket computed from sentiment_score.
+            7 levels vs. the 5 in sentiment_label. Used by GPT for more
+            consistent thresholding.
+    """
 
     ticker: str
     sentiment_score: float = Field(ge=-1.0, le=1.0)
@@ -137,10 +210,39 @@ class SentimentAnalysis(BaseModel):
     sentiment_label: Literal[
         "strongly_bearish", "bearish", "neutral", "bullish", "strongly_bullish"
     ]
+    sentiment_bucket: _SENTIMENT_BUCKET = "neutral"
     key_catalysts: list[NewsCatalyst] = Field(default_factory=list)
     news_recency: str = ""
-    sector_sentiment: str = ""
+    sector_sentiment: SectorSentiment = Field(default_factory=SectorSentiment)
     summary: str = ""
+
+    @field_validator("sector_sentiment", mode="before")
+    @classmethod
+    def _coerce_sector_sentiment(cls, v: str | dict | SectorSentiment) -> SectorSentiment | dict:
+        """Accept a plain string for backward compatibility with old pipeline runs."""
+        if isinstance(v, str):
+            return SectorSentiment(label="neutral", score=0.0, key_driver=v)
+        return v
+
+    @model_validator(mode="after")
+    def _compute_bucket(self) -> SentimentAnalysis:
+        """Derive sentiment_bucket deterministically from sentiment_score."""
+        s = self.sentiment_score
+        if s <= -0.6:
+            self.sentiment_bucket = "strongly_bearish"
+        elif s <= -0.3:
+            self.sentiment_bucket = "bearish"
+        elif s <= -0.1:
+            self.sentiment_bucket = "mildly_bearish"
+        elif s <= 0.1:
+            self.sentiment_bucket = "neutral"
+        elif s <= 0.3:
+            self.sentiment_bucket = "mildly_bullish"
+        elif s <= 0.6:
+            self.sentiment_bucket = "bullish"
+        else:
+            self.sentiment_bucket = "strongly_bullish"
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +272,7 @@ class Recommendation(BaseModel):
 
     id: str = ""
     ticker: str
-    action: Literal["BUY", "SELL", "HOLD"]
+    action: Literal["BUY", "SHORT", "HOLD"]
 
     @field_validator("ticker", mode="before")
     @classmethod
@@ -189,6 +291,8 @@ class Recommendation(BaseModel):
     judge_reasoning: str = ""
     key_factors: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    risk_violations: list[str] = Field(default_factory=list)
+    risk_approved: bool = True
 
 
 class DebateCaseList(BaseModel):
@@ -233,7 +337,7 @@ class PipelineResult(BaseModel):
     total_duration_seconds: float = 0.0
     prompt_versions: dict[str, str] = Field(default_factory=dict)
     chart_indicators: list[str] = Field(
-        default_factory=lambda: ["RSI", "MACD", "Volume", "EMA_50", "EMA_200"]
+        default_factory=lambda: ["RSI", "MACD", "Volume", "EMA_50", "EMA_200", "ATR"]
     )
 
 
@@ -438,7 +542,7 @@ class StrategyConfig(BaseModel):
 
     # Claude Stage
     chart_indicators: list[str] = Field(
-        default_factory=lambda: ["RSI", "MACD", "Volume", "EMA_50", "EMA_200"]
+        default_factory=lambda: ["RSI", "MACD", "Volume", "EMA_50", "EMA_200", "ATR"]
     )
     chart_timeframe: str = "D"
     secondary_timeframe: str = "4H"
@@ -508,6 +612,15 @@ class OutcomeCreate(BaseModel):
     holding_days: int | None = None
     exit_reason: str = ""
     notes: str = ""
+    source: str = "manual"
+    brokerage_order_id: str | None = None
+    commission: float | None = None
+    fees: float | None = None
+    currency: str | None = None
+    gross_pnl: float | None = None
+    net_pnl: float | None = None
+    entry_timestamp: str | None = None
+    exit_timestamp: str | None = None
 
 
 class OutcomeResponse(BaseModel):
@@ -527,6 +640,15 @@ class OutcomeResponse(BaseModel):
     exit_reason: str = ""
     notes: str = ""
     logged_at: str
+    source: str = "manual"
+    brokerage_order_id: str | None = None
+    commission: float | None = None
+    fees: float | None = None
+    currency: str | None = None
+    gross_pnl: float | None = None
+    net_pnl: float | None = None
+    entry_timestamp: str | None = None
+    exit_timestamp: str | None = None
 
 
 class ReflectionResponse(BaseModel):
@@ -570,7 +692,7 @@ class RecommendationWithStatus(BaseModel):
     id: str
     run_id: str
     ticker: str
-    action: Literal["BUY", "SELL", "HOLD"]
+    action: Literal["BUY", "SHORT", "HOLD"]
     confidence: float
     entry_price: float | None = None
     stop_loss: float | None = None
@@ -593,3 +715,6 @@ class RecommendationWithStatus(BaseModel):
     outcome_exit_reason: str = ""
     outcome_notes: str = ""
     outcome_logged_at: str | None = None
+    outcome_source: str = "manual"
+    outcome_commission: float | None = None
+    outcome_net_pnl: float | None = None

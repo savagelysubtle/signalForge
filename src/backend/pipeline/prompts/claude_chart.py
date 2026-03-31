@@ -11,7 +11,7 @@ from __future__ import annotations
 from pipeline.schemas import SentimentAnalysis, StrategyConfig
 from utils.hashing import prompt_hash
 
-PROMPT_VERSION = "v5"
+PROMPT_VERSION = "v7"
 
 CHART_SYSTEM_PROMPT = """\
 You are an expert technical analyst reviewing a TradingView chart screenshot.
@@ -92,6 +92,18 @@ If the chart is unclear, use round-number levels or indicator-derived levels
 (e.g. VWAP, moving average crossover prices). Note all visible indicator
 readings. If chart patterns (head & shoulders, double top/bottom, flags,
 wedges, triangles, etc.) are present, name them.
+
+ATR (Average True Range) — IMPORTANT for downstream stop-loss:
+- Read the current ATR value from the indicator pane. It is a single numeric
+  value (e.g. 1.23, 0.45, 15.80). Report the EXACT numeric value as a string
+  in the indicator_readings value field (e.g. "value": "1.23").
+- GPT uses this value downstream for ATR-based stop-loss placement, so
+  accuracy matters. Do NOT round aggressively or omit decimal places.
+- Signal guidance: "neutral" is typical. Use "bearish" if ATR is spiking
+  (elevated volatility = higher risk). Use "bullish" if ATR is contracting
+  from elevated levels (volatility compression often precedes breakouts).
+- In notes, state whether ATR is expanding, contracting, or stable compared
+  to its recent history on the visible chart.
 """
 
 
@@ -102,6 +114,7 @@ def build_chart_prompt(
     timeframe_override: str | None = None,
     indicators_override: list[str] | None = None,
     fmp_context: str | None = None,
+    regime_context: str = "",
 ) -> str:
     """Build the user prompt for per-ticker chart analysis.
 
@@ -118,17 +131,25 @@ def build_chart_prompt(
         indicators_override: If set, use these indicators instead of the
             strategy's ``chart_indicators`` (for short-TF analysis).
         fmp_context: Pre-formatted FMP fundamental context string, or None.
+        regime_context: Pre-formatted market regime header block, or empty.
 
     Returns:
         The formatted user prompt string.
     """
     effective_timeframe = timeframe_override or config.chart_timeframe
     effective_indicators = indicators_override or config.chart_indicators
-    parts: list[str] = [
-        f"Analyze the attached TradingView chart for: {ticker}",
-        f"\nTimeframe: {effective_timeframe}",
-        f"Indicators on chart: {', '.join(effective_indicators)}",
-    ]
+    parts: list[str] = []
+
+    if regime_context:
+        parts.append(f"{regime_context}\n")
+
+    parts.extend(
+        [
+            f"Analyze the attached TradingView chart for: {ticker}",
+            f"\nTimeframe: {effective_timeframe}",
+            f"Indicators on chart: {', '.join(effective_indicators)}",
+        ]
+    )
 
     if config.ta_focus:
         parts.append(f"\nAnalysis focus: {config.ta_focus}")
@@ -136,15 +157,18 @@ def build_chart_prompt(
     if sentiment is not None:
         catalysts_text = ""
         if sentiment.key_catalysts:
-            catalyst_lines = [
-                f"  - [{c.impact.upper()}] {c.headline} ({c.significance} significance)"
-                for c in sentiment.key_catalysts[:5]
-            ]
+            catalyst_lines = []
+            for c in sentiment.key_catalysts[:5]:
+                recency = f", {c.hours_ago}h ago" if c.hours_ago is not None else ""
+                catalyst_lines.append(
+                    f"  - [{c.impact.upper()}] {c.headline} ({c.significance} significance{recency})"
+                )
             catalysts_text = "\n".join(catalyst_lines)
 
         parts.append(
             f"\n--- RECENT NEWS CONTEXT ---"
-            f"\nSentiment score: {sentiment.sentiment_score:+.2f} ({sentiment.sentiment_label})"
+            f"\nSentiment: {sentiment.sentiment_score:+.2f}"
+            f" [{sentiment.sentiment_bucket}] ({sentiment.sentiment_label})"
             f"\nSummary: {sentiment.summary}"
         )
         if catalysts_text:
