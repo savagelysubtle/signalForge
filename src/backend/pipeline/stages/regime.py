@@ -50,17 +50,32 @@ def _extract_text(output_items: list) -> str:
     return "\n".join(parts)
 
 
-async def classify_regime(run_id: str) -> tuple[RegimeOutput | None, dict]:
+async def classify_regime(
+    run_id: str,
+    sector_data: list[dict] | None = None,
+    vix_value: float | None = None,
+    vix_label: str | None = None,
+) -> tuple[RegimeOutput | None, dict]:
     """Classify the current market regime via Perplexity web search.
+
+    When ground-truth FMP data is provided (sector performance, VIX),
+    it is embedded in the prompt so the LLM interprets rather than estimates.
 
     Args:
         run_id: Pipeline run identifier for logging.
+        sector_data: Optional sector performance dicts from FMP.
+        vix_value: Optional current VIX value from FMP.
+        vix_label: Optional pre-classified VIX label.
 
     Returns:
         Tuple of (RegimeOutput or None on failure, stage metadata dict).
     """
     start = time.perf_counter()
-    user_prompt = build_regime_prompt()
+    user_prompt = build_regime_prompt(
+        sector_data=sector_data,
+        vix_value=vix_value,
+        vix_label=vix_label,
+    )
 
     metadata: dict = {
         "stage": "regime",

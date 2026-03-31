@@ -116,6 +116,17 @@ FMP_TOOL_DEFINITION: dict[str, Any] = {
                 "type": "integer",
                 "description": "Only include stocks with earnings within this many days. Stocks only.",
             },
+            "altman_z_min": {
+                "type": "number",
+                "description": (
+                    "Minimum Altman Z-Score (financial distress predictor). "
+                    ">2.99 = safe, 1.81-2.99 = grey zone, <1.81 = distress. Stocks only."
+                ),
+            },
+            "is_etf": {
+                "type": "boolean",
+                "description": "Set to true to include ETFs, false to exclude them. Stocks only.",
+            },
         },
     },
 }
@@ -148,6 +159,7 @@ async def execute_fmp_tool(arguments: dict[str, Any]) -> str:
                 "require_insider_buying",
                 "rvol_min",
                 "earnings_within_days",
+                "altman_z_min",
             )
         )
         results = await screen_stocks_from_params(
@@ -171,6 +183,8 @@ async def execute_fmp_tool(arguments: dict[str, Any]) -> str:
             require_insider_buying=arguments.get("require_insider_buying", False),
             rvol_min=arguments.get("rvol_min"),
             earnings_within_days=arguments.get("earnings_within_days"),
+            altman_z_min=arguments.get("altman_z_min"),
+            is_etf=arguments.get("is_etf"),
             enrich_with_ratios=needs_enrichment,
         )
         asset_type = "crypto" if is_crypto else "stocks"

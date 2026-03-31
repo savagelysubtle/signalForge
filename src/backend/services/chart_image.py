@@ -30,8 +30,11 @@ INDICATOR_MAP: dict[str, str] = {
     "RSI": "Relative Strength Index",
     "MACD": "MACD",
     "Bollinger Bands": "Bollinger Bands",
+    "Bollinger_Bands": "Bollinger Bands",
     "Stochastic": "Stochastic",
     "ATR": "Average True Range",
+    "EMA_9": "Moving Average Exponential",
+    "EMA_21": "Moving Average Exponential",
     "EMA_20": "Moving Average Exponential",
     "EMA_50": "Moving Average Exponential",
     "EMA_200": "Moving Average Exponential",
@@ -43,10 +46,15 @@ INDICATOR_MAP: dict[str, str] = {
     "CCI": "Commodity Channel Index",
     "Ichimoku": "Ichimoku Cloud",
     "DMI": "Directional Movement",
+    "ADX": "Directional Movement",
     "Parabolic SAR": "Parabolic SAR",
+    "Supertrend": "Supertrend",
+    "Williams_R": "Williams %R",
 }
 
 INDICATOR_INPUTS: dict[str, dict] = {
+    "EMA_9": {"length": 9},
+    "EMA_21": {"length": 21},
     "EMA_20": {"length": 20},
     "EMA_50": {"length": 50},
     "EMA_200": {"length": 200},
@@ -55,7 +63,9 @@ INDICATOR_INPUTS: dict[str, dict] = {
 }
 
 TIMEFRAME_MAP: dict[str, str] = {
+    "5m": "5m",
     "15m": "15m",
+    "30m": "30m",
     "1H": "1h",
     "2H": "2h",
     "4H": "4h",

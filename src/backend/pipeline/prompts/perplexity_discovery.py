@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 from pipeline.schemas import StrategyConfig
 from utils.hashing import prompt_hash
 
-PROMPT_VERSION = "v15"
+PROMPT_VERSION = "v16"
 
 
 def _get_session_context() -> str:
@@ -132,6 +132,7 @@ def build_system_prompt(
     exchange: str | None = None,
     sector: str | None = None,
     is_crypto: bool = False,
+    ta_focus: str | None = None,
 ) -> str:
     """Build the discovery system prompt with dynamic market context.
 
@@ -140,6 +141,7 @@ def build_system_prompt(
         exchange: Effective exchange (after overrides).
         sector: Effective sector filter (after overrides).
         is_crypto: Whether this is a crypto strategy.
+        ta_focus: Optional technical analysis focus (e.g. "breakouts above resistance").
 
     Returns:
         Complete system prompt string.
@@ -170,6 +172,14 @@ def build_system_prompt(
 
     market_constraint = _build_market_constraint(market_key, country, exchange)
 
+    ta_focus_block = ""
+    if ta_focus:
+        ta_focus_block = (
+            f"\nTECHNICAL FOCUS: The user's strategy targets stocks exhibiting "
+            f"{ta_focus} patterns. Prioritize candidates showing these technical "
+            f"characteristics in recent price action."
+        )
+
     return f"""\
 {intro}{exchange_hint}
 {sector_hint}
@@ -197,6 +207,7 @@ the quantitative data already provided. You may include additional picks
 from web search beyond the FMP list, but they MUST respect the market
 constraint below.
 {market_constraint}
+{ta_focus_block}
 You may also have access to a screen_stocks tool that calls the FMP API.
 Use it if the pre-screened candidates are a poor fit for the strategy and
 you need to search with different parameters (e.g. different sector, market
@@ -264,27 +275,51 @@ DISCOVERY_SYSTEM_PROMPT = build_system_prompt(country="CA")
 
 
 def build_discovery_prompt(config: StrategyConfig) -> str:
-    """Build a search-query-style user prompt for discovery screening.
+    """Build a keyword-focused search query for discovery screening.
 
-    Sonar Pro's search component triggers on the user prompt text, so this
-    should read like a web search query rather than an instruction set.
-    Constraint style is NOT included — it pollutes the search query.
+    Sonar Pro's search component and generation component operate
+    independently. The ``input`` (user prompt) drives web search, so it
+    must read like a search query — concise keywords, no instructions,
+    no JSON schema, no few-shot examples.
+
+    Anti-patterns (from sonar-pro docs):
+    - Never include few-shot examples (triggers searches for examples)
+    - Never ask for URLs (LLM can't see search URLs)
+    - One topic per query (multi-topic fragments search quality)
+    - Include ticker symbols, timeframes, specific metrics
 
     Args:
         config: The active strategy configuration.
 
     Returns:
-        Search-query-style prompt string.
+        Keyword-focused search query string.
     """
     today = date.today().strftime("%B %d, %Y")
     session = _get_session_context()
-    parts = [
-        config.screening_prompt,
-        f"as of {today}",
-        session,
-        f"top {config.max_tickers} picks",
-    ]
-    return " ".join(parts)
+
+    keywords: list[str] = []
+
+    prompt_text = config.screening_prompt.strip()
+    if prompt_text:
+        keywords.append(prompt_text)
+
+    if config.ta_focus:
+        keywords.append(config.ta_focus)
+
+    keywords.extend([today, session])
+
+    fmp = config.fmp_screener
+    if fmp:
+        if fmp.sector:
+            keywords.append(f"{fmp.sector} sector")
+        if fmp.exchange:
+            keywords.append(fmp.exchange)
+        elif fmp.country:
+            keywords.append(fmp.country)
+
+    keywords.append(f"top {config.max_tickers}")
+
+    return " ".join(keywords)
 
 
 def build_prompted_discovery_prompt(

@@ -12,7 +12,7 @@ from datetime import date
 from pipeline.schemas import StrategyConfig
 from utils.hashing import prompt_hash
 
-PROMPT_VERSION = "v5"
+PROMPT_VERSION = "v6"
 
 SENTIMENT_SYSTEM_PROMPT = """\
 You are a financial news analyst specializing in sentiment analysis.
@@ -20,17 +20,29 @@ You will be given a stock ticker along with specific news article URLs that
 have been pre-researched. Your job is to read and analyze those articles using
 Google Search grounding, then produce a structured sentiment assessment.
 
-Workflow:
-1. Use Google Search to access and read EACH of the provided article URLs.
-2. Extract sentiment-relevant information from each article.
-3. After reading the provided URLs, perform ONE additional targeted search.
-   A suggested search query is provided in the user prompt. Prioritize
-   discovering: regulatory decisions, earnings surprises, insider activity,
-   analyst upgrades/downgrades, and breaking developments not covered above.
-4. Synthesize all findings into a single sentiment assessment.
+You MUST follow these steps IN ORDER — do NOT skip or reorder:
 
-If no article URLs are provided, fall back to searching for recent news about
-the ticker yourself using Google Search.
+STEP 1 — READ PROVIDED URLS (mandatory):
+Use Google Search to access and read EACH of the provided article URLs.
+Extract sentiment-relevant information from every article. If a URL fails
+to load, note it and continue. You MUST attempt every provided URL before
+proceeding to Step 2. These URLs were specifically curated for this ticker.
+
+STEP 2 — ONE ADDITIONAL SEARCH (mandatory):
+After reading ALL provided URLs, perform exactly ONE additional targeted search.
+A suggested search query is provided in the user prompt. Prioritize discovering:
+regulatory decisions, earnings surprises, insider activity, analyst
+upgrades/downgrades, and breaking developments NOT already covered in Step 1.
+This step fills gaps — do not duplicate what the provided URLs already covered.
+
+STEP 3 — SYNTHESIZE (mandatory):
+Combine findings from Step 1 and Step 2 into a single JSON sentiment assessment.
+Weight information from provided URLs (Step 1) more heavily than supplementary
+search results (Step 2), since Step 1 URLs were specifically selected for
+relevance.
+
+If no article URLs are provided, skip Step 1 and begin with Step 2 using a
+broader search for recent news about the ticker.
 
 You must return ONLY valid JSON — no commentary outside the JSON structure.
 
@@ -39,6 +51,7 @@ Return a JSON object with this exact structure:
   "ticker": "<SYMBOL>",
   "sentiment_score": <float from -1.0 to 1.0>,
   "sentiment_label": "strongly_bearish" | "bearish" | "neutral" | "bullish" | "strongly_bullish",
+  "confidence": <float from 0.0 to 1.0>,
   "key_catalysts": [
     {
       "headline": "<news headline or event description>",
@@ -65,6 +78,16 @@ Scoring guide for sentiment_score:
 - -0.2 to 0.2: neutral (mixed signals, no dominant narrative)
 - 0.2 to 0.6: bullish (positive earnings, upgrades, favorable macro)
 - 0.6 to 1.0: strongly_bullish (breakout catalysts, major contracts, sector tailwinds)
+
+Scoring guide for confidence:
+- 0.8-1.0: High confidence — multiple authoritative sources agree, recent data,
+  clear directional signal from reputable outlets
+- 0.5-0.8: Moderate confidence — some authoritative sources, mixed recency,
+  directional lean but with caveats
+- 0.2-0.5: Low confidence — few sources, stale data, conflicting signals,
+  or reliance on minor/unverified outlets
+- 0.0-0.2: Very low confidence — almost no relevant data found, pure
+  speculation would be required
 
 You MUST include at least 3 key catalysts. Each catalyst should reference a
 specific article or news event. Include the article URL in the "url" field

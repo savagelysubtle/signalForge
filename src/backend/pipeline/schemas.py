@@ -70,7 +70,15 @@ class FundamentalData(BaseModel):
     week_52_low: float | None = None
     key_highlights: list[str] = Field(default_factory=list)
     risk_factors: list[str] = Field(default_factory=list)
-    sources: list[str] = Field(default_factory=list)
+    sources: list[str] = Field(
+        default_factory=list,
+        description=(
+            "LLM-generated source references (publication names, not verified URLs). "
+            "These are contextual references from the Perplexity response text — they "
+            "may not correspond to navigable URLs. For verified URLs, use news_urls "
+            "which come from the API-level SearchResultsOutputItem citations."
+        ),
+    )
     news_urls: list[str] = Field(default_factory=list)
 
 
@@ -197,6 +205,9 @@ class SentimentAnalysis(BaseModel):
         sentiment_bucket: Fine-grained bucket computed from sentiment_score.
             7 levels vs. the 5 in sentiment_label. Used by GPT for more
             consistent thresholding.
+        confidence: Gemini's self-assessed confidence in the sentiment score
+            (0.0-1.0). Based on source authority, count, recency, and
+            consistency of the underlying evidence.
     """
 
     ticker: str
@@ -210,6 +221,7 @@ class SentimentAnalysis(BaseModel):
     sentiment_label: Literal[
         "strongly_bearish", "bearish", "neutral", "bullish", "strongly_bullish"
     ]
+    confidence: float = Field(ge=0.0, le=1.0, default=0.5)
     sentiment_bucket: _SENTIMENT_BUCKET = "neutral"
     key_catalysts: list[NewsCatalyst] = Field(default_factory=list)
     news_recency: str = ""
@@ -572,6 +584,7 @@ class StrategyConfig(BaseModel):
     # Metadata
     is_template: bool = False
     recommended: bool = False
+    strategy_type: str = "swing"
 
 
 # ---------------------------------------------------------------------------

@@ -110,6 +110,8 @@ def _row_to_config(row: dict[str, Any]) -> StrategyConfig:
         risk_params=risk_params,
         enable_debate=bool(row.get("enable_debate", True)),
         is_template=bool(row.get("is_template", False)),
+        recommended=bool(row.get("recommended", False)),
+        strategy_type=row.get("strategy_type") or "swing",
     )
 
 
@@ -184,6 +186,8 @@ async def create_strategy(config: StrategyConfig, user_id: str) -> StrategyConfi
         "risk_params": json.dumps(config.risk_params.model_dump()),
         "enable_debate": config.enable_debate,
         "is_template": config.is_template,
+        "recommended": config.recommended,
+        "strategy_type": config.strategy_type,
     }
     await client.table("strategies").insert(payload).execute()
     config.id = strategy_id
@@ -286,46 +290,71 @@ async def delete_strategy(strategy_id: str, user_id: str) -> None:
 
 
 async def ensure_defaults() -> None:
-    """Load strategy templates if the strategies table is empty."""
-    client = await get_db()
-    response = await client.table("strategies").select("*", count="exact").limit(0).execute()
-    if response.count and response.count > 0:
+    """Sync strategy templates from JSON file into the database.
+
+    Inserts new templates and updates existing ones (matched by name).
+    Preserves IDs of existing templates so pipeline run history stays intact.
+    """
+    if not TEMPLATES_PATH.exists():
+        logger.info("No templates file found — skipping template sync")
         return
 
-    if TEMPLATES_PATH.exists():
-        logger.info("Loading strategy templates from %s", TEMPLATES_PATH)
-        templates = json.loads(TEMPLATES_PATH.read_text(encoding="utf-8"))
-        for tmpl in templates:
-            tmpl.setdefault("id", uuid.uuid4().hex)
-            tmpl.setdefault("is_template", True)
-            risk = tmpl.pop("risk_params", {})
-            fmp_raw = tmpl.pop("fmp_screener", None)
-            fmp = FmpScreenerConfig(**fmp_raw) if isinstance(fmp_raw, dict) else None
-            config = StrategyConfig(**tmpl, risk_params=RiskParams(**risk), fmp_screener=fmp)
-            await create_strategy(config, user_id="system")
-    else:
-        logger.info("No templates file found — inserting default screener strategy")
-        default = StrategyConfig(
-            id=uuid.uuid4().hex,
-            name="Default Screener",
-            description="General-purpose stock and crypto screener",
-            screening_prompt=(
-                "Find stocks and cryptocurrencies showing strong momentum: "
-                "rising relative volume, positive earnings revisions, "
-                "and bullish technical setups. Include both US equities and "
-                "top crypto assets if they meet the criteria."
-            ),
-            constraint_style="loose",
-            max_tickers=10,
-            chart_indicators=["RSI", "MACD", "Volume", "EMA_50", "EMA_200", "ATR"],
-            chart_timeframe="D",
-            news_recency="week",
-            news_scope="company",
-            trading_style="Swing trader, 3-10 day holds, max 5% position size",
-            risk_params=RiskParams(),
-            enable_debate=True,
-            is_template=True,
-        )
-        await create_strategy(default, user_id="system")
+    client = await get_db()
 
-    logger.info("Default strategies loaded.")
+    existing_resp = await (
+        client.table("strategies").select("id, name").eq("is_template", True).execute()
+    )
+    existing_by_name: dict[str, str] = {
+        row["name"]: row["id"] for row in (existing_resp.data or [])
+    }
+
+    templates = json.loads(TEMPLATES_PATH.read_text(encoding="utf-8"))
+    inserted = 0
+    updated = 0
+
+    for tmpl in templates:
+        tmpl.setdefault("id", uuid.uuid4().hex)
+        tmpl.setdefault("is_template", True)
+        risk = tmpl.pop("risk_params", {})
+        fmp_raw = tmpl.pop("fmp_screener", None)
+        fmp = FmpScreenerConfig(**fmp_raw) if isinstance(fmp_raw, dict) else None
+        config = StrategyConfig(**tmpl, risk_params=RiskParams(**risk), fmp_screener=fmp)
+
+        existing_id = existing_by_name.get(config.name)
+        if existing_id:
+            config.id = existing_id
+            payload = {
+                "description": config.description,
+                "fmp_screener": (
+                    json.dumps(config.fmp_screener.model_dump()) if config.fmp_screener else None
+                ),
+                "screening_prompt": config.screening_prompt,
+                "constraint_style": config.constraint_style,
+                "max_tickers": config.max_tickers,
+                "chart_indicators": json.dumps(config.chart_indicators),
+                "chart_timeframe": config.chart_timeframe,
+                "secondary_timeframe": config.secondary_timeframe,
+                "additional_timeframes": json.dumps(config.additional_timeframes),
+                "short_timeframes": json.dumps(config.short_timeframes),
+                "short_tf_indicators": json.dumps(config.short_tf_indicators),
+                "ta_focus": config.ta_focus,
+                "news_recency": config.news_recency,
+                "news_scope": config.news_scope,
+                "trading_style": config.trading_style,
+                "risk_params": json.dumps(config.risk_params.model_dump()),
+                "enable_debate": config.enable_debate,
+                "recommended": config.recommended,
+                "strategy_type": config.strategy_type,
+            }
+            await client.table("strategies").update(payload).eq("id", existing_id).execute()
+            updated += 1
+        else:
+            await create_strategy(config, user_id="system")
+            inserted += 1
+
+    logger.info(
+        "Template sync complete: %d inserted, %d updated (from %s)",
+        inserted,
+        updated,
+        TEMPLATES_PATH,
+    )

@@ -541,6 +541,7 @@ def build_judge_prompt(
     config: StrategyConfig,
     fmp_context: dict[str, FmpEnrichedStock] | None = None,
     regime_context: str = "",
+    sector_consensus: str = "",
 ) -> str:
     """Build the user prompt for the judge/portfolio manager.
 
@@ -555,6 +556,7 @@ def build_judge_prompt(
         config: Strategy configuration with risk params.
         fmp_context: FMP enriched stock data keyed by ticker (may be None).
         regime_context: Pre-formatted market regime header block, or empty.
+        sector_consensus: Pre-formatted sector sentiment consensus block, or empty.
 
     Returns:
         Formatted user prompt string.
@@ -587,6 +589,9 @@ def build_judge_prompt(
     parts.append(f"\n## QUANTITATIVE DATA (FMP)\n{_format_fmp_data(fmp_context, tickers)}")
     parts.append(f"\n## TECHNICAL ANALYSIS (Claude)\n{_format_chart_data(charts, tickers)}")
     parts.append(f"\n## NEWS SENTIMENT (Gemini)\n{_format_sentiment_data(sentiments, tickers)}")
+
+    if sector_consensus:
+        parts.append(f"\n## SECTOR SENTIMENT CONSENSUS\n{sector_consensus}")
 
     if bull_cases:
         bull_map = {bc.ticker: bc for bc in bull_cases}

@@ -13,6 +13,51 @@ if TYPE_CHECKING:
     from services.fmp_service import FmpEnrichedStock
 
 
+def _build_score_drivers(stock: FmpEnrichedStock) -> list[tuple[str, float | None, str]]:
+    """Build per-dimension score lines with raw driver values.
+
+    Returns:
+        List of (label, score, driver_string) tuples.
+    """
+    drivers: list[tuple[str, float | None, str]] = []
+
+    f_parts: list[str] = []
+    if stock.roe is not None:
+        f_parts.append(f"ROE: {stock.roe:.1f}%")
+    if stock.pe_ratio is not None:
+        f_parts.append(f"PE: {stock.pe_ratio:.1f}")
+    if stock.net_profit_margin is not None:
+        f_parts.append(f"margin: {stock.net_profit_margin:.1f}%")
+    drivers.append(("Fundamental", stock.score_fundamental, f"({', '.join(f_parts)})" if f_parts else ""))
+
+    m_parts: list[str] = []
+    if stock.price_change_3m is not None:
+        m_parts.append(f"3m: {stock.price_change_3m:+.1f}%")
+    if stock.relative_volume is not None:
+        m_parts.append(f"rvol: {stock.relative_volume:.1f}x")
+    if stock.price_change_1m is not None:
+        m_parts.append(f"1m: {stock.price_change_1m:+.1f}%")
+    drivers.append(("Momentum", stock.score_momentum, f"({', '.join(m_parts)})" if m_parts else ""))
+
+    s_parts: list[str] = []
+    if stock.insider_net_buys is not None:
+        s_parts.append(f"insider: {'NET BUY' if stock.insider_net_buys > 0 else 'net sell'}")
+    if stock.analyst_target_upside is not None:
+        s_parts.append(f"analyst upside: {stock.analyst_target_upside:+.0f}%")
+    drivers.append(("Sentiment", stock.score_sentiment, f"({', '.join(s_parts)})" if s_parts else ""))
+
+    q_parts: list[str] = []
+    if stock.piotroski_score is not None:
+        q_parts.append(f"Piotroski: {stock.piotroski_score}")
+    if stock.altman_z_score is not None:
+        q_parts.append(f"Altman: {stock.altman_z_score:.1f}")
+    if stock.debt_equity is not None:
+        q_parts.append(f"D/E: {stock.debt_equity:.2f}")
+    drivers.append(("Quality", stock.score_quality, f"({', '.join(q_parts)})" if q_parts else ""))
+
+    return drivers
+
+
 def format_fmp_for_gemini(stock: FmpEnrichedStock) -> str:
     """Format FMP data relevant to sentiment analysis.
 
@@ -78,6 +123,9 @@ def format_fmp_for_claude(stock: FmpEnrichedStock) -> str:
         parts.append(f"Relative volume: {stock.relative_volume:.1f}x average")
     if stock.composite_score is not None:
         parts.append(f"Composite quality score: {stock.composite_score:.0f}/100")
+        for label, score, drivers in _build_score_drivers(stock):
+            if score is not None:
+                parts.append(f"  {label}: {score:.0f} {drivers}")
     return "\n".join(parts)
 
 
@@ -110,14 +158,10 @@ def format_fmp_for_gpt(
 
         lines = [f"\n### {stock.symbol} — {stock.company_name}"]
         if stock.composite_score is not None:
-            f_score = stock.score_fundamental or 0
-            m_score = stock.score_momentum or 0
-            s_score = stock.score_sentiment or 0
-            q_score = stock.score_quality or 0
-            lines.append(
-                f"Composite Score: {stock.composite_score:.0f}/100 "
-                f"(F:{f_score:.0f} M:{m_score:.0f} S:{s_score:.0f} Q:{q_score:.0f})"
-            )
+            lines.append(f"Composite Score: {stock.composite_score:.0f}/100")
+            for label, score, drivers in _build_score_drivers(stock):
+                if score is not None:
+                    lines.append(f"  {label}: {score:.0f} {drivers}")
         if stock.sector:
             lines.append(f"Sector: {stock.sector}")
         if stock.pe_ratio is not None:

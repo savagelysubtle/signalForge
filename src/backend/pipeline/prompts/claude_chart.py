@@ -154,6 +154,13 @@ def build_chart_prompt(
     if config.ta_focus:
         parts.append(f"\nAnalysis focus: {config.ta_focus}")
 
+    if config.risk_params and config.risk_params.min_risk_reward:
+        parts.append(
+            f"\nRisk/reward requirement: Only flag as BUY if price structure "
+            f"shows R:R >= {config.risk_params.min_risk_reward}. If not "
+            f"identifiable from chart, flag as HOLD."
+        )
+
     if sentiment is not None:
         catalysts_text = ""
         if sentiment.key_catalysts:

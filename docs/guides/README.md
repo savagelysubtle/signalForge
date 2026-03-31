@@ -2,6 +2,9 @@
 
 Step-by-step instructions for common development tasks.
 
+For the full strategy architecture, indicator rationale, FMP screener field usage,
+and win-rate foundations, see **[Strategy Design Guide](strategies.md)**.
+
 ---
 
 ## Adding a New Chart Indicator
@@ -71,10 +74,9 @@ Step-by-step instructions for common development tasks.
    }
    ```
 
-2. **Reload templates**: The template only loads if the `strategies` table
-   is empty. To add a template to an existing database:
-   - Insert it directly via the Supabase SQL editor or dashboard
-   - Or drop all rows from `strategies` and restart the backend to re-seed
+2. **Reload templates**: Templates sync automatically on backend startup.
+   `ensure_defaults()` upserts templates by name — new templates are inserted,
+   existing ones are updated. Just restart the backend after editing the JSON.
 
 3. **Include `fmp_screener`** — all templates should include an `fmp_screener`
    block. Set `"enabled": false` if FMP pre-screening is not desired for that

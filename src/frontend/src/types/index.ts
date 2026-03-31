@@ -98,6 +98,7 @@ export interface SentimentAnalysis {
   ticker: string;
   sentiment_score: number; // -1.0 to 1.0
   sentiment_label: "strongly_bearish" | "bearish" | "neutral" | "bullish" | "strongly_bullish";
+  confidence: number; // 0.0 to 1.0 — Gemini's self-assessed confidence in the score
   sentiment_bucket: SentimentBucket;
   key_catalysts: NewsCatalyst[];
   news_recency: string;
@@ -319,6 +320,7 @@ export interface StrategyConfig {
   enable_debate: boolean;
   is_template: boolean;
   recommended?: boolean;
+  strategy_type?: string;
 }
 
 // ---------------------------------------------------------------------------

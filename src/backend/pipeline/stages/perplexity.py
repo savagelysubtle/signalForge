@@ -47,7 +47,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-AGENT_MODEL = "perplexity/sonar"
+AGENT_MODEL = "perplexity/sonar-pro"
 MAX_RETRIES = 2
 MAX_TOOL_ROUNDS = 3
 
@@ -117,6 +117,15 @@ _DOMAIN_SETS: dict[str, list[str]] = {
 }
 
 
+_MACRO_DOMAINS: list[str] = [
+    "federalreserve.gov",
+    "bls.gov",
+    "statscan.gc.ca",
+    "imf.org",
+    "worldbank.org",
+]
+
+
 def _get_domain_set(config: StrategyConfig) -> list[str]:
     """Select the best domain filter set for the given strategy."""
     if _is_crypto_strategy(config):
@@ -129,14 +138,28 @@ def _get_domain_set(config: StrategyConfig) -> list[str]:
         if fmp.is_crypto:
             return _DOMAIN_SETS["crypto"]
         if fmp.country == "US" or fmp.exchange in ("NYSE", "NASDAQ", "AMEX"):
-            return _DOMAIN_SETS["us_stock"]
-        if fmp.country == "CA" or fmp.exchange in ("TSX", "TSXV"):
-            return _DOMAIN_SETS["canadian"]
+            base = list(_DOMAIN_SETS["us_stock"])
+        elif fmp.country == "CA" or fmp.exchange in ("TSX", "TSXV"):
+            base = list(_DOMAIN_SETS["canadian"])
+        else:
+            base = list(_DOMAIN_SETS["us_stock"])
+    else:
+        text = config.screening_prompt.lower()
+        if "canadian" in text or "tsx" in text:
+            base = list(_DOMAIN_SETS["canadian"])
+        else:
+            base = list(_DOMAIN_SETS["us_stock"])
 
-    text = config.screening_prompt.lower()
-    if "canadian" in text or "tsx" in text:
-        return _DOMAIN_SETS["canadian"]
-    return _DOMAIN_SETS["us_stock"]
+    if config.news_scope == "macro":
+        base.extend(d for d in _MACRO_DOMAINS if d not in base)
+
+    return base
+
+
+_CONSTRAINT_TO_CONTEXT_SIZE: dict[str, str] = {
+    "tight": "high",
+    "loose": "medium",
+}
 
 
 def _build_web_search_tool(config: StrategyConfig | None) -> dict:
@@ -152,13 +175,19 @@ def _build_web_search_tool(config: StrategyConfig | None) -> dict:
     recency = recency_map.get(config.news_recency, "week") if config else "week"
     domains = _get_domain_set(config) if config else _DOMAIN_SETS["us_stock"]
 
-    return {
+    tool: dict = {
         "type": "web_search",
         "filters": {
             "search_domain_filter": domains,
             "search_recency_filter": recency,
         },
     }
+
+    if config:
+        ctx_size = _CONSTRAINT_TO_CONTEXT_SIZE.get(config.constraint_style, "high")
+        tool["search_context_size"] = ctx_size
+
+    return tool
 
 
 def _build_tools(
@@ -224,6 +253,33 @@ def _extract_text(output_items: list) -> str:
                 if text:
                     parts.append(text)
     return "\n".join(parts)
+
+
+def _audit_sources(result: ScreeningResult, citations: list[str]) -> None:
+    """Flag LLM-generated sources that don't match any API citation.
+
+    The ``sources`` field on ``FundamentalData`` is populated by the LLM's
+    generated JSON — these are contextual references, not verified URLs.
+    This function cross-checks them against the API-level citations and
+    logs a warning for unmatched entries so operators can track
+    hallucination rates.
+
+    Args:
+        result: Validated screening result.
+        citations: Flat list of verified citation URLs from the API.
+    """
+    if not citations:
+        return
+    citation_text = " ".join(citations).lower()
+    for td in result.tickers:
+        for src in td.sources:
+            slug = src.lower().replace(" ", "").replace(".", "")[:15]
+            if slug and slug not in citation_text:
+                logger.debug(
+                    "Unverified source for %s: '%s' (not in API citations)",
+                    td.ticker,
+                    src,
+                )
 
 
 def _distribute_citations(result: ScreeningResult, citations: list[str]) -> None:
@@ -338,6 +394,8 @@ async def _call_agent_api(
     *,
     tools: list[dict] | None = None,
     model: str = AGENT_MODEL,
+    response_format: dict[str, Any] | None = None,
+    search_mode: str | None = None,
 ) -> tuple[str, list[str]]:
     """Make a call to Perplexity Agent API, handling function calls.
 
@@ -349,7 +407,9 @@ async def _call_agent_api(
         system_prompt: System instructions defining output format.
         user_prompt: User prompt (search-query-style or detailed).
         tools: Tool definitions for the ``tools`` parameter.
-        model: Model identifier (e.g. ``"perplexity/sonar"``).
+        model: Model identifier (e.g. ``"perplexity/sonar-pro"``).
+        response_format: Optional structured output spec (json_schema).
+        search_mode: Optional search mode (e.g. ``"sec"`` for SEC filings).
 
     Returns:
         Tuple of (response text, list of citation URLs).
@@ -363,6 +423,10 @@ async def _call_agent_api(
     }
     if tools:
         api_kwargs["tools"] = tools
+    if response_format:
+        api_kwargs["response_format"] = response_format
+    if search_mode:
+        api_kwargs["search_mode"] = search_mode
 
     all_citations: list[str] = []
 
@@ -428,6 +492,8 @@ async def _call_with_retry(
     *,
     tools: list[dict] | None = None,
     model: str = AGENT_MODEL,
+    response_format: dict[str, Any] | None = None,
+    search_mode: str | None = None,
 ) -> tuple[ScreeningResult | None, list[str]]:
     """Call Agent API with validation retry logic.
 
@@ -439,6 +505,8 @@ async def _call_with_retry(
         user_prompt: User prompt.
         tools: Tool definitions.
         model: Model identifier.
+        response_format: Optional structured output spec (json_schema).
+        search_mode: Optional search mode (e.g. ``"sec"``).
 
     Returns:
         Tuple of (validated ScreeningResult or None, citation URLs).
@@ -468,6 +536,8 @@ async def _call_with_retry(
                 effective_prompt,
                 tools=tools,
                 model=model,
+                response_format=response_format,
+                search_mode=search_mode,
             )
             if citations:
                 all_citations = citations
@@ -492,6 +562,7 @@ async def _call_with_retry(
 
             result.citations = all_citations
             _distribute_citations(result, all_citations)
+            _audit_sources(result, all_citations)
             return result, all_citations
 
         except (ValueError, json.JSONDecodeError) as exc:
@@ -524,7 +595,7 @@ def _build_dynamic_system_prompt(config: StrategyConfig | None) -> str:
         System prompt string tailored to the effective market/sector focus.
     """
     if not config or not config.fmp_screener:
-        return DISCOVERY_SYSTEM_PROMPT
+        return build_system_prompt(ta_focus=config.ta_focus if config else None)
 
     fmp = config.fmp_screener
     return build_system_prompt(
@@ -532,7 +603,23 @@ def _build_dynamic_system_prompt(config: StrategyConfig | None) -> str:
         exchange=fmp.exchange,
         sector=fmp.sector,
         is_crypto=fmp.is_crypto,
+        ta_focus=config.ta_focus,
     )
+
+
+_SEC_STRATEGY_TYPES = frozenset({"event", "value"})
+
+_RESPONSE_FORMAT: dict[str, Any] = {
+    "type": "json_schema",
+    "json_schema": {"schema": ScreeningResult.model_json_schema()},
+}
+
+
+def _get_search_mode(config: StrategyConfig | None) -> str | None:
+    """Return ``"sec"`` for event/value strategies, else ``None``."""
+    if config and config.strategy_type in _SEC_STRATEGY_TYPES:
+        return "sec"
+    return None
 
 
 async def run_discovery(
@@ -560,6 +647,7 @@ async def run_discovery(
         config.fmp_screener is not None and config.fmp_screener.enabled
     )
     tools = _build_tools(config, include_fmp=include_fmp)
+    search_mode = _get_search_mode(config)
 
     metadata: dict = {
         "stage": "perplexity",
@@ -572,7 +660,13 @@ async def run_discovery(
 
     start = time.perf_counter()
     try:
-        result, citations = await _call_with_retry(system_prompt, user_prompt, tools=tools)
+        result, citations = await _call_with_retry(
+            system_prompt,
+            user_prompt,
+            tools=tools,
+            response_format=_RESPONSE_FORMAT,
+            search_mode=search_mode,
+        )
         metadata["duration_ms"] = int((time.perf_counter() - start) * 1000)
         metadata["status"] = "success" if result else "validation_failed"
         if result is not None:
@@ -620,6 +714,7 @@ async def run_prompted_discovery(
         config is not None and config.fmp_screener is not None and config.fmp_screener.enabled
     )
     tools = _build_tools(config, include_fmp=include_fmp)
+    search_mode = _get_search_mode(config)
 
     metadata: dict = {
         "stage": "perplexity",
@@ -632,7 +727,13 @@ async def run_prompted_discovery(
 
     start = time.perf_counter()
     try:
-        result, citations = await _call_with_retry(system_prompt, prompt, tools=tools)
+        result, citations = await _call_with_retry(
+            system_prompt,
+            prompt,
+            tools=tools,
+            response_format=_RESPONSE_FORMAT,
+            search_mode=search_mode,
+        )
         metadata["duration_ms"] = int((time.perf_counter() - start) * 1000)
         metadata["status"] = "success" if result else "validation_failed"
         if result is not None:
@@ -648,6 +749,159 @@ async def run_prompted_discovery(
         metadata["error"] = str(exc)
         logger.exception("Perplexity prompted discovery failed")
         return None, metadata
+
+
+async def run_bull_bear_discovery(
+    config: StrategyConfig,
+    *,
+    fmp_candidates: list[FmpEnrichedStock] | None = None,
+) -> tuple[ScreeningResult | None, dict]:
+    """Run parallel bull/bear Perplexity discovery when enable_debate=True.
+
+    Makes two parallel discovery calls with opposing perspective prompts:
+    - Bull call: focuses on upside catalysts, momentum, breakout potential
+    - Bear call: focuses on downside risks, headwinds, overvaluation
+
+    Results are merged: tickers found by both = high conviction,
+    bull-only = speculative, bear-only = risk-flagged.
+
+    Args:
+        config: Strategy configuration driving the screening prompt.
+        fmp_candidates: Optional pre-screened stocks from FMP.
+
+    Returns:
+        Tuple of (merged ScreeningResult or None, metadata dict).
+    """
+    system_prompt = _build_dynamic_system_prompt(config)
+
+    base_prompt = build_discovery_prompt(config)
+    fmp_context = _format_fmp_context(fmp_candidates) if fmp_candidates else ""
+
+    bull_suffix = (
+        " bullish catalysts momentum breakout insider buying analyst upgrades"
+        " revenue acceleration strong relative volume"
+    )
+    bear_suffix = (
+        " bearish risks headwinds overvaluation insider selling analyst downgrades"
+        " margin compression declining volume"
+    )
+
+    bull_prompt = f"{base_prompt}{bull_suffix}"
+    bear_prompt = f"{base_prompt}{bear_suffix}"
+
+    if fmp_context:
+        bull_prompt = f"{bull_prompt}\n\n{fmp_context}"
+        bear_prompt = f"{bear_prompt}\n\n{fmp_context}"
+
+    include_fmp = bool(fmp_candidates) or (
+        config.fmp_screener is not None and config.fmp_screener.enabled
+    )
+    tools = _build_tools(config, include_fmp=include_fmp)
+    search_mode = _get_search_mode(config)
+
+    metadata: dict = {
+        "stage": "perplexity",
+        "mode": "bull_bear_discovery",
+        "model": AGENT_MODEL,
+        "prompt_hash": discovery_hash(),
+        "fmp_candidates_count": len(fmp_candidates) if fmp_candidates else 0,
+    }
+
+    start = time.perf_counter()
+    try:
+        (bull_result, bull_cit), (bear_result, bear_cit) = await asyncio.gather(
+            _call_with_retry(
+                system_prompt, bull_prompt, tools=tools,
+                response_format=_RESPONSE_FORMAT, search_mode=search_mode,
+            ),
+            _call_with_retry(
+                system_prompt, bear_prompt, tools=tools,
+                response_format=_RESPONSE_FORMAT, search_mode=search_mode,
+            ),
+        )
+
+        merged = _merge_bull_bear(bull_result, bear_result)
+
+        metadata["duration_ms"] = int((time.perf_counter() - start) * 1000)
+        metadata["status"] = "success" if merged else "validation_failed"
+        if merged is not None:
+            if fmp_candidates:
+                merged.fmp_pre_screened = [s.symbol for s in fmp_candidates]
+            metadata["raw_response"] = merged.model_dump_json()
+            all_citations = list(dict.fromkeys(bull_cit + bear_cit))
+            merged.citations = all_citations
+            _distribute_citations(merged, all_citations)
+            _audit_sources(merged, all_citations)
+        return merged, metadata
+
+    except Exception as exc:
+        metadata["duration_ms"] = int((time.perf_counter() - start) * 1000)
+        metadata["status"] = "api_error"
+        metadata["error"] = str(exc)
+        logger.exception("Perplexity bull/bear discovery failed")
+        return None, metadata
+
+
+def _merge_bull_bear(
+    bull: ScreeningResult | None,
+    bear: ScreeningResult | None,
+) -> ScreeningResult | None:
+    """Merge bull and bear screening results with conviction markers.
+
+    Tickers found in both results are marked as high conviction.
+    Bull-only tickers get a "speculative" highlight.
+    Bear-only tickers get a "risk-flagged" highlight.
+
+    Args:
+        bull: Bull-perspective screening result (or None).
+        bear: Bear-perspective screening result (or None).
+
+    Returns:
+        Merged ScreeningResult, or whichever is non-None.
+    """
+    if not bull and not bear:
+        return None
+    if not bull:
+        return bear
+    if not bear:
+        return bull
+
+    bull_tickers = {td.ticker: td for td in bull.tickers}
+    bear_tickers = {td.ticker: td for td in bear.tickers}
+
+    overlap = set(bull_tickers.keys()) & set(bear_tickers.keys())
+    bull_only = set(bull_tickers.keys()) - overlap
+    bear_only = set(bear_tickers.keys()) - overlap
+
+    merged_tickers = []
+    for ticker in overlap:
+        td = bull_tickers[ticker]
+        td.key_highlights = [
+            "[HIGH CONVICTION] Found by both bull and bear analysis"
+        ] + td.key_highlights
+        merged_tickers.append(td)
+
+    for ticker in bull_only:
+        td = bull_tickers[ticker]
+        td.key_highlights = ["[BULL ONLY] Speculative — upside catalysts"] + td.key_highlights
+        merged_tickers.append(td)
+
+    for ticker in bear_only:
+        td = bear_tickers[ticker]
+        td.key_highlights = ["[BEAR FLAGGED] Risk factors identified"] + td.key_highlights
+        td.risk_factors = bear_tickers[ticker].risk_factors + td.risk_factors
+        merged_tickers.append(td)
+
+    return ScreeningResult(
+        mode=bull.mode,
+        strategy_name=bull.strategy_name,
+        tickers=merged_tickers,
+        screening_summary=(
+            f"Bull/Bear parallel discovery: {len(overlap)} high conviction, "
+            f"{len(bull_only)} bull-only speculative, {len(bear_only)} bear-flagged. "
+            f"Bull: {bull.screening_summary[:200]} | Bear: {bear.screening_summary[:200]}"
+        ),
+    )
 
 
 async def run_analysis(
@@ -668,6 +922,7 @@ async def run_analysis(
     """
     user_prompt = build_analysis_prompt(tickers, config)
     tools = _build_tools(config, include_fmp=False)
+    search_mode = _get_search_mode(config)
 
     metadata: dict = {
         "stage": "perplexity",
@@ -679,7 +934,13 @@ async def run_analysis(
 
     start = time.perf_counter()
     try:
-        result, citations = await _call_with_retry(ANALYSIS_SYSTEM_PROMPT, user_prompt, tools=tools)
+        result, citations = await _call_with_retry(
+            ANALYSIS_SYSTEM_PROMPT,
+            user_prompt,
+            tools=tools,
+            response_format=_RESPONSE_FORMAT,
+            search_mode=search_mode,
+        )
         metadata["duration_ms"] = int((time.perf_counter() - start) * 1000)
         metadata["status"] = "success" if result else "validation_failed"
         if result is not None:

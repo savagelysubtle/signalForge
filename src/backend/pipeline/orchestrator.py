@@ -2,10 +2,11 @@
 
 Runs the full pipeline sequentially:
 FMP pre-screening (optional) → Perplexity (screening/research) →
-Gemini (news sentiment) → Claude (charts with news context) →
-GPT (bull/bear/judge debate).
+Gemini (news sentiment) → Risk screener (lightweight pre-filter) →
+Claude (charts with news context) → GPT (bull/bear/judge debate).
 Gemini runs before Claude so that chart analysis is informed by
-recent news catalysts.
+recent news catalysts. The risk screener demotes structurally
+ineligible tickers before expensive Claude analysis.
 """
 
 from __future__ import annotations
@@ -36,16 +37,32 @@ from pipeline.schemas import (
     Recommendation,
     RegimeOutput,
     ScreenerOverrides,
+    ScreeningResult,
+    SentimentAnalysis,
     StrategyConfig,
 )
 from pipeline.stages.claude import run_chart_analysis
 from pipeline.stages.gemini import run_sentiment
 from pipeline.stages.gpt import run_debate
-from pipeline.stages.perplexity import run_analysis, run_discovery, run_prompted_discovery
+from pipeline.stages.perplexity import (
+    run_analysis,
+    run_bull_bear_discovery,
+    run_discovery,
+    run_prompted_discovery,
+)
 from pipeline.stages.regime import classify_regime
+from pipeline.stages.risk_screener import screen_risks
 from pipeline.stages.risk_validator import validate_risks
 from services.chart_image import fetch_annotated_chart
-from services.fmp_service import FmpEnrichedStock, screen_and_enrich
+from services.fmp_service import (
+    FmpEnrichedStock,
+    apply_regime_weight_adjustments,
+    compute_composite_scores,
+    fetch_sector_performance,
+    fetch_vix_quote,
+    filter_by_rsi,
+    screen_and_enrich,
+)
 from services.keyring_service import get_api_key
 from services.reflection import load_reflection_context
 from services.strategy import get_strategy
@@ -57,6 +74,7 @@ STAGE_TIMEOUTS: dict[str, float] = {
     "fmp": 90.0,
     "perplexity": 180.0,
     "gemini": 120.0,
+    "risk_screener": 20.0,
     "claude": 360.0,
     "gpt": 180.0,
     "annotate": 60.0,
@@ -212,11 +230,37 @@ async def run_pipeline(
     if fmp_candidates:
         fmp_map = {s.symbol: s for s in fmp_candidates}
 
-    # Stage 0.5: Regime classification (Perplexity web search)
+    # Stage 0.5: Regime classification (Perplexity web search + FMP ground truth)
     regime: RegimeOutput | None = None
+    sector_data: list[dict] | None = None
+    vix_value: float | None = None
+    vix_label: str | None = None
+
+    fmp_key = get_api_key("fmp")
+    if fmp_key:
+        try:
+            sector_perf, (vix_value, vix_label) = await asyncio.gather(
+                fetch_sector_performance(),
+                fetch_vix_quote(),
+            )
+            sector_data = [sp.model_dump() for sp in sector_perf] if sector_perf else None
+            logger.info(
+                "FMP regime ground truth: VIX=%.2f (%s), %d sectors",
+                vix_value or 0,
+                vix_label,
+                len(sector_perf) if sector_perf else 0,
+            )
+        except Exception as exc:
+            logger.warning("FMP regime ground truth fetch failed, proceeding without: %s", exc)
+
     try:
         regime, regime_metadata = await asyncio.wait_for(
-            classify_regime(run_id),
+            classify_regime(
+                run_id,
+                sector_data=sector_data,
+                vix_value=vix_value,
+                vix_label=vix_label,
+            ),
             timeout=STAGE_TIMEOUTS.get("regime", 30),
         )
         if regime_metadata:
@@ -234,6 +278,27 @@ async def run_pipeline(
 
     regime_context = format_regime_header(regime) if regime else ""
 
+    # Re-score FMP candidates with regime-adjusted weights if applicable
+    if regime and fmp_candidates and config and config.fmp_screener:
+        adjusted_config = apply_regime_weight_adjustments(config.fmp_screener, regime.regime_type)
+        fmp_candidates = compute_composite_scores(fmp_candidates, adjusted_config)
+        fmp_candidates.sort(key=lambda s: s.composite_score or 0, reverse=True)
+        fmp_map = {s.symbol: s for s in fmp_candidates}
+        logger.info(
+            "Re-scored FMP candidates with regime-adjusted weights (regime=%s)",
+            regime.regime_type,
+        )
+
+    # RSI pre-filter: reject technically invalid candidates before LLM stages
+    if fmp_candidates and config:
+        strategy_type = config.strategy_type
+        if strategy_type in ("momentum", "mean_reversion"):
+            try:
+                fmp_candidates = await filter_by_rsi(fmp_candidates, strategy_type, max_check=20)
+                fmp_map = {s.symbol: s for s in fmp_candidates}
+            except Exception as exc:
+                logger.warning("RSI pre-filter failed, continuing without: %s", exc)
+
     # Stage 1: Perplexity (screening/research)
     screening = None
     stage_metadata: dict = {}
@@ -246,6 +311,8 @@ async def run_pipeline(
                     user_prompt or "", config, fmp_candidates=fmp_candidates
                 )
             if mode == "discovery" and config:
+                if config.enable_debate:
+                    return await run_bull_bear_discovery(config, fmp_candidates=fmp_candidates)
                 return await run_discovery(config, fmp_candidates=fmp_candidates)
             if mode == "discovery" and not config:
                 default_prompt = "trending Canadian TSX stocks and top TSX market movers today"
@@ -353,13 +420,73 @@ async def run_pipeline(
             )
             logger.exception("Pipeline Gemini stage failed")
 
-    # Stage 3: Claude chart analysis
-    if screening and screening.tickers:
-        ticker_symbols = [t.ticker for t in screening.tickers]
+    # URL hit rate monitoring (Gap 14): compare Gemini catalyst URLs against provided URLs
+    if result.sentiment_analyses and screening and screening.tickers:
+        ticker_news_map: dict[str, list[str]] = {
+            t.ticker: t.news_urls for t in screening.tickers if t.news_urls
+        }
+        for sa in result.sentiment_analyses:
+            provided = set(ticker_news_map.get(sa.ticker, []))
+            if not provided:
+                continue
+            catalyst_urls = {c.url for c in sa.key_catalysts if c.url}
+            hits = len(provided & catalyst_urls)
+            hit_rate = (hits / len(provided)) * 100 if provided else 0
+            logger.info(
+                "Gemini URL hit rate for %s: %.0f%% (%d/%d provided URLs used)",
+                sa.ticker,
+                hit_rate,
+                hits,
+                len(provided),
+            )
+
+    # Stage 2.5: Risk screening micro-agent — pre-filter before expensive Claude analysis
+    demoted_tickers: list[str] = []
+    if (
+        screening
+        and screening.tickers
+        and result.sentiment_analyses
+        and effective_config.risk_params
+    ):
+        try:
+            all_syms = [t.ticker for t in screening.tickers]
+            passed, demoted_tickers, risk_meta = await asyncio.wait_for(
+                screen_risks(
+                    all_syms,
+                    result.sentiment_analyses,
+                    effective_config,
+                    fmp_context=fmp_map or None,
+                ),
+                timeout=STAGE_TIMEOUTS["risk_screener"],
+            )
+            await _save_stage_output(run_id, risk_meta)
+            if demoted_tickers:
+                logger.info(
+                    "Risk screener demoted %d tickers: %s",
+                    len(demoted_tickers),
+                    demoted_tickers,
+                )
+        except TimeoutError:
+            result.stage_errors.append(
+                {"stage": "risk_screener", "error": "Stage timed out", "type": "TimeoutError"}
+            )
+            logger.error("Risk screener timed out, passing all tickers")
+            passed = [t.ticker for t in screening.tickers]
+        except Exception as exc:
+            result.stage_errors.append(
+                {"stage": "risk_screener", "error": str(exc), "type": type(exc).__name__}
+            )
+            logger.warning("Risk screener failed, passing all tickers: %s", exc)
+            passed = [t.ticker for t in screening.tickers]
+    else:
+        passed = [t.ticker for t in screening.tickers] if screening and screening.tickers else []
+
+    # Stage 3: Claude chart analysis (only for tickers that passed risk screening)
+    if screening and screening.tickers and passed:
         try:
             charts, claude_metadata_list = await asyncio.wait_for(
                 run_chart_analysis(
-                    ticker_symbols,
+                    passed,
                     effective_config,
                     result.sentiment_analyses,
                     run_id,
@@ -401,6 +528,8 @@ async def run_pipeline(
         if screening and screening.tickers
         else list(manual_tickers or [])
     )
+    sector_consensus = _aggregate_sector_sentiment(result.sentiment_analyses, screening)
+
     logger.info("Stage 4 GPT: ticker_symbols=%s", ticker_symbols)
     if ticker_symbols:
         try:
@@ -416,6 +545,7 @@ async def run_pipeline(
                     run_id,
                     fmp_context=fmp_map or None,
                     regime_context=regime_context,
+                    sector_consensus=sector_consensus,
                 ),
                 timeout=STAGE_TIMEOUTS["gpt"],
             )
@@ -689,6 +819,69 @@ def _build_override_screening_prompt(overrides: ScreenerOverrides) -> str:
 
     parts.append("strong fundamentals momentum analyst upgrades")
     return " ".join(parts)
+
+
+def _aggregate_sector_sentiment(
+    sentiments: list[SentimentAnalysis],
+    screening: ScreeningResult | None,
+) -> str:
+    """Aggregate sector-level sentiment across tickers into a consensus block.
+
+    Groups sentiment scores by sector (from screening data), computes
+    the median score and most common key_driver per sector, and returns
+    a formatted text block for GPT.
+
+    Args:
+        sentiments: List of SentimentAnalysis objects.
+        screening: ScreeningResult (or None).
+
+    Returns:
+        Formatted sector consensus text, or empty string if insufficient data.
+    """
+    from collections import Counter
+    from statistics import median
+
+    if not sentiments:
+        return ""
+
+    ticker_sector: dict[str, str] = {}
+    if screening and hasattr(screening, "tickers"):
+        for td in screening.tickers:
+            if td.sector:
+                ticker_sector[td.ticker] = td.sector
+
+    sector_scores: dict[str, list[float]] = {}
+    sector_drivers: dict[str, list[str]] = {}
+    for sa in sentiments:
+        sector = ticker_sector.get(sa.ticker, "Unknown")
+        if sa.sector_sentiment:
+            sector_scores.setdefault(sector, []).append(sa.sector_sentiment.score)
+            if sa.sector_sentiment.key_driver:
+                sector_drivers.setdefault(sector, []).append(sa.sector_sentiment.key_driver)
+
+    if not sector_scores:
+        return ""
+
+    lines = []
+    for sector in sorted(sector_scores.keys()):
+        scores = sector_scores[sector]
+        med = median(scores)
+        drivers = sector_drivers.get(sector, [])
+        top_driver = Counter(drivers).most_common(1)[0][0] if drivers else "N/A"
+        label = (
+            "strongly_bearish"
+            if med <= -0.6
+            else "bearish"
+            if med <= -0.2
+            else "neutral"
+            if med <= 0.2
+            else "bullish"
+            if med <= 0.6
+            else "strongly_bullish"
+        )
+        lines.append(f"- {sector}: {label} (median {med:+.2f}, n={len(scores)}) — {top_driver}")
+
+    return "\n".join(lines)
 
 
 def _determine_mode(

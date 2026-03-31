@@ -671,6 +671,131 @@ async def fetch_market_movers(
         return []
 
 
+class FmpQuote(BaseModel):
+    """Basic quote data from FMP (used for VIX and similar indices)."""
+
+    symbol: str = ""
+    price: float | None = None
+    changesPercentage: float | None = None
+    change: float | None = None
+    dayLow: float | None = None
+    dayHigh: float | None = None
+    previousClose: float | None = None
+
+
+_VIX_LABELS: list[tuple[float, str]] = [
+    (15.0, "calm"),
+    (20.0, "normal"),
+    (30.0, "elevated"),
+]
+
+
+async def fetch_vix_quote() -> tuple[float | None, str]:
+    """Fetch the current VIX quote and map to a human-readable label.
+
+    Returns:
+        Tuple of (VIX value or None, label string).
+        Label is one of ``"calm"``, ``"normal"``, ``"elevated"``, ``"fear"``.
+    """
+    try:
+        data = await _fmp_get("quote", {"symbol": "^VIX"})
+        if isinstance(data, list) and data:
+            quote = FmpQuote.model_validate(data[0])
+            vix = quote.price
+            if vix is None:
+                return None, "unknown"
+            label = "fear"
+            for threshold, lbl in _VIX_LABELS:
+                if vix < threshold:
+                    label = lbl
+                    break
+            return vix, label
+        return None, "unknown"
+    except Exception as exc:
+        logger.warning("Failed to fetch VIX quote: %s", exc)
+        return None, "unknown"
+
+
+async def fetch_technical_indicator(
+    symbol: str,
+    timeframe: str = "daily",
+    indicator_type: str = "rsi",
+    period: int = 14,
+) -> float | None:
+    """Fetch a single technical indicator value for a symbol.
+
+    Uses the FMP ``/api/v3/technical_indicator/{timeframe}/{symbol}`` endpoint.
+
+    Args:
+        symbol: Stock ticker symbol (e.g. ``"AAPL"``).
+        timeframe: Chart timeframe (``"daily"``, ``"1hour"``, ``"4hour"``).
+        indicator_type: Indicator type (``"rsi"``, ``"sma"``, ``"ema"``).
+        period: Lookback period for the indicator.
+
+    Returns:
+        Most recent indicator value, or ``None`` if unavailable.
+    """
+    api_key = _get_api_key()
+    url = (
+        f"https://financialmodelingprep.com/api/v3/technical_indicator/"
+        f"{timeframe}/{symbol}"
+    )
+    params = {"type": indicator_type, "period": period, "apikey": api_key}
+    try:
+        async with _semaphore, httpx.AsyncClient(timeout=FMP_TIMEOUT) as client:
+            response = await client.get(url, params=params)
+            response.raise_for_status()
+            data = response.json()
+        if isinstance(data, list) and data:
+            return data[0].get(indicator_type)
+    except Exception as exc:
+        logger.debug("Failed to fetch %s for %s: %s", indicator_type, symbol, exc)
+    return None
+
+
+async def filter_by_rsi(
+    stocks: list[FmpEnrichedStock],
+    strategy_type: str,
+    max_check: int = 20,
+) -> list[FmpEnrichedStock]:
+    """Filter stocks by RSI to reject technically invalid candidates.
+
+    For momentum strategies: rejects overbought (RSI > 75).
+    For mean-reversion strategies: rejects oversold (RSI < 30).
+
+    Args:
+        stocks: Pre-scored list of enriched stocks (top N).
+        strategy_type: Strategy type string (e.g. ``"momentum"``, ``"mean_reversion"``).
+        max_check: Maximum number of candidates to RSI-check.
+
+    Returns:
+        Filtered list with technically invalid candidates removed.
+    """
+    candidates = stocks[:max_check]
+    if not candidates:
+        return stocks
+
+    rsi_tasks = [fetch_technical_indicator(s.symbol) for s in candidates]
+    rsi_values = await asyncio.gather(*rsi_tasks)
+
+    passed: list[FmpEnrichedStock] = []
+    for stock, rsi in zip(candidates, rsi_values, strict=False):
+        if rsi is None:
+            passed.append(stock)
+            continue
+        if strategy_type == "momentum" and rsi > 75:
+            logger.info("RSI filter: rejecting %s (RSI=%.1f, overbought for momentum)", stock.symbol, rsi)
+            continue
+        if strategy_type == "mean_reversion" and rsi < 30:
+            logger.info("RSI filter: rejecting %s (RSI=%.1f, oversold for mean-reversion)", stock.symbol, rsi)
+            continue
+        passed.append(stock)
+
+    remaining = stocks[max_check:]
+    logger.info("RSI pre-filter: %d → %d candidates", len(candidates), len(passed))
+    return passed + remaining
+
+
 async def fetch_sector_performance() -> list[FmpSectorPerformance]:
     """Fetch current sector performance snapshot.
 
@@ -1260,6 +1385,51 @@ def compute_composite_scores(
     return stocks
 
 
+REGIME_WEIGHT_DELTAS: dict[str, dict[str, float]] = {
+    "trending_bull": {"momentum": 15.0, "sentiment": 5.0, "fundamental": -10.0, "quality": -10.0},
+    "trending_bear": {"quality": 15.0, "fundamental": 10.0, "momentum": -15.0, "sentiment": -10.0},
+    "range_bound": {"fundamental": 10.0, "quality": 5.0, "momentum": -10.0, "sentiment": -5.0},
+    "high_volatility": {"quality": 20.0, "fundamental": 5.0, "momentum": -15.0, "sentiment": -10.0},
+    "risk_off": {"quality": 20.0, "fundamental": 10.0, "momentum": -20.0, "sentiment": -10.0},
+    "sector_rotation": {"momentum": 10.0, "sentiment": 10.0, "fundamental": -10.0, "quality": -10.0},
+}
+
+
+def apply_regime_weight_adjustments(
+    config: FmpScreenerConfig,
+    regime_type: str,
+) -> FmpScreenerConfig:
+    """Apply regime-based weight adjustments to an FMP screener config.
+
+    Adjusts the strategy's scoring weights based on the current market regime.
+    For example, in a ``risk_off`` regime, quality weight increases while
+    momentum weight decreases.
+
+    Args:
+        config: Original FMP screener config (not mutated).
+        regime_type: Regime classification string from the regime classifier.
+
+    Returns:
+        New FmpScreenerConfig with adjusted weights.
+    """
+    deltas = REGIME_WEIGHT_DELTAS.get(regime_type)
+    if not deltas:
+        return config
+
+    data = config.model_dump()
+    base_fundamental = data.get("weight_fundamental") or 25.0
+    base_momentum = data.get("weight_momentum") or 25.0
+    base_sentiment = data.get("weight_sentiment") or 25.0
+    base_quality = data.get("weight_quality") or 25.0
+
+    data["weight_fundamental"] = max(5.0, base_fundamental + deltas.get("fundamental", 0))
+    data["weight_momentum"] = max(5.0, base_momentum + deltas.get("momentum", 0))
+    data["weight_sentiment"] = max(5.0, base_sentiment + deltas.get("sentiment", 0))
+    data["weight_quality"] = max(5.0, base_quality + deltas.get("quality", 0))
+
+    return FmpScreenerConfig.model_validate(data)
+
+
 def _apply_sector_cap(
     stocks: list[FmpEnrichedStock],
     max_per_sector: int,
@@ -1575,6 +1745,8 @@ async def screen_stocks_from_params(
     require_insider_buying: bool = False,
     rvol_min: float | None = None,
     earnings_within_days: int | None = None,
+    altman_z_min: float | None = None,
+    is_etf: bool | None = None,
     enrich_with_ratios: bool = False,
 ) -> list[dict[str, Any]]:
     """Screen stocks or crypto from raw parameters (used by Perplexity tool calls).
@@ -1613,6 +1785,7 @@ async def screen_stocks_from_params(
     config = FmpScreenerConfig(
         enabled=True,
         is_crypto=is_crypto,
+        is_etf=is_etf if is_etf is not None else False,
         country=country,
         exchange=exchange,
         sector=sector,
@@ -1629,6 +1802,7 @@ async def screen_stocks_from_params(
         roe_min=roe_min,
         debt_equity_max=debt_equity_max,
         piotroski_min=piotroski_min,
+        altman_z_min=altman_z_min,
         require_insider_buying=require_insider_buying,
         rvol_min=rvol_min,
         earnings_within_days=earnings_within_days,
