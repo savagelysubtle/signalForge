@@ -44,6 +44,9 @@ def _build_status(
         outcome_exit_reason=out.get("exit_reason") or "" if out else "",
         outcome_notes=out.get("notes") or "" if out else "",
         outcome_logged_at=str(out["logged_at"]) if out else None,
+        outcome_source=out.get("source") or "manual" if out else "manual",
+        outcome_commission=out.get("commission") if out else None,
+        outcome_net_pnl=out.get("net_pnl") if out else None,
     )
 
 
@@ -96,7 +99,7 @@ async def list_recommendations(
         out_resp = (
             await client.table("outcomes")
             .select(
-                "id, recommendation_id, entry_price, exit_price, shares, pnl_dollars, pnl_percent, holding_days, exit_reason, notes, logged_at"
+                "id, recommendation_id, entry_price, exit_price, shares, pnl_dollars, pnl_percent, holding_days, exit_reason, notes, logged_at, source, commission, net_pnl"
             )
             .eq("user_id", user_id)
             .in_("recommendation_id", rec_ids)
@@ -142,7 +145,7 @@ async def get_recommendation_status(
         out_resp = (
             await client.table("outcomes")
             .select(
-                "id, recommendation_id, entry_price, exit_price, shares, pnl_dollars, pnl_percent, holding_days, exit_reason, notes, logged_at"
+                "id, recommendation_id, entry_price, exit_price, shares, pnl_dollars, pnl_percent, holding_days, exit_reason, notes, logged_at, source, commission, net_pnl"
             )
             .eq("recommendation_id", recommendation_id)
             .eq("user_id", user_id)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
@@ -11,6 +12,35 @@ from middleware.auth import CurrentUser
 from pipeline.schemas import OutcomeCreate, OutcomeResponse
 
 router = APIRouter(prefix="/outcomes", tags=["outcomes"])
+
+
+def _build_outcome_response(o: dict[str, Any]) -> OutcomeResponse:
+    """Build an OutcomeResponse from a raw database row dict."""
+    return OutcomeResponse(
+        id=o["id"],
+        user_id=o["user_id"],
+        decision_id=o["decision_id"],
+        recommendation_id=o["recommendation_id"],
+        ticker=o["ticker"],
+        entry_price=o.get("entry_price"),
+        exit_price=o.get("exit_price"),
+        shares=o.get("shares"),
+        pnl_dollars=o.get("pnl_dollars"),
+        pnl_percent=o.get("pnl_percent"),
+        holding_days=o.get("holding_days"),
+        exit_reason=o.get("exit_reason") or "",
+        notes=o.get("notes") or "",
+        logged_at=str(o["logged_at"]),
+        source=o.get("source") or "manual",
+        brokerage_order_id=o.get("brokerage_order_id"),
+        commission=o.get("commission"),
+        fees=o.get("fees"),
+        currency=o.get("currency"),
+        gross_pnl=o.get("gross_pnl"),
+        net_pnl=o.get("net_pnl"),
+        entry_timestamp=str(o["entry_timestamp"]) if o.get("entry_timestamp") else None,
+        exit_timestamp=str(o["exit_timestamp"]) if o.get("exit_timestamp") else None,
+    )
 
 
 @router.post(
@@ -79,28 +109,22 @@ async def create_outcome(
         "holding_days": body.holding_days,
         "exit_reason": body.exit_reason,
         "notes": body.notes,
+        "source": body.source,
+        "brokerage_order_id": body.brokerage_order_id,
+        "commission": body.commission,
+        "fees": body.fees,
+        "currency": body.currency,
+        "gross_pnl": body.gross_pnl,
+        "net_pnl": body.net_pnl,
+        "entry_timestamp": body.entry_timestamp,
+        "exit_timestamp": body.exit_timestamp,
     }
     await client.table("outcomes").insert(row).execute()
 
     inserted = await client.table("outcomes").select("*").eq("id", outcome_id).single().execute()
     o = inserted.data
 
-    return OutcomeResponse(
-        id=o["id"],
-        user_id=o["user_id"],
-        decision_id=o["decision_id"],
-        recommendation_id=o["recommendation_id"],
-        ticker=o["ticker"],
-        entry_price=o.get("entry_price"),
-        exit_price=o.get("exit_price"),
-        shares=o.get("shares"),
-        pnl_dollars=o.get("pnl_dollars"),
-        pnl_percent=o.get("pnl_percent"),
-        holding_days=o.get("holding_days"),
-        exit_reason=o.get("exit_reason") or "",
-        notes=o.get("notes") or "",
-        logged_at=str(o["logged_at"]),
-    )
+    return _build_outcome_response(o)
 
 
 @router.put("/{outcome_id}", response_model=OutcomeResponse)
@@ -132,28 +156,22 @@ async def update_outcome(
         "holding_days": body.holding_days,
         "exit_reason": body.exit_reason,
         "notes": body.notes,
+        "source": body.source,
+        "brokerage_order_id": body.brokerage_order_id,
+        "commission": body.commission,
+        "fees": body.fees,
+        "currency": body.currency,
+        "gross_pnl": body.gross_pnl,
+        "net_pnl": body.net_pnl,
+        "entry_timestamp": body.entry_timestamp,
+        "exit_timestamp": body.exit_timestamp,
     }
     await client.table("outcomes").update(updates).eq("id", outcome_id).execute()
 
     updated = await client.table("outcomes").select("*").eq("id", outcome_id).single().execute()
     o = updated.data
 
-    return OutcomeResponse(
-        id=o["id"],
-        user_id=o["user_id"],
-        decision_id=o["decision_id"],
-        recommendation_id=o["recommendation_id"],
-        ticker=o["ticker"],
-        entry_price=o.get("entry_price"),
-        exit_price=o.get("exit_price"),
-        shares=o.get("shares"),
-        pnl_dollars=o.get("pnl_dollars"),
-        pnl_percent=o.get("pnl_percent"),
-        holding_days=o.get("holding_days"),
-        exit_reason=o.get("exit_reason") or "",
-        notes=o.get("notes") or "",
-        logged_at=str(o["logged_at"]),
-    )
+    return _build_outcome_response(o)
 
 
 @router.get("", response_model=list[OutcomeResponse])
@@ -174,22 +192,4 @@ async def list_outcomes(
         .execute()
     )
 
-    return [
-        OutcomeResponse(
-            id=o["id"],
-            user_id=o["user_id"],
-            decision_id=o["decision_id"],
-            recommendation_id=o["recommendation_id"],
-            ticker=o["ticker"],
-            entry_price=o.get("entry_price"),
-            exit_price=o.get("exit_price"),
-            shares=o.get("shares"),
-            pnl_dollars=o.get("pnl_dollars"),
-            pnl_percent=o.get("pnl_percent"),
-            holding_days=o.get("holding_days"),
-            exit_reason=o.get("exit_reason") or "",
-            notes=o.get("notes") or "",
-            logged_at=str(o["logged_at"]),
-        )
-        for o in resp.data
-    ]
+    return [_build_outcome_response(o) for o in resp.data]
