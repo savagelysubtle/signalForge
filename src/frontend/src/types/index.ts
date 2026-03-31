@@ -75,15 +75,33 @@ export interface NewsCatalyst {
   url: string;
   impact: "positive" | "negative" | "neutral";
   significance: "high" | "medium" | "low";
+  published_date: string;
+  hours_ago: number | null;
+}
+
+export type SentimentBucket =
+  | "strongly_bearish"
+  | "bearish"
+  | "mildly_bearish"
+  | "neutral"
+  | "mildly_bullish"
+  | "bullish"
+  | "strongly_bullish";
+
+export interface SectorSentiment {
+  label: "strongly_bearish" | "bearish" | "neutral" | "bullish" | "strongly_bullish";
+  score: number; // -1.0 to 1.0
+  key_driver: string;
 }
 
 export interface SentimentAnalysis {
   ticker: string;
   sentiment_score: number; // -1.0 to 1.0
   sentiment_label: "strongly_bearish" | "bearish" | "neutral" | "bullish" | "strongly_bullish";
+  sentiment_bucket: SentimentBucket;
   key_catalysts: NewsCatalyst[];
   news_recency: string;
-  sector_sentiment: string;
+  sector_sentiment: SectorSentiment;
   summary: string;
 }
 
@@ -103,7 +121,7 @@ export interface DebateCase {
 export interface Recommendation {
   id: string;
   ticker: string;
-  action: "BUY" | "SELL" | "HOLD";
+  action: "BUY" | "SHORT" | "HOLD";
   confidence: number; // 0.0 to 1.0
   entry_price: number | null;
   stop_loss: number | null;
@@ -116,6 +134,8 @@ export interface Recommendation {
   judge_reasoning: string;
   key_factors: string[];
   warnings: string[];
+  risk_violations: string[];
+  risk_approved: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -164,6 +184,20 @@ export interface PipelineRunSummary {
   started_at: string;
   duration_seconds: number | null;
   tickers: string[];
+}
+
+export interface StageProgress {
+  stage: string;
+  label: string;
+  status: 'pending' | 'running' | 'done' | 'error' | 'skipped';
+  count: number;
+}
+
+export interface PipelineProgress {
+  run_id: string;
+  run_status: string;
+  elapsed_seconds: number | null;
+  stages: StageProgress[];
 }
 
 // ---------------------------------------------------------------------------
@@ -318,6 +352,15 @@ export interface OutcomeCreate {
   holding_days?: number | null;
   exit_reason?: string;
   notes?: string;
+  source?: string;
+  brokerage_order_id?: string | null;
+  commission?: number | null;
+  fees?: number | null;
+  currency?: string | null;
+  gross_pnl?: number | null;
+  net_pnl?: number | null;
+  entry_timestamp?: string | null;
+  exit_timestamp?: string | null;
 }
 
 export interface OutcomeResponse {
@@ -335,6 +378,15 @@ export interface OutcomeResponse {
   exit_reason: string;
   notes: string;
   logged_at: string;
+  source: string;
+  brokerage_order_id: string | null;
+  commission: number | null;
+  fees: number | null;
+  currency: string | null;
+  gross_pnl: number | null;
+  net_pnl: number | null;
+  entry_timestamp: string | null;
+  exit_timestamp: string | null;
 }
 
 export interface ReflectionResponse {
@@ -378,7 +430,7 @@ export interface RecommendationWithStatus {
   id: string;
   run_id: string;
   ticker: string;
-  action: "BUY" | "SELL" | "HOLD";
+  action: "BUY" | "SHORT" | "HOLD";
   confidence: number;
   entry_price: number | null;
   stop_loss: number | null;
@@ -401,6 +453,71 @@ export interface RecommendationWithStatus {
   outcome_exit_reason: string;
   outcome_notes: string;
   outcome_logged_at: string | null;
+  outcome_source: string;
+  outcome_commission: number | null;
+  outcome_net_pnl: number | null;
+}
+
+// ---------------------------------------------------------------------------
+// Brokerage Integration
+// ---------------------------------------------------------------------------
+
+export interface BrokerageConnectRequest {
+  refresh_token: string;
+  is_practice: boolean;
+}
+
+export interface BrokerageConnectResponse {
+  connected: boolean;
+  accounts: Array<{
+    type: string;
+    number: string;
+    status: string;
+    isPrimary: boolean;
+    clientAccountType: string;
+  }>;
+}
+
+export interface BrokerageAuthorizeResponse {
+  url: string | null;
+  oauth_enabled: boolean;
+}
+
+export interface BrokerageStatus {
+  connected: boolean;
+  account_id: string | null;
+  account_type: string | null;
+  is_practice: boolean;
+  connected_at: string | null;
+  updated_at: string | null;
+}
+
+export interface BrokerageAccount {
+  type: string;
+  number: string;
+  status: string;
+  isPrimary: boolean;
+  clientAccountType: string;
+}
+
+export interface PendingMatch {
+  id: string;
+  recommendation_id: string;
+  questrade_order_id: string;
+  ticker: string;
+  side: string;
+  avg_price: number;
+  total_shares: number;
+  total_commission: number;
+  currency: string;
+  executed_at: string;
+  match_score: number;
+  match_reason: string;
+  status: string;
+  rec_ticker: string;
+  rec_action: string;
+  rec_confidence: number;
+  rec_entry_price: number | null;
 }
 
 // ---------------------------------------------------------------------------

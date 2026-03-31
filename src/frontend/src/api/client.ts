@@ -2,6 +2,7 @@ import { supabase } from "../lib/supabase";
 import type {
   PipelineResult,
   PipelineRunSummary,
+  PipelineProgress,
   StrategyConfig,
   ApiKeyStatus,
   ScreenerOverrides,
@@ -12,9 +13,14 @@ import type {
   ReflectionResponse,
   PerformanceOverview,
   RecommendationWithStatus,
+  BrokerageAuthorizeResponse,
+  BrokerageConnectResponse,
+  BrokerageStatus,
+  BrokerageAccount,
+  PendingMatch,
 } from "../types";
 
-const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8420";
+const BASE_URL = import.meta.env.VITE_API_URL || "";
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
@@ -58,6 +64,8 @@ export const api = {
     }),
   getPipelineResult: (runId: string) =>
     request<PipelineResult>(`/api/pipeline/status/${runId}`),
+  getPipelineProgress: (runId: string) =>
+    request<PipelineProgress>(`/api/pipeline/progress/${runId}`),
   listPipelineRuns: () =>
     request<PipelineRunSummary[]>("/api/pipeline/runs"),
 
@@ -125,6 +133,51 @@ export const api = {
   triggerReflection: () =>
     request<ReflectionResponse>("/api/insights/reflect", { method: "POST" }),
   getLatestReflection: () => request<ReflectionResponse>("/api/insights/reflections/latest"),
+
+  // Brokerage
+  getBrokerageAuthorizeUrl: (redirectUri: string, isPractice = false, state = "") => {
+    const params = new URLSearchParams({
+      redirect_uri: redirectUri,
+      is_practice: String(isPractice),
+      ...(state ? { state } : {}),
+    });
+    return request<BrokerageAuthorizeResponse>(`/api/brokerage/authorize-url?${params}`);
+  },
+  connectBrokerageOAuth: (body: { code: string; redirect_uri: string; is_practice: boolean }) =>
+    request<BrokerageConnectResponse>("/api/brokerage/connect-oauth", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  connectBrokerage: (body: { refresh_token: string; is_practice: boolean }) =>
+    request<BrokerageConnectResponse>("/api/brokerage/connect", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  disconnectBrokerage: () =>
+    request<void>("/api/brokerage/disconnect", { method: "DELETE" }),
+  getBrokerageStatus: () =>
+    request<BrokerageStatus>("/api/brokerage/status"),
+  getBrokerageAccounts: () =>
+    request<BrokerageAccount[]>("/api/brokerage/accounts"),
+  selectBrokerageAccount: (body: { account_id: string; account_type: string }) =>
+    request<void>("/api/brokerage/select-account", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  syncTrades: (daysBack = 30) =>
+    request<PendingMatch[]>("/api/brokerage/sync", {
+      method: "POST",
+      body: JSON.stringify({ days_back: daysBack }),
+    }),
+  getPendingMatches: () =>
+    request<PendingMatch[]>("/api/brokerage/pending-matches"),
+  confirmMatch: (matchId: string) =>
+    request<void>("/api/brokerage/confirm-match", {
+      method: "POST",
+      body: JSON.stringify({ match_id: matchId }),
+    }),
+  rejectMatch: (matchId: string) =>
+    request<void>(`/api/brokerage/reject-match/${matchId}`, { method: "DELETE" }),
 
   // Settings
   getApiKeyStatus: () =>

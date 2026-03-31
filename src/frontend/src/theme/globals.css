@@ -19,9 +19,9 @@
   --color-border-strong: #3a4258;
 
   /* === Text === */
-  --color-text-primary: #e8ecf4;
-  --color-text-secondary: #8b95aa;
-  --color-text-muted: #505a6e;
+  --color-text-primary: #ffffff;
+  --color-text-secondary: #e8ecf4;
+  --color-text-muted: #6b7590;
 
   /* === Signal Accents === */
   --color-accent-profit: #00e59b;
@@ -57,9 +57,9 @@
   --border-subtle: #1e2433;
   --border-gutter: #2a3040;
   --border-strong: #3a4258;
-  --text-primary: #e8ecf4;
-  --text-secondary: #8b95aa;
-  --text-muted: #505a6e;
+  --text-primary: #ffffff;
+  --text-secondary: #e8ecf4;
+  --text-muted: #6b7590;
   --accent-profit: #00e59b;
   --accent-loss: #ff3b5c;
   --accent-signal: #4d8dff;
