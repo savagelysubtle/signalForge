@@ -571,6 +571,7 @@ class StrategyConfig(BaseModel):
 
     # Metadata
     is_template: bool = False
+    recommended: bool = False
 
 
 # ---------------------------------------------------------------------------

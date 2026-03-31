@@ -17,6 +17,7 @@
     "risk_params": {"max_position_pct": 5.0, "min_risk_reward": 2.0, "max_portfolio_risk_pct": 15.0},
     "enable_debate": true,
     "is_template": true,
+    "recommended": true,
     "fmp_screener": {
       "enabled": true,
       "country": "CA",
@@ -57,6 +58,7 @@
     "risk_params": {"max_position_pct": 8.0, "min_risk_reward": 1.5, "max_portfolio_risk_pct": 20.0},
     "enable_debate": true,
     "is_template": true,
+    "recommended": true,
     "fmp_screener": {
       "enabled": true,
       "country": "CA",
@@ -142,6 +144,7 @@
     "risk_params": {"max_position_pct": 3.0, "min_risk_reward": 2.0, "max_portfolio_risk_pct": 10.0},
     "enable_debate": true,
     "is_template": true,
+    "recommended": true,
     "fmp_screener": {
       "enabled": true,
       "country": "CA",
@@ -249,6 +252,7 @@
     "risk_params": {"max_position_pct": 3.0, "min_risk_reward": 2.0, "max_portfolio_risk_pct": 8.0},
     "enable_debate": false,
     "is_template": true,
+    "recommended": true,
     "fmp_screener": {
       "enabled": true,
       "country": "CA",

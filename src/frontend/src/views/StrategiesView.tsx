@@ -1,5 +1,5 @@
 import { useStrategies } from '../hooks/useStrategies';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Star } from 'lucide-react';
 import { motion } from 'motion/react';
 
 type TradingStyleLabel = 'Intraday' | 'Swing Trade' | 'Position' | 'Event-Driven';
@@ -47,7 +47,7 @@ export function StrategiesView() {
                 initial={{ opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.3, delay: i * 0.05, ease: 'easeOut' }}
-                className="bg-bg-asphalt border border-border-gutter rounded-lg p-5 hover:border-border-strong transition-colors"
+                className={`bg-bg-asphalt border rounded-lg p-5 transition-colors ${template.recommended ? 'border-accent-alert/40 hover:border-accent-alert/60' : 'border-border-gutter hover:border-border-strong'}`}
               >
                 <div className="flex items-center gap-2 mb-2">
                   <h3 className="text-lg font-display font-bold text-text-primary">{template.name}</h3>
@@ -59,6 +59,9 @@ export function StrategiesView() {
                       </span>
                     );
                   })()}
+                  {template.recommended && (
+                    <Star className="w-3.5 h-3.5 text-accent-alert fill-accent-alert shrink-0" />
+                  )}
                 </div>
                 <p className="text-sm text-text-secondary mb-4 h-10 line-clamp-2 font-body">{template.description}</p>
                 <div className="flex flex-wrap gap-2 text-xs">
@@ -86,7 +89,7 @@ export function StrategiesView() {
                 initial={{ opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.3, delay: i * 0.05, ease: 'easeOut' }}
-                className="bg-bg-asphalt border border-border-gutter rounded-lg p-5 hover:border-border-strong transition-colors"
+                className={`bg-bg-asphalt border rounded-lg p-5 transition-colors ${strategy.recommended ? 'border-accent-alert/40 hover:border-accent-alert/60' : 'border-border-gutter hover:border-border-strong'}`}
               >
                 <div className="flex items-center gap-2 mb-2">
                   <h3 className="text-lg font-display font-bold text-text-primary">{strategy.name}</h3>
@@ -98,6 +101,9 @@ export function StrategiesView() {
                       </span>
                     );
                   })()}
+                  {strategy.recommended && (
+                    <Star className="w-3.5 h-3.5 text-accent-alert fill-accent-alert shrink-0" />
+                  )}
                 </div>
                 <p className="text-sm text-text-secondary mb-4 h-10 line-clamp-2 font-body">{strategy.description}</p>
                 <div className="flex flex-wrap gap-2 text-xs">

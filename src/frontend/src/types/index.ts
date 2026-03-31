@@ -318,6 +318,7 @@ export interface StrategyConfig {
   risk_params: RiskParams;
   enable_debate: boolean;
   is_template: boolean;
+  recommended?: boolean;
 }
 
 // ---------------------------------------------------------------------------
