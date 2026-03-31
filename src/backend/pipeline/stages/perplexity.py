@@ -47,7 +47,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-AGENT_MODEL = "perplexity/sonar-pro"
+AGENT_MODEL = "openai/gpt-5.4"
 MAX_RETRIES = 2
 MAX_TOOL_ROUNDS = 3
 
@@ -407,7 +407,7 @@ async def _call_agent_api(
         system_prompt: System instructions defining output format.
         user_prompt: User prompt (search-query-style or detailed).
         tools: Tool definitions for the ``tools`` parameter.
-        model: Model identifier (e.g. ``"perplexity/sonar-pro"``).
+        model: Model identifier (e.g. ``"openai/gpt-5.4"``).
         response_format: Optional structured output spec (json_schema).
         search_mode: Optional search mode (e.g. ``"sec"`` for SEC filings).
 
@@ -609,9 +609,63 @@ def _build_dynamic_system_prompt(config: StrategyConfig | None) -> str:
 
 _SEC_STRATEGY_TYPES = frozenset({"event", "value"})
 
+
+def _openai_strict_schema(model: type) -> dict[str, Any]:
+    """Build a fully inlined, OpenAI-strict-mode-compliant JSON schema.
+
+    Pydantic's ``model_json_schema()`` produces ``$defs``/``$ref`` for nested
+    models and omits ``additionalProperties`` and full ``required`` arrays.
+    Perplexity's Agent API may silently accept ``$ref`` schemas but fail to
+    build the constrained-decoding grammar, causing the model to output prose.
+
+    This function:
+    1. Resolves all ``$ref`` pointers (fully inlines nested definitions).
+    2. Removes ``$defs`` from the final output.
+    3. Adds ``additionalProperties: false`` to every object.
+    4. Sets ``required`` to include **all** property keys.
+    5. Strips ``title`` and ``default`` keywords unsupported by strict mode.
+    """
+    raw = model.model_json_schema()
+    defs: dict[str, Any] = raw.pop("$defs", {})
+
+    def _resolve(node: dict[str, Any]) -> dict[str, Any]:
+        """Recursively resolve $ref and enforce strict constraints."""
+        if "$ref" in node:
+            ref_name = node["$ref"].rsplit("/", 1)[-1]
+            if ref_name in defs:
+                return _resolve(dict(defs[ref_name]))
+            return node
+
+        out: dict[str, Any] = {}
+        for key, val in node.items():
+            if key in ("title", "default", "$defs"):
+                continue
+            if key == "properties" and isinstance(val, dict):
+                out["properties"] = {k: _resolve(v) for k, v in val.items()}
+            elif key in ("items",) and isinstance(val, dict):
+                out[key] = _resolve(val)
+            elif key in ("allOf", "anyOf", "oneOf") and isinstance(val, list):
+                out[key] = [_resolve(v) if isinstance(v, dict) else v for v in val]
+            else:
+                out[key] = val
+
+        if out.get("type") == "object" or "properties" in out:
+            out["additionalProperties"] = False
+            if "properties" in out:
+                out["required"] = sorted(out["properties"].keys())
+
+        return out
+
+    return _resolve(raw)
+
+
 _RESPONSE_FORMAT: dict[str, Any] = {
     "type": "json_schema",
-    "json_schema": {"schema": ScreeningResult.model_json_schema()},
+    "json_schema": {
+        "name": "ScreeningResult",
+        "strict": True,
+        "schema": _openai_strict_schema(ScreeningResult),
+    },
 }
 
 

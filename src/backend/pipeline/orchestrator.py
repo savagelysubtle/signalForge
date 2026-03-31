@@ -200,19 +200,44 @@ async def run_pipeline(
         fmp_key = get_api_key("fmp")
         if fmp_key:
             try:
+                fmp_start = time.perf_counter()
                 fmp_candidates = await asyncio.wait_for(
                     screen_and_enrich(config.fmp_screener),
                     timeout=STAGE_TIMEOUTS["fmp"],
                 )
+                fmp_elapsed_ms = int((time.perf_counter() - fmp_start) * 1000)
                 logger.info(
                     "FMP pre-screened %d candidates for strategy '%s'",
                     len(fmp_candidates),
                     config.name,
                 )
+                await _save_stage_output(
+                    run_id,
+                    {
+                        "stage": "fmp",
+                        "status": "success",
+                        "model": "fmp-api",
+                        "duration_ms": fmp_elapsed_ms,
+                        "raw_response": json.dumps(
+                            [c.model_dump(mode="json") for c in fmp_candidates]
+                        ),
+                    },
+                )
             except TimeoutError:
                 logger.error("FMP stage timed out after %ss", STAGE_TIMEOUTS["fmp"])
                 result.stage_errors.append(
                     {"stage": "fmp", "error": "Stage timed out", "type": "TimeoutError"}
+                )
+                await _save_stage_output(
+                    run_id,
+                    {
+                        "stage": "fmp",
+                        "status": "error",
+                        "model": "fmp-api",
+                        "duration_ms": 0,
+                        "raw_response": "",
+                        "error": "Stage timed out",
+                    },
                 )
             except Exception as exc:
                 logger.warning("FMP screening failed, continuing without: %s", exc)
@@ -223,8 +248,40 @@ async def run_pipeline(
                         "type": type(exc).__name__,
                     }
                 )
+                await _save_stage_output(
+                    run_id,
+                    {
+                        "stage": "fmp",
+                        "status": "error",
+                        "model": "fmp-api",
+                        "duration_ms": 0,
+                        "raw_response": "",
+                        "error": str(exc),
+                    },
+                )
         else:
             logger.info("FMP_API_KEY not set, skipping FMP pre-screening")
+            await _save_stage_output(
+                run_id,
+                {
+                    "stage": "fmp",
+                    "status": "skipped",
+                    "model": "fmp-api",
+                    "duration_ms": 0,
+                    "raw_response": "FMP_API_KEY not configured",
+                },
+            )
+    else:
+        await _save_stage_output(
+            run_id,
+            {
+                "stage": "fmp",
+                "status": "skipped",
+                "model": "fmp-api",
+                "duration_ms": 0,
+                "raw_response": "FMP pre-screening disabled or not applicable",
+            },
+        )
 
     fmp_map: dict[str, FmpEnrichedStock] = {}
     if fmp_candidates:
@@ -626,6 +683,18 @@ async def run_pipeline(
         except TimeoutError:
             logger.error("Annotate stage timed out after %ss", STAGE_TIMEOUTS["annotate"])
         logger.info("Stage 4.5 annotated charts complete")
+
+        annotated_count = sum(1 for ca in result.chart_analyses if ca.annotated_chart_path)
+        await _save_stage_output(
+            run_id,
+            {
+                "stage": "annotate",
+                "status": "success" if annotated_count > 0 else "error",
+                "model": "chart-img-v2",
+                "duration_ms": 0,
+                "raw_response": f"Annotated {annotated_count}/{len(result.chart_analyses)} charts",
+            },
+        )
 
         # Persist annotated_chart_path back into stage_outputs so it survives reload
         await _update_annotated_paths(client, run_id, result.chart_analyses)

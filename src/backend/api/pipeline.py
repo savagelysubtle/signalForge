@@ -260,6 +260,8 @@ async def get_pipeline_progress(run_id: str, user_id: CurrentUser) -> PipelinePr
     stage_counts: dict[str, dict[str, int]] = {}
     for row in rows:
         s = row.get("stage") or "perplexity"
+        if s.startswith("gpt_"):
+            s = "gpt"
         st = row.get("status") or "unknown"
         if s not in stage_counts:
             stage_counts[s] = {}
@@ -270,6 +272,9 @@ async def get_pipeline_progress(run_id: str, user_id: CurrentUser) -> PipelinePr
             return "pending", 0
         counts = stage_counts[stage_name]
         total = sum(counts.values())
+        skipped = counts.get("skipped", 0)
+        if skipped > 0 and total == skipped:
+            return "skipped", 0
         errors = counts.get("error", 0)
         success = counts.get("success", 0)
         if success > 0 or errors > 0:

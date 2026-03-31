@@ -1,5 +1,5 @@
 import { motion, AnimatePresence } from 'motion/react';
-import { CheckCircle2, Circle, AlertCircle, Loader2 } from 'lucide-react';
+import { CheckCircle2, Circle, AlertCircle, Loader2, MinusCircle } from 'lucide-react';
 import clsx from 'clsx';
 import type { PipelineProgress, StageProgress } from '../../types';
 
@@ -17,6 +17,8 @@ function StageIcon({ status }: { status: StageProgress['status'] }) {
       return <Loader2 className="w-3.5 h-3.5 text-accent-signal shrink-0 animate-spin" />;
     case 'error':
       return <AlertCircle className="w-3.5 h-3.5 text-accent-loss shrink-0" />;
+    case 'skipped':
+      return <MinusCircle className="w-3.5 h-3.5 text-text-muted/50 shrink-0" />;
     default:
       return <Circle className="w-3.5 h-3.5 text-text-muted/30 shrink-0" />;
   }
@@ -24,7 +26,7 @@ function StageIcon({ status }: { status: StageProgress['status'] }) {
 
 export function PipelineProgressBar({ progress, isRunning, runningLabel }: PipelineProgressBarProps) {
   const stages = progress?.stages ?? [];
-  const doneCount = stages.filter((s) => s.status === 'done').length;
+  const doneCount = stages.filter((s) => s.status === 'done' || s.status === 'skipped').length;
   const totalCount = stages.length;
   const pct = totalCount > 0 ? Math.round((doneCount / totalCount) * 100) : 0;
   const connecting = !progress && isRunning;
@@ -96,6 +98,8 @@ export function PipelineProgressBar({ progress, isRunning, runningLabel }: Pipel
                         ? 'border-accent-signal/30 bg-accent-signal/8 text-accent-signal'
                         : stage.status === 'error'
                         ? 'border-accent-loss/20 bg-accent-loss/5 text-accent-loss'
+                        : stage.status === 'skipped'
+                        ? 'border-border-gutter bg-transparent text-text-muted/40 line-through'
                         : 'border-border-gutter bg-transparent text-text-muted/50',
                     )}
                   >
