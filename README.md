@@ -46,7 +46,7 @@ graph TD
 
 The backend uses the **Supabase Python async client** (`create_async_client`) to communicate with Postgres via Supabase's API. This avoids wire-protocol pooler issues on hosts like Railway.
 
-> **Note:** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) describes an older Tauri + SQLite layout in places. Treat this README and the `src/backend` code as the source of truth for the current web deployment.
+> **Note:** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and parts of [`docs/PRD.md`](docs/PRD.md) still reflect an older desktop/SQLite vision. **`CLAUDE.md`** at the repo root is the maintained project handbook (stack, APIs, Insights / trade journal, migrations).
 
 ---
 
@@ -174,6 +174,18 @@ All `/api/*` routes expect an `Authorization: Bearer <Supabase access token>` un
 | `GET` | `/api/strategies/{id}` | One strategy |
 | `POST` | `/api/strategies` | Create strategy |
 | `GET` | `/api/settings/api-keys/status` | Which env keys are set (booleans only) |
+| `POST` | `/api/decisions/recommendations/{id}/decision` | Record follow/pass decision |
+| `GET` | `/api/decisions` | List decisions (filterable) |
+| `GET` | `/api/decisions/{id}` | Single decision |
+| `DELETE` | `/api/decisions/{id}` | Remove decision (cascade-deletes outcome) |
+| `POST` | `/api/outcomes/decisions/{id}/outcome` | Log trade outcome |
+| `PUT` | `/api/outcomes/{id}` | Update outcome |
+| `GET` | `/api/outcomes` | List outcomes |
+| `GET` | `/api/recommendations` | Recommendations with decision/outcome status |
+| `GET` | `/api/recommendations/{id}` | Single rec with status |
+| `GET` | `/api/insights/overview` | Aggregated performance + confidence calibration |
+| `POST` | `/api/insights/reflect` | Generate reflection (requires ≥5 outcomes) |
+| `GET` | `/api/insights/reflections/latest` | Most recent reflection |
 
 </details>
 

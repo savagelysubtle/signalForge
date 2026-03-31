@@ -155,7 +155,7 @@ bun run dev
 
 ## CI/CD
 
-GitHub Actions runs automatically on push to `main` or `feature/cloud-migration`:
+GitHub Actions runs automatically on push to `main` and on PRs to `main`:
 
 - **Backend job:** ruff check, ruff format check, ty type check
 - **Frontend job:** TypeScript check, production build

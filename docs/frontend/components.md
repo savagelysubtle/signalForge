@@ -16,21 +16,23 @@ App
 │       ├── LoginPage                    ← /login
 │       └── ProtectedRoute
 │           └── MainLayout              ← / (all protected routes)
-│               ├── Sidebar
-│               ├── CommandBar
+│               ├── TopBar (nav pill)
 │               └── <Outlet>
 │                   ├── RecommendationsView    ← /
-│                   │   ├── TickerCardList
-│                   │   │   └── TickerCard (×N)
-│                   │   │       └── AssetTypeBadge
-│                   │   └── DetailView (selected ticker)
-│                   │       ├── OverviewTab
-│                   │       │   └── PriceLevelMap
-│                   │       ├── SentimentTab
-│                   │       ├── ChartTab
-│                   │       │   └── TradingViewWidget
-│                   │       ├── SynthesisTab
-│                   │       └── RawTab
+│                   │   ├── SearchScreen (no ?run param)
+│                   │   └── ResultsScreen (?run=<id>)
+│                   │       ├── TickerCardList
+│                   │       │   └── TickerCard (×N)
+│                   │       │       └── AssetTypeBadge
+│                   │       └── DetailView (selected ticker)
+│                   │           ├── OverviewTab
+│                   │           │   └── PriceLevelMap
+│                   │           ├── ChartTab
+│                   │           │   └── TradingViewWidget (built, not rendered)
+│                   │           ├── SentimentTab
+│                   │           ├── SynthesisTab
+│                   │           ├── FeedbackTab
+│                   │           └── RawTab
 │                   ├── HistoryView            ← /history
 │                   ├── StrategiesView         ← /strategies
 │                   ├── InsightsView           ← /insights
@@ -43,12 +45,15 @@ App
 
 ### `MainLayout`
 
-The app shell. Renders a fixed `Sidebar`, a top `CommandBar`, and an
-`<Outlet />` for the active view.
+The app shell. Renders a fixed `TopBar` (horizontal top nav) and an `<Outlet />` for the active view. The legacy `Sidebar` component exists but is not rendered — `TopBar` replaced it.
+
+### `TopBar`
+
+Horizontal navigation bar with logo left, centered nav pill (Dashboard / History / Strategies / Insights / Settings), and user/logout right. Semi-transparent background (`bg-bg-asphalt/80 backdrop-blur-md`). On results screen (`?run=` param), nav is hidden and a "Back to Search" button appears.
 
 ### `Sidebar`
 
-Navigation links to each view. Highlights the active route.
+Legacy navigation sidebar. Exists in code but **not rendered** — replaced by `TopBar`.
 
 ### `CommandBar`
 
@@ -75,7 +80,7 @@ latest pipeline result. Handles the empty state when no pipeline has run.
 Summary card for a single ticker showing:
 - Ticker symbol and company name
 - `AssetTypeBadge` (stock / ETF / crypto)
-- Action badge (BUY / SELL / HOLD)
+- Action badge (BUY / SHORT / HOLD)
 - Confidence score
 - Key metrics (entry, stop loss, take profit)
 
@@ -84,14 +89,15 @@ Clicking a card opens the `DetailView`.
 ### `DetailView`
 
 An expanded panel showing all pipeline data for a selected ticker.
-Uses a tabbed interface:
+Uses a tabbed interface with **6 tabs**:
 
 | Tab | Component | Data Source |
 |-----|-----------|-------------|
 | Overview | `OverviewTab` | Perplexity fundamentals + GPT recommendation |
+| Chart | `ChartTab` | Claude chart analysis + annotated charts (lightbox, ad-hoc fetch) |
 | Sentiment | `SentimentTab` | Gemini sentiment analysis |
-| Chart | `ChartTab` | Claude chart analysis + TradingView widget |
 | Synthesis | `SynthesisTab` | GPT bull/bear/judge debate |
+| Feedback | `FeedbackTab` | Follow/pass decisions, outcome logging, undo |
 | Raw | `RawTab` | Raw JSON for debugging |
 
 ### `OverviewTab`
@@ -115,6 +121,17 @@ Displays Gemini sentiment analysis:
 - Sentiment label (strongly bearish → strongly bullish)
 - Key catalysts with impact and significance badges
 - Sector sentiment summary
+
+### `FeedbackTab`
+
+The 6th detail panel tab. Provides the per-recommendation feedback workflow:
+
+- **Decision section** — "Follow Trade" (instant save) or "Pass" (reason category + notes)
+- **Outcome section** — 6 numeric fields (entry/exit/shares/P&L$/P&L%/hold days) with auto-P&L calculation when entry + exit + shares are all filled; exit reason dropdown
+- **Undo** — delete a decision (cascade-deletes the linked outcome)
+- **Edit** — re-open the outcome form for a closed trade
+
+Fires `notifyFeedbackChanged()` on every mutation so `InsightsView` re-fetches automatically.
 
 ### `ChartTab`
 
@@ -183,7 +200,7 @@ compose smaller components and call hooks for data.
 | `RecommendationsView` | `/` | Main dashboard with ticker cards and detail panel |
 | `HistoryView` | `/history` | List of past pipeline runs with drill-down |
 | `StrategiesView` | `/strategies` | Strategy list, template browser, editor |
-| `InsightsView` | `/insights` | Performance analytics from the reflection engine |
+| `InsightsView` | `/insights` | Trade journal, performance overview, reflection panel, confidence calibration |
 | `SettingsView` | `/settings` | API key status and application configuration |
 
 ---
@@ -209,9 +226,17 @@ Fetches strategy lists.
 - `templates` — built-in templates
 - `isLoading` — boolean loading state
 
-### `useApiKeyStatus`
+### `useInsights`
 
-Checks which API keys are configured on the backend.
+Orchestrates the self-learning feedback loop — fetches performance data, triggers reflections, and records decisions/outcomes.
 
-- `status` — `Record<string, boolean>` key presence map
-- `isLoading` — boolean loading state
+- `overview` — `PerformanceOverview` (win rate, P&L, calibration buckets)
+- `recommendations` — `RecommendationWithStatus[]` (recs enriched with decision + outcome)
+- `reflection` — latest `ReflectionResponse`
+- `isGenerating` — boolean while reflection is being generated
+- `recordDecision(recId, body)` — POST + notify feedbackSync + refetch
+- `logOutcome(decisionId, body)` — POST + notify + refetch
+- `undoDecision(decisionId)` — DELETE + notify + refetch
+- `generateReflection()` — POST to `/api/insights/reflect` (requires ≥5 outcomes)
+
+Listens to `useFeedbackSync` so it auto-refreshes when `FeedbackTab` mutates data.

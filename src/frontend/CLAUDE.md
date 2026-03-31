@@ -133,7 +133,7 @@ Chart-Img images are the centerpiece of the analysis. They must be displayed pro
 
 ### Main Flow (RecommendationsView → `/`)
 - **No `?run` param:** Renders `SearchScreen` — hero landing with input field, strategy cards, run button
-- **With `?run=` param:** Renders `ResultsScreen` — ticker sidebar + DetailView with 5 tabs
+- **With `?run=` param:** Renders `ResultsScreen` — ticker sidebar + DetailView with six tabs
 - Animated transition between states via `motion/react` `AnimatePresence`
 
 ### Views
@@ -142,7 +142,7 @@ Chart-Img images are the centerpiece of the analysis. They must be displayed pro
 | `/` | RecommendationsView (SearchScreen / ResultsScreen) | Active |
 | `/history` | HistoryView | Active |
 | `/strategies` | StrategiesView | Active |
-| `/insights` | InsightsView | Stub — "Coming in Phase 5" |
+| `/insights` | InsightsView | Active — performance overview, trade journal, reflection + calibration |
 | `/settings` | SettingsView | Active |
 | `/login` | LoginPage | Active |
 
@@ -182,9 +182,9 @@ These may be added if they serve the aesthetics directive:
 ## Current State
 
 ### What Exists
-- 5 views: Recommendations (SearchScreen + ResultsScreen), History, Strategies (read-only), Insights (stub), Settings
-- 19 components across layout/, auth/, recommendations/, search/, shared/
-- 3 hooks: usePipeline, useStrategies, useApiKeyStatus
+- 5 views: Recommendations (SearchScreen + ResultsScreen), History, Strategies (read-only), Insights (journal + reflections), Settings
+- Components across layout/, auth/, recommendations/, search/, shared/ (includes `FeedbackTab`, `InsightsView`, progress UI as applicable)
+- 4 hooks: usePipeline, useStrategies, useApiKeyStatus, useInsights
 - 1 utility: classifyInput (auto-detects tickers vs prompts for pipeline mode)
 - Urban Finance design system fully applied
 - Photo background persistent across all views
@@ -193,9 +193,7 @@ These may be added if they serve the aesthetics directive:
 ### Known Issues to Fix
 - No global state — usePipeline instantiated independently by SearchScreen and ResultsScreen
 - No strategy CRUD (read-only grid, no create/edit/delete)
-- InsightsView is a stub
 - ChartTab is large with many inline sub-components — needs decomposition
-- No pipeline polling (assumes synchronous completion)
 - Dead code: Sidebar (replaced by TopBar), App.css (Vite boilerplate), TradingViewWidget (built but unused), tailwind-merge (unused dep)
 - RawTab uses `any` type
 - Some components still have opaque backgrounds that could be made semi-transparent
