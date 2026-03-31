@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { usePipeline } from '../../hooks/usePipeline';
 import { TickerCardList } from '../recommendations/TickerCardList';
 import { DetailView } from '../recommendations/DetailView';
-import { Loader2 } from 'lucide-react';
+import { TabContentSkeleton } from '../shared/Skeleton';
 
 interface ResultsScreenProps {
   runId: string;
@@ -15,6 +15,7 @@ export function ResultsScreen({ runId }: ResultsScreenProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [jumpToRiskTicker, setJumpToRiskTicker] = useState<string | null>(null);
 
   useEffect(() => {
     setIsLoading(true);
@@ -35,11 +36,51 @@ export function ResultsScreen({ runId }: ResultsScreenProps) {
     }
   }, [currentResult, selectedTicker]);
 
+  const handleRiskClick = useCallback((ticker: string) => {
+    setSelectedTicker(ticker);
+    setJumpToRiskTicker(ticker);
+    // Scroll to risk section after a short tick for tab transition
+    setTimeout(() => {
+      document.getElementById('risk-factors')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      setJumpToRiskTicker(null);
+    }, 200);
+  }, []);
+
   if (isRunning || isLoading) {
     return (
-      <div className="flex flex-col items-center justify-center h-full text-text-secondary">
-        <Loader2 className="w-8 h-8 animate-spin mb-4 text-accent-signal" />
-        <p className="font-body">Loading analysis results...</p>
+      <div className="flex flex-col md:flex-row h-full w-full overflow-hidden">
+        {/* Sidebar skeleton */}
+        <div className="hidden md:flex w-80 border-r border-border-subtle bg-bg-asphalt h-full flex-col shrink-0 p-3 space-y-2">
+          <div className="flex items-center justify-between px-1 pb-1">
+            <div className="h-3 w-16 animate-pulse rounded bg-bg-steel" />
+          </div>
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="p-3.5 border border-border-gutter rounded-lg bg-bg-concrete space-y-2.5 animate-pulse">
+              <div className="flex justify-between items-start">
+                <div className="space-y-1.5">
+                  <div className="h-5 w-20 rounded bg-bg-steel" />
+                  <div className="h-3 w-32 rounded bg-bg-steel" />
+                </div>
+                <div className="h-5 w-12 rounded-full bg-bg-steel" />
+              </div>
+              <div className="h-3 w-16 rounded bg-bg-steel" />
+              <div className="h-8 w-full rounded bg-bg-steel" />
+            </div>
+          ))}
+        </div>
+        {/* Detail panel skeleton */}
+        <div className="flex-1 flex flex-col">
+          <div className="px-6 py-4 border-b border-border-gutter bg-bg-asphalt/70 space-y-2">
+            <div className="h-7 w-32 animate-pulse rounded bg-bg-steel" />
+            <div className="h-3 w-48 animate-pulse rounded bg-bg-steel" />
+          </div>
+          <div className="border-b border-border-gutter bg-bg-asphalt px-4 py-3 flex gap-4">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="h-4 w-16 animate-pulse rounded bg-bg-steel" />
+            ))}
+          </div>
+          <TabContentSkeleton />
+        </div>
       </div>
     );
   }
@@ -63,20 +104,28 @@ export function ResultsScreen({ runId }: ResultsScreenProps) {
   const tickers = currentResult.screening?.tickers || [];
   const selectedTickerData = tickers.find(t => t.ticker === selectedTicker);
 
+  const actionMap = Object.fromEntries(
+    (currentResult.recommendations || []).map(r => [r.ticker, r.action])
+  );
+
   return (
-    <div className="flex h-full w-full overflow-hidden">
+    <div className="flex flex-col md:flex-row h-full w-full overflow-hidden">
       <TickerCardList
         tickers={tickers}
         selectedTicker={selectedTicker}
         onSelect={setSelectedTicker}
+        onRiskClick={handleRiskClick}
         collapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed(prev => !prev)}
+        actionMap={actionMap}
       />
 
       {selectedTickerData ? (
         <DetailView
+          key={`${selectedTickerData.ticker}-${jumpToRiskTicker === selectedTickerData.ticker ? 'risk' : 'normal'}`}
           tickerData={selectedTickerData}
           fullResult={currentResult}
+          initialTab={jumpToRiskTicker === selectedTickerData.ticker ? 'overview' : undefined}
         />
       ) : (
         <div className="flex-1 flex items-center justify-center text-text-muted bg-bg-void">

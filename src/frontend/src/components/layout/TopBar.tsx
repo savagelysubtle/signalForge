@@ -28,28 +28,28 @@ export function TopBar() {
           <div className="absolute -inset-2 glow-signal rounded-full opacity-40" />
           <img src={logoIcon} alt="SignalForge" className="w-7 h-7 relative" />
         </div>
-        <span className="font-display font-bold text-text-primary text-sm tracking-tight">
+        <span className="hidden sm:inline font-display font-bold text-text-primary text-sm tracking-tight">
           SignalForge
         </span>
       </NavLink>
 
       {/* Center — Nav links (absolutely centered, hidden on results screen) */}
       {!isResultsScreen && (
-        <nav className="absolute left-1/2 -translate-x-1/2 flex items-center gap-1 bg-bg-concrete/60 backdrop-blur-sm border border-border-subtle rounded-lg px-1.5 py-1">
+        <nav className="absolute left-1/2 -translate-x-1/2 flex items-center gap-0.5 md:gap-1 bg-bg-concrete/60 backdrop-blur-sm border border-border-subtle rounded-lg px-1 md:px-1.5 py-1">
           {navItems.map((item) => (
             <NavLink
               key={item.path}
               to={item.path}
               end={item.end}
               className={({ isActive }) => clsx(
-                "flex items-center gap-2 px-4 py-1.5 rounded-md text-sm font-body transition-colors",
+                "flex items-center gap-2 px-2.5 md:px-4 py-1.5 rounded-md text-sm font-body transition-colors",
                 isActive
                   ? "bg-accent-signal-dim text-accent-signal"
                   : "text-text-muted hover:text-text-primary hover:bg-bg-steel"
               )}
             >
               <item.icon className="w-4 h-4" />
-              {item.label}
+              <span className="hidden md:inline">{item.label}</span>
             </NavLink>
           ))}
         </nav>
@@ -66,13 +66,13 @@ export function TopBar() {
             className="flex items-center gap-1.5 text-sm font-body text-text-secondary hover:text-accent-signal transition-colors px-3 py-1.5 rounded-md hover:bg-bg-steel"
           >
             <ArrowLeft className="w-4 h-4" />
-            Back to Search
+            <span className="hidden sm:inline">Back to Search</span>
           </button>
         )}
 
         {user && (
           <>
-            <span className="text-xs text-text-muted font-body truncate max-w-[180px]">
+            <span className="hidden sm:inline text-xs text-text-muted font-body truncate max-w-[180px]">
               {user.email}
             </span>
             <button

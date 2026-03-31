@@ -2,6 +2,24 @@ import { useStrategies } from '../hooks/useStrategies';
 import { Loader2 } from 'lucide-react';
 import { motion } from 'motion/react';
 
+type TradingStyleLabel = 'Intraday' | 'Swing Trade' | 'Position' | 'Event-Driven';
+
+function getTradingStyleLabel(tradingStyle: string | undefined): TradingStyleLabel {
+  if (!tradingStyle) return 'Swing Trade';
+  const lower = tradingStyle.toLowerCase();
+  if (lower.includes('intraday') || lower.includes('scalp')) return 'Intraday';
+  if (lower.includes('position')) return 'Position';
+  if (lower.includes('event')) return 'Event-Driven';
+  return 'Swing Trade';
+}
+
+const STYLE_COLORS: Record<TradingStyleLabel, string> = {
+  'Intraday': 'text-accent-alert bg-accent-alert/12 border-accent-alert/30',
+  'Swing Trade': 'text-accent-signal bg-accent-signal/12 border-accent-signal/30',
+  'Position': 'text-accent-electric bg-accent-electric/12 border-accent-electric/30',
+  'Event-Driven': 'text-accent-profit bg-accent-profit/12 border-accent-profit/30',
+};
+
 export function StrategiesView() {
   const { templates, strategies, isLoading } = useStrategies();
 
@@ -31,12 +49,22 @@ export function StrategiesView() {
                 transition={{ duration: 0.3, delay: i * 0.05, ease: 'easeOut' }}
                 className="bg-bg-asphalt border border-border-gutter rounded-lg p-5 hover:border-border-strong transition-colors"
               >
-                <h3 className="text-lg font-display font-bold text-text-primary mb-2">{template.name}</h3>
+                <div className="flex items-center gap-2 mb-2">
+                  <h3 className="text-lg font-display font-bold text-text-primary">{template.name}</h3>
+                  {(() => {
+                    const label = getTradingStyleLabel(template.trading_style);
+                    return (
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-display font-bold uppercase tracking-wider border ${STYLE_COLORS[label]}`}>
+                        {label}
+                      </span>
+                    );
+                  })()}
+                </div>
                 <p className="text-sm text-text-secondary mb-4 h-10 line-clamp-2 font-body">{template.description}</p>
                 <div className="flex flex-wrap gap-2 text-xs">
-                  <span className="bg-bg-concrete px-2 py-1 rounded text-text-muted border border-border-subtle font-display">Max Tickers: {template.max_tickers}</span>
-                  <span className="bg-bg-concrete px-2 py-1 rounded capitalize text-text-muted border border-border-subtle font-body">Constraint: {template.constraint_style}</span>
-                  <span className="bg-bg-concrete px-2 py-1 rounded text-text-muted border border-border-subtle font-display">
+                  <span className="bg-bg-concrete px-2 py-1 rounded text-text-secondary border border-border-subtle font-display">Max Tickers: {template.max_tickers}</span>
+                  <span className="bg-bg-concrete px-2 py-1 rounded capitalize text-text-secondary border border-border-subtle font-body">Constraint: {template.constraint_style}</span>
+                  <span className="bg-bg-concrete px-2 py-1 rounded text-text-secondary border border-border-subtle font-display">
                     Charts: {[...new Set([template.chart_timeframe, ...(template.additional_timeframes ?? []), ...(template.short_timeframes ?? [])])].join(' / ')}
                   </span>
                 </div>
@@ -60,12 +88,22 @@ export function StrategiesView() {
                 transition={{ duration: 0.3, delay: i * 0.05, ease: 'easeOut' }}
                 className="bg-bg-asphalt border border-border-gutter rounded-lg p-5 hover:border-border-strong transition-colors"
               >
-                <h3 className="text-lg font-display font-bold text-text-primary mb-2">{strategy.name}</h3>
+                <div className="flex items-center gap-2 mb-2">
+                  <h3 className="text-lg font-display font-bold text-text-primary">{strategy.name}</h3>
+                  {(() => {
+                    const label = getTradingStyleLabel(strategy.trading_style);
+                    return (
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-display font-bold uppercase tracking-wider border ${STYLE_COLORS[label]}`}>
+                        {label}
+                      </span>
+                    );
+                  })()}
+                </div>
                 <p className="text-sm text-text-secondary mb-4 h-10 line-clamp-2 font-body">{strategy.description}</p>
                 <div className="flex flex-wrap gap-2 text-xs">
-                  <span className="bg-bg-concrete px-2 py-1 rounded text-text-muted border border-border-subtle font-display">Max Tickers: {strategy.max_tickers}</span>
-                  <span className="bg-bg-concrete px-2 py-1 rounded capitalize text-text-muted border border-border-subtle font-body">Constraint: {strategy.constraint_style}</span>
-                  <span className="bg-bg-concrete px-2 py-1 rounded text-text-muted border border-border-subtle font-display">
+                  <span className="bg-bg-concrete px-2 py-1 rounded text-text-secondary border border-border-subtle font-display">Max Tickers: {strategy.max_tickers}</span>
+                  <span className="bg-bg-concrete px-2 py-1 rounded capitalize text-text-secondary border border-border-subtle font-body">Constraint: {strategy.constraint_style}</span>
+                  <span className="bg-bg-concrete px-2 py-1 rounded text-text-secondary border border-border-subtle font-display">
                     Charts: {[...new Set([strategy.chart_timeframe, ...(strategy.additional_timeframes ?? []), ...(strategy.short_timeframes ?? [])])].join(' / ')}
                   </span>
                 </div>

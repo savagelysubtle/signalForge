@@ -14,6 +14,7 @@ import {
   Pencil,
   Undo2,
   X,
+  Link2,
 } from "lucide-react";
 import { api } from "../../api/client";
 import { notifyFeedbackChanged, useFeedbackSync } from "../../lib/feedbackSync";
@@ -115,10 +116,10 @@ export function FeedbackTab({ recommendation }: FeedbackTabProps) {
           <div className="flex items-center gap-3">
             <span
               className={clsx(
-                "text-xl font-display font-bold px-4 py-1.5 rounded-lg",
-                recommendation.action === "BUY" && "bg-accent-profit/15 text-accent-profit",
-                recommendation.action === "SELL" && "bg-accent-loss/15 text-accent-loss",
-                recommendation.action === "HOLD" && "bg-accent-alert/15 text-accent-alert",
+                "text-xl font-display font-bold px-4 py-1.5 rounded-lg border",
+                recommendation.action === "BUY" && "bg-accent-profit/25 border-accent-profit/40 text-accent-profit",
+                recommendation.action === "SHORT" && "bg-accent-loss/25 border-accent-loss/40 text-accent-loss",
+                recommendation.action === "HOLD" && "bg-accent-alert/25 border-accent-alert/40 text-accent-alert",
               )}
             >
               {recommendation.action}
@@ -184,7 +185,7 @@ export function FeedbackTab({ recommendation }: FeedbackTabProps) {
             className="space-y-4"
           >
             <DecisionBadge decision="following" decidedAt={status.decided_at} />
-            <OutcomeSection decisionId={status.decision_id!} onComplete={fetchStatus} />
+            <OutcomeSection decisionId={status.decision_id!} action={recommendation.action} onComplete={fetchStatus} />
             <UndoDecisionButton isUndoing={isUndoing} onUndo={handleUndo} label="Undo Follow" />
           </motion.div>
         )}
@@ -231,6 +232,8 @@ export function FeedbackTab({ recommendation }: FeedbackTabProps) {
             <OutcomeSection
               decisionId={status.decision_id!}
               outcomeId={status.outcome_id!}
+              action={recommendation.action}
+              isQuestrade={status.outcome_source === "questrade"}
               initialValues={{
                 entryPrice: status.outcome_entry_price,
                 exitPrice: status.outcome_exit_price,
@@ -508,12 +511,16 @@ function numToStr(v: number | null | undefined): string {
 function OutcomeSection({
   decisionId,
   outcomeId,
+  action,
+  isQuestrade = false,
   initialValues,
   onComplete,
   onCancel,
 }: {
   decisionId: string;
   outcomeId?: string;
+  action: "BUY" | "SHORT" | "HOLD";
+  isQuestrade?: boolean;
   initialValues?: OutcomeInitialValues;
   onComplete: () => void;
   onCancel?: () => void;
@@ -525,6 +532,19 @@ function OutcomeSection({
   const [pnlDollars, setPnlDollars] = useState(numToStr(initialValues?.pnlDollars));
   const [pnlPercent, setPnlPercent] = useState(numToStr(initialValues?.pnlPercent));
   const [holdingDays, setHoldingDays] = useState(numToStr(initialValues?.holdingDays));
+
+  useEffect(() => {
+    const entry = parseFloat(entryPrice);
+    const exit = parseFloat(exitPrice);
+    const qty = parseFloat(shares);
+    if (!isNaN(entry) && !isNaN(exit) && !isNaN(qty) && entry > 0 && qty > 0) {
+      const sign = action === "SHORT" ? -1 : 1;
+      const dollars = sign * (exit - entry) * qty;
+      const percent = sign * ((exit - entry) / entry) * 100;
+      setPnlDollars(dollars.toFixed(2));
+      setPnlPercent(percent.toFixed(2));
+    }
+  }, [entryPrice, exitPrice, shares, action]);
   const [exitReason, setExitReason] = useState(initialValues?.exitReason || "");
   const [notes, setNotes] = useState(initialValues?.notes || "");
   const [isSaving, setIsSaving] = useState(false);
@@ -577,9 +597,9 @@ function OutcomeSection({
       {error && <p className="text-xs text-accent-loss font-body">{error}</p>}
 
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-        <FormInput label="Entry Price" value={entryPrice} onChange={setEntryPrice} placeholder="0.00" type="number" />
+        <FormInput label="Entry Price" value={entryPrice} onChange={setEntryPrice} placeholder="0.00" type="number" readOnly={isQuestrade} />
         <FormInput label="Exit Price" value={exitPrice} onChange={setExitPrice} placeholder="0.00" type="number" />
-        <FormInput label="Shares" value={shares} onChange={setShares} placeholder="0" type="number" />
+        <FormInput label="Shares" value={shares} onChange={setShares} placeholder="0" type="number" readOnly={isQuestrade} />
         <FormInput label="P&L ($)" value={pnlDollars} onChange={setPnlDollars} placeholder="0.00" type="number" />
         <FormInput label="P&L (%)" value={pnlPercent} onChange={setPnlPercent} placeholder="0.00" type="number" />
         <FormInput label="Hold (days)" value={holdingDays} onChange={setHoldingDays} placeholder="0" type="number" />
@@ -651,12 +671,14 @@ function FormInput({
   onChange,
   placeholder,
   type = "text",
+  readOnly = false,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   placeholder: string;
   type?: string;
+  readOnly?: boolean;
 }) {
   return (
     <div>
@@ -668,7 +690,13 @@ function FormInput({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full bg-bg-void border border-border-gutter rounded-lg px-3 py-2 text-sm font-display text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-signal tabular-nums"
+        readOnly={readOnly}
+        className={clsx(
+          "w-full border rounded-lg px-3 py-2 text-sm font-display text-text-primary placeholder:text-text-muted focus:outline-none tabular-nums",
+          readOnly
+            ? "bg-bg-steel border-border-subtle text-text-muted cursor-not-allowed"
+            : "bg-bg-void border-border-gutter focus:border-accent-signal",
+        )}
       />
     </div>
   );
@@ -688,6 +716,7 @@ function OutcomeResult({
   const pnl = status.outcome_pnl_dollars ?? 0;
   const isWin = pnl > 0;
   const isLoss = pnl < 0;
+  const isQuestrade = status.outcome_source === "questrade";
 
   return (
     <div
@@ -710,6 +739,12 @@ function OutcomeResult({
           <span className="text-sm font-display font-semibold text-text-secondary">
             Trade Result
           </span>
+          {isQuestrade && (
+            <span className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-display font-bold text-accent-signal bg-accent-signal-dim border border-accent-signal/20">
+              <Link2 className="w-3 h-3" />
+              Imported from Questrade
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-4">
           <button
@@ -775,6 +810,20 @@ function OutcomeResult({
           </div>
         )}
       </div>
+
+      {isQuestrade && (status.outcome_commission != null || status.outcome_net_pnl != null) && (
+        <div className="flex items-center gap-4 mt-3 pt-3 border-t border-border-gutter">
+          {status.outcome_commission != null && status.outcome_commission > 0 && (
+            <MiniStat label="Commission" value={`-$${status.outcome_commission.toFixed(2)}`} />
+          )}
+          {status.outcome_net_pnl != null && (
+            <MiniStat
+              label="Net P&L"
+              value={`${status.outcome_net_pnl >= 0 ? "+" : ""}$${status.outcome_net_pnl.toFixed(2)}`}
+            />
+          )}
+        </div>
+      )}
 
       {status.outcome_notes && (
         <p className="text-xs text-text-secondary font-body mt-3 border-t border-border-gutter pt-3">

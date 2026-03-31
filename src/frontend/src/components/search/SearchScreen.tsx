@@ -1,9 +1,9 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Play, Loader2, XCircle,
   Search, Crosshair, Layers, MessageSquare,
-  SlidersHorizontal,
+  SlidersHorizontal, Clock, Sparkles,
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import clsx from 'clsx';
@@ -13,6 +13,7 @@ import { classifyInput, deriveRunMode } from '../../lib/classifyInput';
 import type { RunMode } from '../../lib/classifyInput';
 import type { ScreenerOverrides } from '../../types';
 import logoIcon from '../../assets/signalforge-logo-icon.svg';
+import { PipelineProgressBar } from './PipelineProgressBar';
 
 const COUNTRY_OPTIONS = [
   { value: '', label: 'Any Country' },
@@ -78,7 +79,7 @@ const MODE_BG: Record<RunMode, string> = {
 export function SearchScreen() {
   const navigate = useNavigate();
   const { templates, strategies } = useStrategies();
-  const { runPipeline, isRunning, error } = usePipeline();
+  const { runPipeline, isRunning, error, history, fetchHistory, isLoadingHistory, progress } = usePipeline();
 
   const [selectedStrategy, setSelectedStrategy] = useState<string>('');
   const [inputText, setInputText] = useState<string>('');
@@ -87,6 +88,14 @@ export function SearchScreen() {
   const [filterExchange, setFilterExchange] = useState('');
   const [filterSector, setFilterSector] = useState('');
   const [filterMarketCap, setFilterMarketCap] = useState('');
+
+  // Detect first-run state
+  useEffect(() => {
+    fetchHistory();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const isFirstRun = !isLoadingHistory && history.length === 0;
 
   const allStrategies = [...templates, ...strategies].filter(
     (s, i, arr) => arr.findIndex((t) => t.id === s.id) === i,
@@ -163,8 +172,21 @@ export function SearchScreen() {
             What would you like to analyze?
           </h1>
           <p className="text-text-secondary font-body text-xs">
-            Enter tickers, a prompt, or choose a strategy below
+            {isFirstRun
+              ? 'Select a strategy below, then hit Run Analysis to get your first recommendations'
+              : 'Enter tickers, a prompt, or choose a strategy below'}
           </p>
+          {isFirstRun && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.4, delay: 0.25, ease: 'easeOut' }}
+              className="mt-3 flex items-center gap-2 text-[11px] font-display text-accent-signal bg-accent-signal/10 border border-accent-signal/20 rounded-full px-3.5 py-1.5"
+            >
+              <Sparkles className="w-3 h-3" />
+              First run — pick a strategy card below to get started
+            </motion.div>
+          )}
         </motion.div>
 
         {/* Search input */}
@@ -186,7 +208,7 @@ export function SearchScreen() {
               onChange={(e) => setInputText(e.target.value)}
               disabled={isRunning}
               onKeyDown={(e) => { if (e.key === 'Enter' && runMode !== 'none') handleRun(); }}
-              className="w-full bg-bg-concrete border border-border-gutter rounded-lg px-4 py-3 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-signal transition-colors font-body"
+              className="w-full bg-bg-concrete border border-border-gutter rounded-lg px-4 pr-28 py-3 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-signal transition-colors font-body"
             />
             {runMode !== 'none' && !isRunning && (
               <span className={clsx(
@@ -210,7 +232,7 @@ export function SearchScreen() {
         >
           <button
             onClick={() => setShowFilters(!showFilters)}
-            className="flex items-center gap-1.5 text-[11px] font-display text-text-muted uppercase tracking-wider mb-2 hover:text-text-secondary transition-colors"
+            className="flex items-center gap-1.5 text-[11px] font-display text-text-secondary uppercase tracking-wider mb-2 hover:text-text-primary transition-colors"
           >
             <SlidersHorizontal className="w-3 h-3" />
             Screener Filters
@@ -283,7 +305,7 @@ export function SearchScreen() {
           transition={{ duration: 0.4, delay: 0.2, ease: 'easeOut' }}
           className="w-full mb-6"
         >
-          <h2 className="text-[11px] font-display text-text-muted uppercase tracking-wider mb-2">
+          <h2 className="text-[11px] font-display text-text-secondary uppercase tracking-wider mb-2">
             Strategy
           </h2>
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
@@ -313,7 +335,8 @@ export function SearchScreen() {
                   "text-left rounded-lg p-3 border transition-all duration-200",
                   selectedStrategy === strategy.id
                     ? "bg-bg-concrete border-accent-signal/40 ring-1 ring-accent-signal/20"
-                    : "bg-bg-concrete border-border-gutter hover:border-accent-signal"
+                    : "bg-bg-concrete border-border-gutter hover:border-accent-signal",
+                  isFirstRun && !selectedStrategy && "animate-pulse-border"
                 )}
               >
                 <div className="flex items-center gap-1.5 mb-0.5">
@@ -334,6 +357,48 @@ export function SearchScreen() {
           </div>
         </motion.div>
 
+        {/* Recent runs quick-access (shown when history exists) */}
+        {!isFirstRun && history.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.35, delay: 0.25, ease: 'easeOut' }}
+            className="w-full mb-5"
+          >
+            <div className="flex items-center gap-1.5 mb-2">
+              <Clock className="w-3 h-3 text-text-muted" />
+              <span className="text-[11px] font-display text-text-secondary uppercase tracking-wider">Recent runs</span>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {history.slice(0, 6).map((run) => {
+                const label = run.strategy_name
+                  ?? (run.tickers.length > 0 ? run.tickers.slice(0, 3).join(', ') : run.mode);
+                const statusColor = run.status === 'completed'
+                  ? 'text-accent-profit border-accent-profit/25 bg-accent-profit/5'
+                  : run.status === 'failed'
+                  ? 'text-accent-loss border-accent-loss/25 bg-accent-loss/5'
+                  : 'text-text-muted border-border-gutter bg-bg-concrete';
+                return (
+                  <button
+                    key={run.id}
+                    onClick={() => navigate(`/?run=${run.id}`)}
+                    title={`${run.mode} · ${run.status} · ${run.tickers.join(', ')}`}
+                    className={clsx(
+                      'flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-display transition-all hover:brightness-110',
+                      statusColor,
+                    )}
+                  >
+                    <span className="truncate max-w-[120px]">{label}</span>
+                    {run.tickers.length > 0 && (
+                      <span className="text-[9px] opacity-60">{run.tickers.length}t</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </motion.div>
+        )}
+
         {/* Run button + status */}
         <motion.div
           initial={{ opacity: 0, y: 16 }}
@@ -350,16 +415,6 @@ export function SearchScreen() {
             {isRunning ? 'Analyzing...' : 'Run Analysis'}
           </button>
 
-          {isRunning && (
-            <span className="flex items-center gap-2 text-accent-signal font-display text-xs">
-              <span className="relative flex h-2.5 w-2.5">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent-signal opacity-75" />
-                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-accent-signal" />
-              </span>
-              {runningLabel}
-            </span>
-          )}
-
           {!isRunning && error && (
             <span className="flex items-center gap-2 text-accent-loss text-xs font-body" title={error}>
               <XCircle className="w-4 h-4" />
@@ -367,6 +422,13 @@ export function SearchScreen() {
             </span>
           )}
         </motion.div>
+
+        {/* Stage-by-stage progress visualization */}
+        <PipelineProgressBar
+          progress={progress}
+          isRunning={isRunning}
+          runningLabel={runningLabel}
+        />
       </div>
     </div>
   );

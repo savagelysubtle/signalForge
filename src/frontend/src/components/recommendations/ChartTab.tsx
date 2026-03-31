@@ -124,7 +124,7 @@ function ExpandableChartImage({ src, alt }: { src: string; alt: string }) {
             >
               <button
                 onClick={close}
-                className="absolute top-3 right-3 z-10 p-1.5 rounded-md bg-bg-concrete border border-border-gutter text-text-muted hover:text-text-primary hover:bg-bg-steel transition-colors"
+                className="absolute top-10 right-4 z-10 p-1.5 rounded-md bg-bg-concrete/90 border border-border-gutter text-text-muted hover:text-text-primary hover:bg-bg-steel transition-colors backdrop-blur-sm"
                 title="Close"
               >
                 <X className="w-4 h-4" />
@@ -147,7 +147,7 @@ function AnalysisDetails({ analysis }: { analysis: ChartAnalysis }) {
     <div className="space-y-4">
       {/* Trend + Bias Header */}
       <div className="bg-bg-concrete rounded-lg border border-border-gutter p-4">
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <div className="text-xs text-text-muted mb-1 font-body">Trend Direction</div>
             <div className={clsx('text-lg font-display font-bold capitalize', trendColor)}>
@@ -293,7 +293,7 @@ function CompactLevelLegend({
   if (items.length === 0) return null;
 
   return (
-    <div className="flex flex-wrap gap-x-4 gap-y-1 px-4 py-2 border-t border-border-gutter text-[11px] shrink-0">
+    <div className="flex flex-wrap gap-x-4 gap-y-1 px-4 py-2 border-t border-border-gutter text-[11px] shrink-0 bg-bg-concrete rounded-b-lg">
       {items.map((item, i) => (
         <span key={i} className="flex items-center gap-1">
           <span className={clsx('font-medium capitalize', item.color)}>{item.label}</span>
@@ -377,15 +377,15 @@ export function ChartTab({ ticker, chartAnalyses, chartErrors, chartIndicators, 
 
   return (
     <div className="flex flex-col h-full w-full overflow-auto">
-      {/* Timeframe selector bar */}
-      <div className="flex items-center gap-1 px-4 py-2 border-b border-border-gutter bg-bg-asphalt shrink-0">
-        <span className="text-xs text-text-muted mr-2 font-body">Timeframe:</span>
+      {/* Timeframe selector bar — no border-b, flows visually from Chart tab */}
+      <div className="flex flex-wrap items-center gap-1 px-4 py-2.5 bg-bg-asphalt shrink-0">
+        <span className="text-[10px] text-text-muted mr-1 font-body uppercase tracking-wider">TF:</span>
         {AVAILABLE_TIMEFRAMES.map(tf => (
           <button
             key={tf}
             onClick={() => handleTimeframeClick(tf)}
             className={clsx(
-              "px-2.5 py-1 text-xs font-display font-medium rounded transition-colors",
+              "px-2.5 py-1 text-xs font-display font-medium rounded transition-colors relative",
               selectedTf === tf
                 ? "bg-accent-signal-dim text-accent-signal"
                 : analysisTimeframes.has(tf)
@@ -394,10 +394,14 @@ export function ChartTab({ ticker, chartAnalyses, chartErrors, chartIndicators, 
             )}
           >
             {getTimeframeLabel(tf)}
+            {analysisTimeframes.has(tf) && selectedTf !== tf && (
+              <span className="absolute top-0.5 right-0.5 w-1 h-1 rounded-full bg-accent-signal/60" />
+            )}
           </button>
         ))}
         {adHocLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-accent-signal ml-2" />}
       </div>
+      <div className="h-px bg-border-gutter shrink-0" />
 
       {/* Main content — single column, charts prominent */}
       <div className="flex-1 overflow-auto p-4 space-y-4">
@@ -411,7 +415,7 @@ export function ChartTab({ ticker, chartAnalyses, chartErrors, chartIndicators, 
             {/* Annotated chart — full width below primary */}
             {annotatedChartUrl && (
               <div>
-                <h3 className="text-xs font-display text-text-muted mb-2 uppercase tracking-wider">Annotated Chart</h3>
+                <h3 className="text-xs font-display text-text-secondary mb-2 uppercase tracking-wider">Annotated Chart</h3>
                 <ExpandableChartImage
                   src={annotatedChartUrl}
                   alt={`${ticker} ${activeAnalysis.timeframe} annotated`}

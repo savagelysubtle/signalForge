@@ -32,16 +32,16 @@ export function HistoryView() {
   return (
     <div className="p-6">
       <h1 className="text-2xl font-display font-bold mb-6">Run History</h1>
-      <div className="bg-bg-asphalt border border-border-gutter rounded-lg overflow-hidden">
-        <table className="w-full text-left text-sm">
+      <div className="bg-bg-asphalt border border-border-gutter rounded-lg overflow-x-auto">
+        <table className="w-full text-left text-sm min-w-[600px]">
           <thead className="bg-bg-concrete border-b border-border-gutter">
             <tr>
-              <th className="px-4 py-3 font-medium text-text-muted font-body">Date</th>
-              <th className="px-4 py-3 font-medium text-text-muted font-body">Strategy</th>
-              <th className="px-4 py-3 font-medium text-text-muted font-body">Tickers</th>
-              <th className="px-4 py-3 font-medium text-text-muted font-body">Mode</th>
-              <th className="px-4 py-3 font-medium text-text-muted font-body">Status</th>
-              <th className="px-4 py-3 font-medium text-text-muted font-body">Duration</th>
+              <th className="px-4 py-3 font-medium text-text-secondary font-body">Date</th>
+              <th className="px-4 py-3 font-medium text-text-secondary font-body">Strategy</th>
+              <th className="px-4 py-3 font-medium text-text-secondary font-body">Tickers</th>
+              <th className="px-4 py-3 font-medium text-text-secondary font-body hidden md:table-cell">Mode</th>
+              <th className="px-4 py-3 font-medium text-text-secondary font-body">Status</th>
+              <th className="px-4 py-3 font-medium text-text-secondary font-body hidden md:table-cell">Duration</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border-subtle">
@@ -78,7 +78,7 @@ export function HistoryView() {
                     <span className="text-text-muted text-xs">{'\u2014'}</span>
                   )}
                 </td>
-                <td className="px-4 py-3 capitalize text-text-secondary">{run.mode}</td>
+                <td className="px-4 py-3 capitalize text-text-secondary hidden md:table-cell">{run.mode}</td>
                 <td className="px-4 py-3">
                   <span className={clsx(
                     "px-2 py-1 rounded text-xs font-medium font-display",
@@ -90,8 +90,8 @@ export function HistoryView() {
                     {run.status}
                   </span>
                 </td>
-                <td className="px-4 py-3 text-text-secondary font-display text-xs">
-                  {run.duration_seconds ? `${run.duration_seconds.toFixed(1)}s` : '-'}
+                <td className="px-4 py-3 text-text-secondary font-display text-xs hidden md:table-cell">
+                  {run.duration_seconds ? `${(run.duration_seconds / 60).toFixed(1)}m` : '-'}
                 </td>
               </motion.tr>
             ))}

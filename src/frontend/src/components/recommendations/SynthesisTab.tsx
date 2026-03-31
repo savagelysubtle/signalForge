@@ -1,22 +1,23 @@
 import { useState } from 'react';
 import type { Recommendation, DebateCase } from '../../types';
 import { motion, AnimatePresence } from 'motion/react';
+import { ShieldAlert, ChevronDown, ChevronUp } from 'lucide-react';
 import clsx from 'clsx';
 
 interface SynthesisTabProps {
   recommendation: Recommendation | null;
 }
 
-const ACTION_CONFIG: Record<string, { text: string; color: string; bg: string }> = {
-  BUY: { text: 'BUY', color: 'text-accent-profit', bg: 'bg-accent-profit/15' },
-  SELL: { text: 'SELL', color: 'text-accent-loss', bg: 'bg-accent-loss/15' },
-  HOLD: { text: 'HOLD', color: 'text-accent-alert', bg: 'bg-accent-alert/15' },
+const ACTION_CONFIG: Record<string, { text: string; color: string; bg: string; border: string }> = {
+  BUY: { text: 'BUY', color: 'text-accent-profit', bg: 'bg-accent-profit/25', border: 'border border-accent-profit/40' },
+  SHORT: { text: 'SHORT', color: 'text-accent-loss', bg: 'bg-accent-loss/25', border: 'border border-accent-loss/40' },
+  HOLD: { text: 'HOLD', color: 'text-accent-alert', bg: 'bg-accent-alert/25', border: 'border border-accent-alert/40' },
 };
 
-function confidenceBarColor(confidence: number): string {
-  if (confidence >= 0.7) return 'bg-accent-profit';
-  if (confidence >= 0.55) return 'bg-accent-alert';
-  return 'bg-accent-loss';
+function confidenceBarColor(action: string): string {
+  if (action === 'BUY') return 'bg-accent-profit';
+  if (action === 'SHORT') return 'bg-accent-loss';
+  return 'bg-accent-alert';
 }
 
 function TradeParams({ rec }: { rec: Recommendation }) {
@@ -32,11 +33,11 @@ function TradeParams({ rec }: { rec: Recommendation }) {
   if (params.length === 0) return null;
 
   return (
-    <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
+    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
       {params.map(p => (
-        <div key={p.label} className="bg-bg-void rounded-lg p-3 border border-border-gutter">
-          <div className="text-xs text-text-muted mb-1 font-body">{p.label}</div>
-          <div className="text-sm font-display font-semibold text-text-primary tabular-nums">{p.value}</div>
+        <div key={p.label} className="bg-bg-void rounded-lg p-3 border border-border-gutter min-w-0">
+          <div className="text-xs text-text-muted mb-1 font-body truncate">{p.label}</div>
+          <div className="text-sm font-display font-semibold text-text-primary tabular-nums truncate">{p.value}</div>
         </div>
       ))}
     </div>
@@ -110,6 +111,8 @@ function DebateCaseSection({ debateCase, title }: { debateCase: DebateCase; titl
 }
 
 export function SynthesisTab({ recommendation }: SynthesisTabProps) {
+  const [reasoningExpanded, setReasoningExpanded] = useState(false);
+
   if (!recommendation) {
     return (
       <div className="flex items-center justify-center h-full text-text-muted">
@@ -128,25 +131,48 @@ export function SynthesisTab({ recommendation }: SynthesisTabProps) {
     <div className="p-6 overflow-y-auto h-full">
       {/* Action + Confidence Header */}
       <div className="bg-bg-concrete rounded-lg border border-border-gutter p-6 mb-6">
-        <div className="flex items-center justify-between mb-4">
-          <div className={clsx('text-3xl font-display font-bold px-5 py-2 rounded-lg', action.bg, action.color)}>
+        <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
+          <div className={clsx('text-3xl font-display font-bold px-5 py-2 rounded-lg', action.bg, action.color, action.border)}>
             {action.text}
           </div>
           <div className="text-right">
             <div className="text-xs text-text-muted mb-1 font-body">Confidence</div>
-            <div className="text-3xl font-display font-bold tabular-nums text-text-primary">
+            <div className={clsx('text-3xl font-display font-bold tabular-nums', action.color)}>
               {confidencePct}%
             </div>
           </div>
         </div>
-        {/* Confidence bar */}
+        {/* Confidence bar — color matches signal direction */}
         <div className="w-full h-2 bg-bg-void rounded-full overflow-hidden">
           <div
-            className={clsx('h-full rounded-full transition-all', confidenceBarColor(recommendation.confidence))}
+            className={clsx('h-full rounded-full transition-all', confidenceBarColor(recommendation.action))}
             style={{ width: `${confidencePct}%` }}
           />
         </div>
       </div>
+
+      {/* Risk Violations */}
+      {recommendation.risk_violations && recommendation.risk_violations.length > 0 && (
+        <div className="mb-6 bg-accent-alert-dim border border-accent-alert/30 rounded-lg p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <ShieldAlert className="w-4 h-4 text-accent-alert" />
+            <h3 className="text-sm font-display font-semibold text-accent-alert">
+              Risk Flags
+              <span className="ml-2 text-xs font-normal text-accent-alert/70">
+                ({recommendation.risk_violations.length})
+              </span>
+            </h3>
+          </div>
+          <ul className="space-y-1.5">
+            {recommendation.risk_violations.map((v, i) => (
+              <li key={i} className="flex items-start gap-2 text-sm text-accent-alert">
+                <span className="mt-1.5 w-1.5 h-1.5 rounded-full shrink-0 bg-accent-alert" />
+                {v}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Trade Parameters */}
       <div className="mb-6">
@@ -155,15 +181,41 @@ export function SynthesisTab({ recommendation }: SynthesisTabProps) {
 
       {/* Judge Reasoning */}
       {recommendation.judge_reasoning && (
-        <div className="mb-6">
+        <div className="bg-bg-concrete rounded-lg border border-border-gutter p-6 mb-6">
           <h3 className="text-sm font-semibold text-text-secondary mb-2 font-body">Judge Reasoning</h3>
-          <p className="text-sm text-text-primary leading-relaxed">{recommendation.judge_reasoning}</p>
+          <AnimatePresence initial={false}>
+            <motion.p
+              key={reasoningExpanded ? 'expanded' : 'collapsed'}
+              className={clsx(
+                'text-sm text-text-primary leading-relaxed',
+                !reasoningExpanded && 'line-clamp-4',
+              )}
+            >
+              {recommendation.judge_reasoning}
+            </motion.p>
+          </AnimatePresence>
+          <button
+            onClick={() => setReasoningExpanded(prev => !prev)}
+            className="mt-2 flex items-center gap-1 text-xs text-accent-signal hover:text-accent-signal/80 transition-colors font-body"
+          >
+            {reasoningExpanded ? (
+              <>
+                <ChevronUp className="w-3.5 h-3.5" />
+                Show less
+              </>
+            ) : (
+              <>
+                <ChevronDown className="w-3.5 h-3.5" />
+                Read full reasoning
+              </>
+            )}
+          </button>
         </div>
       )}
 
       {/* Key Factors */}
       {recommendation.key_factors.length > 0 && (
-        <div className="mb-6">
+        <div className="bg-bg-concrete rounded-lg border border-border-gutter p-6 mb-6">
           <h3 className="text-sm font-semibold text-text-secondary mb-2 font-body">
             Key Factors
             <span className="ml-2 text-xs font-normal text-text-muted">({recommendation.key_factors.length})</span>
@@ -184,7 +236,7 @@ export function SynthesisTab({ recommendation }: SynthesisTabProps) {
         <div className="mb-6">
           <h3 className="text-sm font-semibold text-accent-alert mb-2 font-body">
             Warnings
-            <span className="ml-2 text-xs font-normal text-text-muted">({recommendation.warnings.length})</span>
+            <span className="ml-2 text-xs font-normal text-accent-alert/70">({recommendation.warnings.length})</span>
           </h3>
           <div className="bg-accent-alert-dim border border-accent-alert/20 rounded-lg p-4">
             <ul className="space-y-1.5">

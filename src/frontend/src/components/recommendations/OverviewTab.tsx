@@ -31,8 +31,8 @@ export function OverviewTab({ data }: OverviewTabProps) {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
-        <div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+        <div className="bg-bg-concrete rounded-lg border border-border-gutter p-6">
           <h3 className="text-lg font-semibold mb-4 flex items-center gap-2 font-body">
             <span className="w-2 h-2 rounded-full bg-accent-profit"></span>
             Key Highlights
@@ -50,7 +50,7 @@ export function OverviewTab({ data }: OverviewTabProps) {
           </ul>
         </div>
 
-        <div>
+        <div id="risk-factors" className="bg-bg-concrete rounded-lg border border-border-gutter p-6">
           <h3 className="text-lg font-semibold mb-4 flex items-center gap-2 font-body">
             <span className="w-2 h-2 rounded-full bg-accent-loss"></span>
             Risk Factors
@@ -70,11 +70,11 @@ export function OverviewTab({ data }: OverviewTabProps) {
       </div>
 
       {data.sources.length > 0 && (
-        <div className="mt-8 pt-6 border-t border-border-gutter">
+        <div className="bg-bg-concrete rounded-lg border border-border-gutter p-6">
           <h4 className="text-sm font-semibold text-text-secondary mb-3 font-body">Sources</h4>
           <div className="flex flex-wrap gap-2">
             {data.sources.map((source, i) => (
-              <span key={i} className="text-xs bg-bg-concrete px-2 py-1 rounded text-text-muted border border-border-subtle">
+              <span key={i} className="text-xs bg-bg-void px-2 py-1 rounded text-text-secondary border border-border-subtle">
                 {source}
               </span>
             ))}

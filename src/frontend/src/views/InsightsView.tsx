@@ -19,13 +19,18 @@ import {
   ChevronUp,
   Send,
   X,
+  RefreshCw,
+  Link2,
 } from "lucide-react";
 import { useInsights } from "../hooks/useInsights";
+import { api } from "../api/client";
+import { notifyFeedbackChanged } from "../lib/feedbackSync";
 import type {
   PerformanceOverview,
   RecommendationWithStatus,
   DecisionCreate,
   OutcomeCreate,
+  PendingMatch,
 } from "../types";
 
 export function InsightsView() {
@@ -43,9 +48,70 @@ export function InsightsView() {
     generateReflection,
   } = useInsights();
 
+  const [brokerageConnected, setBrokerageConnected] = useState(false);
+  const [pendingMatches, setPendingMatches] = useState<PendingMatch[]>([]);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [showPendingBanner, setShowPendingBanner] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+
   useEffect(() => {
     fetchAll();
   }, [fetchAll]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const status = await api.getBrokerageStatus();
+        setBrokerageConnected(status.connected && !!status.account_id);
+        if (status.connected && status.account_id) {
+          try {
+            const matches = await api.getPendingMatches();
+            setPendingMatches(matches);
+            if (matches.length > 0) setShowPendingBanner(true);
+          } catch {
+            // No pending matches endpoint available or empty
+          }
+        }
+      } catch {
+        setBrokerageConnected(false);
+      }
+    })();
+  }, []);
+
+  const handleSync = async () => {
+    setIsSyncing(true);
+    setSyncError(null);
+    try {
+      await api.syncTrades();
+      const allPending = await api.getPendingMatches();
+      setPendingMatches(allPending);
+      if (allPending.length > 0) setShowPendingBanner(true);
+    } catch (e) {
+      setSyncError(e instanceof Error ? e.message : "Sync failed");
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleConfirmMatch = async (matchId: string) => {
+    try {
+      await api.confirmMatch(matchId);
+      setPendingMatches((prev) => prev.filter((m) => m.id !== matchId));
+      notifyFeedbackChanged();
+      fetchAll();
+    } catch {
+      // silently fail; user can retry
+    }
+  };
+
+  const handleRejectMatch = async (matchId: string) => {
+    try {
+      await api.rejectMatch(matchId);
+      setPendingMatches((prev) => prev.filter((m) => m.id !== matchId));
+    } catch {
+      // silently fail
+    }
+  };
 
   if (isLoading) {
     return (
@@ -61,7 +127,7 @@ export function InsightsView() {
         initial={{ opacity: 0, y: -12 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.35 }}
-        className="flex items-center justify-between"
+        className="flex flex-col sm:flex-row sm:items-center justify-between gap-3"
       >
         <div>
           <h1 className="text-2xl font-display font-bold">Insights</h1>
@@ -69,23 +135,44 @@ export function InsightsView() {
             Track decisions, log outcomes, and let the system learn from your results.
           </p>
         </div>
-        <button
-          onClick={generateReflection}
-          disabled={isGenerating || !overview || overview.total_outcomes < 5}
-          className={clsx(
-            "flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-display font-medium transition-all",
-            overview && overview.total_outcomes >= 5
-              ? "bg-accent-electric text-white hover:bg-accent-electric/80 active:scale-95"
-              : "bg-bg-steel text-text-muted cursor-not-allowed",
+        <div className="flex items-center gap-2">
+          {brokerageConnected && (
+            <button
+              onClick={handleSync}
+              disabled={isSyncing}
+              className={clsx(
+                "flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-display font-medium transition-all",
+                "bg-accent-signal text-white hover:bg-accent-signal/80 active:scale-95",
+                isSyncing && "opacity-70 cursor-not-allowed",
+              )}
+            >
+              <RefreshCw className={clsx("w-4 h-4", isSyncing && "animate-spin")} />
+              Sync Trades
+              {pendingMatches.length > 0 && (
+                <span className="ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-display font-bold bg-white/20">
+                  {pendingMatches.length}
+                </span>
+              )}
+            </button>
           )}
-        >
-          {isGenerating ? (
-            <Loader2 className="w-4 h-4 animate-spin" />
-          ) : (
-            <Brain className="w-4 h-4" />
-          )}
-          Generate Reflection
-        </button>
+          <button
+            onClick={generateReflection}
+            disabled={isGenerating || !overview || overview.total_outcomes < 5}
+            className={clsx(
+              "flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-display font-medium transition-all",
+              overview && overview.total_outcomes >= 5
+                ? "bg-accent-electric text-white hover:bg-accent-electric/80 active:scale-95"
+                : "bg-bg-steel text-text-muted cursor-not-allowed",
+            )}
+          >
+            {isGenerating ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Brain className="w-4 h-4" />
+            )}
+            Generate Reflection
+          </button>
+        </div>
       </motion.div>
 
       {error && (
@@ -97,6 +184,27 @@ export function InsightsView() {
           {error}
         </motion.div>
       )}
+
+      {syncError && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="bg-accent-loss-dim border border-accent-loss/30 rounded-lg px-4 py-3 text-accent-loss text-sm font-body"
+        >
+          {syncError}
+        </motion.div>
+      )}
+
+      <AnimatePresence>
+        {showPendingBanner && pendingMatches.length > 0 && (
+          <PendingMatchesBanner
+            matches={pendingMatches}
+            onConfirm={handleConfirmMatch}
+            onReject={handleRejectMatch}
+            onDismiss={() => setShowPendingBanner(false)}
+          />
+        )}
+      </AnimatePresence>
 
       {overview && <StatsGrid overview={overview} />}
 
@@ -116,6 +224,176 @@ export function InsightsView() {
         {overview && <CalibrationPanel overview={overview} />}
       </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Pending Matches Banner
+// ---------------------------------------------------------------------------
+
+function PendingMatchesBanner({
+  matches,
+  onConfirm,
+  onReject,
+  onDismiss,
+}: {
+  matches: PendingMatch[];
+  onConfirm: (matchId: string) => void;
+  onReject: (matchId: string) => void;
+  onDismiss: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, height: 0 }}
+      animate={{ opacity: 1, height: "auto" }}
+      exit={{ opacity: 0, height: 0 }}
+      transition={{ duration: 0.3 }}
+      className="overflow-hidden"
+    >
+      <div className="bg-accent-alert-dim border border-accent-alert/30 rounded-lg overflow-hidden">
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="w-full px-5 py-3.5 flex items-center justify-between hover:bg-accent-alert/5 transition-colors"
+        >
+          <div className="flex items-center gap-3">
+            <AlertTriangle className="w-4 h-4 text-accent-alert" />
+            <span className="text-sm font-display font-semibold text-accent-alert">
+              {matches.length} trade{matches.length !== 1 ? "s" : ""} matched from Questrade
+            </span>
+            <span className="text-xs text-text-muted font-body">— Review</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onDismiss();
+              }}
+              className="text-text-muted hover:text-text-secondary p-1"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+            {expanded ? (
+              <ChevronUp className="w-4 h-4 text-accent-alert" />
+            ) : (
+              <ChevronDown className="w-4 h-4 text-accent-alert" />
+            )}
+          </div>
+        </button>
+
+        <AnimatePresence>
+          {expanded && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.25 }}
+              className="overflow-hidden"
+            >
+              <div className="px-5 pb-4 space-y-2 border-t border-accent-alert/15">
+                {matches.map((match) => (
+                  <MatchRow
+                    key={match.id}
+                    match={match}
+                    onConfirm={onConfirm}
+                    onReject={onReject}
+                  />
+                ))}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    </motion.div>
+  );
+}
+
+function MatchRow({
+  match,
+  onConfirm,
+  onReject,
+}: {
+  match: PendingMatch;
+  onConfirm: (id: string) => void;
+  onReject: (id: string) => void;
+}) {
+  const sideColor =
+    match.side === "Buy"
+      ? "bg-accent-profit-dim text-accent-profit"
+      : "bg-accent-loss-dim text-accent-loss";
+
+  const actionColor =
+    match.rec_action === "BUY"
+      ? "bg-accent-profit-dim text-accent-profit"
+      : match.rec_action === "SHORT"
+        ? "bg-accent-loss-dim text-accent-loss"
+        : "bg-accent-alert-dim text-accent-alert";
+
+  return (
+    <motion.div
+      layout
+      exit={{ opacity: 0, x: -20 }}
+      transition={{ duration: 0.2 }}
+      className="flex items-center gap-4 bg-bg-asphalt/60 rounded-lg p-3 mt-2 first:mt-3"
+    >
+      {/* Questrade side */}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="text-sm font-display font-bold text-text-primary">{match.ticker}</span>
+          <span className={clsx("px-1.5 py-0.5 rounded text-[10px] font-display font-bold", sideColor)}>
+            {match.side}
+          </span>
+        </div>
+        <div className="flex items-center gap-3 text-xs font-display text-text-muted tabular-nums">
+          <span>{match.total_shares} × ${match.avg_price.toFixed(2)}</span>
+          {match.total_commission > 0 && (
+            <span className="text-accent-loss">-${match.total_commission.toFixed(2)}</span>
+          )}
+          <span>{new Date(match.executed_at).toLocaleDateString()}</span>
+        </div>
+      </div>
+
+      {/* Divider + match score */}
+      <div className="flex flex-col items-center gap-0.5 px-2">
+        <Link2 className="w-3.5 h-3.5 text-text-muted" />
+        <span className="text-[9px] font-display text-text-muted">
+          {(match.match_score * 100).toFixed(0)}%
+        </span>
+      </div>
+
+      {/* Recommendation side */}
+      <div className="flex-1 min-w-0 text-right">
+        <div className="flex items-center justify-end gap-2 mb-1">
+          <span className={clsx("px-1.5 py-0.5 rounded text-[10px] font-display font-bold", actionColor)}>
+            {match.rec_action}
+          </span>
+          <span className="text-sm font-display font-bold text-text-primary">{match.rec_ticker}</span>
+        </div>
+        <div className="flex items-center justify-end gap-3 text-xs font-display text-text-muted tabular-nums">
+          <span>{(match.rec_confidence * 100).toFixed(0)}% conf</span>
+          {match.rec_entry_price != null && <span>Entry ${match.rec_entry_price.toFixed(2)}</span>}
+        </div>
+      </div>
+
+      {/* Action buttons */}
+      <div className="flex items-center gap-1.5 ml-2 shrink-0">
+        <button
+          onClick={() => onConfirm(match.id)}
+          className="p-2 rounded-lg bg-accent-profit-dim text-accent-profit hover:bg-accent-profit/20 transition-colors"
+          title="Confirm match"
+        >
+          <CheckCircle2 className="w-4 h-4" />
+        </button>
+        <button
+          onClick={() => onReject(match.id)}
+          className="p-2 rounded-lg bg-bg-steel text-text-muted hover:text-accent-loss transition-colors"
+          title="Reject match"
+        >
+          <XCircle className="w-4 h-4" />
+        </button>
+      </div>
+    </motion.div>
   );
 }
 
@@ -342,12 +620,15 @@ function JournalRow({
             className={clsx(
               "px-1.5 py-0.5 rounded text-[10px] font-display font-semibold",
               rec.action === "BUY" && "bg-accent-profit-dim text-accent-profit",
-              rec.action === "SELL" && "bg-accent-loss-dim text-accent-loss",
+              rec.action === "SHORT" && "bg-accent-loss-dim text-accent-loss",
               rec.action === "HOLD" && "bg-accent-alert-dim text-accent-alert",
             )}
           >
             {rec.action}
           </span>
+          {rec.outcome_source === "questrade" && (
+            <Link2 className="w-3 h-3 text-accent-signal" />
+          )}
         </div>
 
         {/* Confidence */}
@@ -503,7 +784,7 @@ function ExpandedRow({
 
       {status === "following" && rec.decision_id && (
         <div className="space-y-3">
-          <OutcomeForm decisionId={rec.decision_id} onSubmit={onLogOutcome} />
+          <OutcomeForm decisionId={rec.decision_id} action={rec.action} onSubmit={onLogOutcome} />
           <UndoButton isUndoing={isUndoing} onUndo={handleUndo} label="Undo Follow" />
         </div>
       )}
@@ -525,9 +806,16 @@ function ExpandedRow({
       {status === "closed" && (
         <div className="bg-bg-concrete rounded-lg px-3 py-2 border border-border-subtle">
           <div className="flex items-center justify-between">
-            <span className="text-[10px] text-text-muted font-display uppercase tracking-wider">
-              Trade Result
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-text-muted font-display uppercase tracking-wider">
+                Trade Result
+              </span>
+              {rec.outcome_source === "questrade" && (
+                <span className="px-1.5 py-0.5 rounded text-[9px] font-display font-bold text-accent-signal bg-accent-signal-dim">
+                  Questrade
+                </span>
+              )}
+            </div>
             <span
               className={clsx(
                 "text-sm font-display font-bold",
@@ -546,6 +834,16 @@ function ExpandedRow({
               )}
             </span>
           </div>
+          {rec.outcome_commission != null && rec.outcome_commission > 0 && (
+            <p className="text-xs text-text-muted font-display mt-1 tabular-nums">
+              Commission: -${rec.outcome_commission.toFixed(2)}
+              {rec.outcome_net_pnl != null && (
+                <span className="ml-2">
+                  Net: {rec.outcome_net_pnl >= 0 ? "+" : ""}${rec.outcome_net_pnl.toFixed(2)}
+                </span>
+              )}
+            </p>
+          )}
           {rec.outcome_exit_reason && (
             <p className="text-xs text-text-muted font-body mt-1">
               Exit: {rec.outcome_exit_reason}
@@ -728,9 +1026,11 @@ function DecisionForm({
 
 function OutcomeForm({
   decisionId,
+  action,
   onSubmit,
 }: {
   decisionId: string;
+  action: "BUY" | "SHORT" | "HOLD";
   onSubmit: (decisionId: string, body: OutcomeCreate) => Promise<void>;
 }) {
   const [entryPrice, setEntryPrice] = useState("");
@@ -739,6 +1039,19 @@ function OutcomeForm({
   const [pnlDollars, setPnlDollars] = useState("");
   const [pnlPercent, setPnlPercent] = useState("");
   const [holdingDays, setHoldingDays] = useState("");
+
+  useEffect(() => {
+    const entry = parseFloat(entryPrice);
+    const exit = parseFloat(exitPrice);
+    const qty = parseFloat(shares);
+    if (!isNaN(entry) && !isNaN(exit) && !isNaN(qty) && entry > 0 && qty > 0) {
+      const sign = action === "SHORT" ? -1 : 1;
+      const dollars = sign * (exit - entry) * qty;
+      const percent = sign * ((exit - entry) / entry) * 100;
+      setPnlDollars(dollars.toFixed(2));
+      setPnlPercent(percent.toFixed(2));
+    }
+  }, [entryPrice, exitPrice, shares, action]);
   const [exitReason, setExitReason] = useState("");
   const [notes, setNotes] = useState("");
   const [isSaving, setIsSaving] = useState(false);
