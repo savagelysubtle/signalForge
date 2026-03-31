@@ -101,7 +101,9 @@ export function ResultsScreen({ runId }: ResultsScreenProps) {
     );
   }
 
-  const tickers = currentResult.screening?.tickers || [];
+  const tickers = (currentResult.screening?.tickers || []).filter(
+    (t, i, arr) => arr.findIndex(x => x.ticker === t.ticker) === i
+  );
   const selectedTickerData = tickers.find(t => t.ticker === selectedTicker);
 
   const actionMap = Object.fromEntries(

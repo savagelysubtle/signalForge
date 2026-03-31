@@ -414,6 +414,14 @@ async def run_pipeline(
     if screening:
         for td in screening.tickers:
             td.ticker = normalize_ticker(td.ticker)
+        # Deduplicate tickers by symbol, keeping the first occurrence
+        seen: set[str] = set()
+        unique_tickers = []
+        for td in screening.tickers:
+            if td.ticker not in seen:
+                seen.add(td.ticker)
+                unique_tickers.append(td)
+        screening.tickers = unique_tickers
         result.screening = screening
     elif not result.stage_errors:
         result.stage_errors.append(
