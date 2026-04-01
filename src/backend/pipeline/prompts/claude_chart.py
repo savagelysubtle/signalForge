@@ -11,7 +11,7 @@ from __future__ import annotations
 from pipeline.schemas import SentimentAnalysis, StrategyConfig
 from utils.hashing import prompt_hash
 
-PROMPT_VERSION = "v7"
+PROMPT_VERSION = "v8"
 
 CHART_SYSTEM_PROMPT = """\
 You are an expert technical analyst reviewing a TradingView chart screenshot.
@@ -115,12 +115,13 @@ def build_chart_prompt(
     indicators_override: list[str] | None = None,
     fmp_context: str | None = None,
     regime_context: str = "",
+    live_quote_context: str | None = None,
 ) -> str:
     """Build the user prompt for per-ticker chart analysis.
 
     Includes chart configuration from the strategy and, when available,
-    recent news context from Gemini's sentiment analysis and fundamental
-    context from FMP pre-screening.
+    recent news context from Gemini's sentiment analysis, fundamental
+    context from FMP pre-screening, and real-time quote data.
 
     Args:
         ticker: Stock/crypto ticker symbol.
@@ -132,6 +133,7 @@ def build_chart_prompt(
             strategy's ``chart_indicators`` (for short-TF analysis).
         fmp_context: Pre-formatted FMP fundamental context string, or None.
         regime_context: Pre-formatted market regime header block, or empty.
+        live_quote_context: Pre-formatted real-time quote string, or None.
 
     Returns:
         The formatted user prompt string.
@@ -150,6 +152,17 @@ def build_chart_prompt(
             f"Indicators on chart: {', '.join(effective_indicators)}",
         ]
     )
+
+    if live_quote_context:
+        parts.append(
+            "\n--- LIVE MARKET DATA (real-time) ---"
+            f"\n{live_quote_context}"
+            "\nThis is the CURRENT intraday snapshot. The chart image may lag "
+            "by up to one candle. Use this live data to calibrate your analysis — "
+            "if the live price has moved significantly since the last visible candle, "
+            "note the divergence and adjust your support/resistance/entry levels accordingly."
+            "\n--- END LIVE MARKET DATA ---"
+        )
 
     if config.ta_focus:
         parts.append(f"\nAnalysis focus: {config.ta_focus}")

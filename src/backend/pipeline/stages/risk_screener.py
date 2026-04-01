@@ -130,7 +130,7 @@ async def screen_risks(
             if clean.startswith("```"):
                 clean = clean.split("\n", 1)[1].rsplit("```", 1)[0]
             parsed = json.loads(clean)
-        except (json.JSONDecodeError, IndexError):
+        except json.JSONDecodeError, IndexError:
             parsed = None
         if not parsed or not isinstance(parsed, dict):
             logger.warning("Risk screener returned unparseable response, passing all tickers")

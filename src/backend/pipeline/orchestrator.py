@@ -58,6 +58,7 @@ from services.fmp_service import (
     FmpEnrichedStock,
     apply_regime_weight_adjustments,
     compute_composite_scores,
+    fetch_quotes,
     fetch_sector_performance,
     fetch_vix_quote,
     filter_by_rsi,
@@ -546,6 +547,18 @@ async def run_pipeline(
     else:
         passed = [t.ticker for t in screening.tickers] if screening and screening.tickers else []
 
+    # Fetch real-time quotes for all pipeline tickers (runs fast, no stage timeout needed)
+    all_tickers_for_quotes = passed or (
+        [t.ticker for t in screening.tickers] if screening and screening.tickers else []
+    )
+    live_quotes: dict = {}
+    if all_tickers_for_quotes:
+        try:
+            live_quotes = await fetch_quotes(all_tickers_for_quotes)
+            logger.info("Fetched %d live quotes for pipeline tickers", len(live_quotes))
+        except Exception as exc:
+            logger.warning("Live quote fetch failed (non-critical): %s", exc)
+
     # Stage 3: Claude chart analysis (only for tickers that passed risk screening)
     if screening and screening.tickers and passed:
         try:
@@ -558,6 +571,7 @@ async def run_pipeline(
                     user_id,
                     fmp_context=fmp_map or None,
                     regime_context=regime_context,
+                    live_quotes=live_quotes or None,
                 ),
                 timeout=STAGE_TIMEOUTS["claude"],
             )
@@ -611,6 +625,7 @@ async def run_pipeline(
                     fmp_context=fmp_map or None,
                     regime_context=regime_context,
                     sector_consensus=sector_consensus,
+                    live_quotes=live_quotes or None,
                 ),
                 timeout=STAGE_TIMEOUTS["gpt"],
             )

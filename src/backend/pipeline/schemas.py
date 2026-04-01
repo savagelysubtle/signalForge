@@ -556,9 +556,9 @@ class StrategyConfig(BaseModel):
     chart_indicators: list[str] = Field(
         default_factory=lambda: ["RSI", "MACD", "Volume", "EMA_50", "EMA_200", "ATR"]
     )
-    chart_timeframe: str = "D"
-    secondary_timeframe: str = "4H"
-    additional_timeframes: list[str] = Field(default_factory=lambda: ["4H", "W"])
+    chart_timeframe: str = "4H"
+    secondary_timeframe: str = "D"
+    additional_timeframes: list[str] = Field(default_factory=lambda: ["D", "W"])
     short_timeframes: list[str] = Field(default_factory=lambda: ["15m", "1H"])
     short_tf_indicators: list[str] = Field(
         default_factory=lambda: ["VWAP", "Stochastic", "EMA_20", "ATR", "Volume"]

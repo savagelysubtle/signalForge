@@ -20,11 +20,11 @@ from pipeline.schemas import (
 from utils.hashing import prompt_hash
 
 if TYPE_CHECKING:
-    from services.fmp_service import FmpEnrichedStock
+    from services.fmp_service import FmpEnrichedStock, FmpQuote
 
-BULL_PROMPT_VERSION = "v2"
-BEAR_PROMPT_VERSION = "v2"
-JUDGE_PROMPT_VERSION = "v7"
+BULL_PROMPT_VERSION = "v3"
+BEAR_PROMPT_VERSION = "v3"
+JUDGE_PROMPT_VERSION = "v8"
 
 _BIAS_SCORE: dict[str, int] = {
     "strongly_bullish": 2,
@@ -439,6 +439,42 @@ def _format_sentiment_data(sentiments: list[SentimentAnalysis], tickers: list[st
     return "\n".join(parts)
 
 
+def _format_live_quotes(
+    live_quotes: dict[str, FmpQuote] | None,
+    tickers: list[str],
+) -> str:
+    """Format real-time FMP quote data for GPT prompts.
+
+    Args:
+        live_quotes: Mapping of symbol → FmpQuote, or None.
+        tickers: List of tickers being analyzed.
+
+    Returns:
+        Formatted live market data block, or a note that data is unavailable.
+    """
+    if not live_quotes:
+        return "No real-time quote data available."
+
+    lines: list[str] = []
+    for ticker in tickers:
+        quote = live_quotes.get(ticker)
+        if not quote or quote.price is None:
+            continue
+        parts = [f"**{ticker}**: ${quote.price:.2f}"]
+        if quote.changesPercentage is not None:
+            parts.append(f"({quote.changesPercentage:+.2f}%)")
+        if quote.dayLow is not None and quote.dayHigh is not None:
+            parts.append(f"Range: ${quote.dayLow:.2f}-${quote.dayHigh:.2f}")
+        if quote.open is not None:
+            parts.append(f"Open: ${quote.open:.2f}")
+        if quote.volume is not None and quote.avgVolume:
+            rvol = quote.volume / quote.avgVolume
+            parts.append(f"Vol: {quote.volume:,} (RVOL: {rvol:.1f}x)")
+        lines.append(" | ".join(parts))
+
+    return "\n".join(lines) if lines else "No real-time quote data available."
+
+
 def _format_fmp_data(
     fmp_context: dict[str, FmpEnrichedStock] | None,
     tickers: list[str],
@@ -459,6 +495,7 @@ def build_bull_prompt(
     sentiments: list[SentimentAnalysis],
     config: StrategyConfig,
     fmp_context: dict[str, FmpEnrichedStock] | None = None,
+    live_quotes: dict[str, FmpQuote] | None = None,
 ) -> str:
     """Build the user prompt for the bull analyst.
 
@@ -469,6 +506,7 @@ def build_bull_prompt(
         sentiments: List of SentimentAnalysis from Gemini (may be empty).
         config: Strategy configuration with trading style.
         fmp_context: FMP enriched stock data keyed by ticker (may be None).
+        live_quotes: Real-time FMP quotes keyed by ticker (may be None).
 
     Returns:
         Formatted user prompt string.
@@ -482,6 +520,7 @@ def build_bull_prompt(
         parts.append(f"\nTrading context: {config.trading_style}")
 
     parts.append(f"\n{_format_data_availability(tickers, screening, charts, sentiments)}")
+    parts.append(f"\n## LIVE MARKET DATA (real-time)\n{_format_live_quotes(live_quotes, tickers)}")
     parts.append(f"\n## FUNDAMENTALS (Perplexity)\n{_format_screening_data(screening, tickers)}")
     parts.append(f"\n## QUANTITATIVE DATA (FMP)\n{_format_fmp_data(fmp_context, tickers)}")
     parts.append(f"\n## TECHNICAL ANALYSIS (Claude)\n{_format_chart_data(charts, tickers)}")
@@ -498,6 +537,7 @@ def build_bear_prompt(
     sentiments: list[SentimentAnalysis],
     config: StrategyConfig,
     fmp_context: dict[str, FmpEnrichedStock] | None = None,
+    live_quotes: dict[str, FmpQuote] | None = None,
 ) -> str:
     """Build the user prompt for the bear analyst.
 
@@ -508,6 +548,7 @@ def build_bear_prompt(
         sentiments: List of SentimentAnalysis from Gemini (may be empty).
         config: Strategy configuration with trading style.
         fmp_context: FMP enriched stock data keyed by ticker (may be None).
+        live_quotes: Real-time FMP quotes keyed by ticker (may be None).
 
     Returns:
         Formatted user prompt string.
@@ -521,6 +562,7 @@ def build_bear_prompt(
         parts.append(f"\nTrading context: {config.trading_style}")
 
     parts.append(f"\n{_format_data_availability(tickers, screening, charts, sentiments)}")
+    parts.append(f"\n## LIVE MARKET DATA (real-time)\n{_format_live_quotes(live_quotes, tickers)}")
     parts.append(f"\n## FUNDAMENTALS (Perplexity)\n{_format_screening_data(screening, tickers)}")
     parts.append(f"\n## QUANTITATIVE DATA (FMP)\n{_format_fmp_data(fmp_context, tickers)}")
     parts.append(f"\n## TECHNICAL ANALYSIS (Claude)\n{_format_chart_data(charts, tickers)}")
@@ -542,6 +584,7 @@ def build_judge_prompt(
     fmp_context: dict[str, FmpEnrichedStock] | None = None,
     regime_context: str = "",
     sector_consensus: str = "",
+    live_quotes: dict[str, FmpQuote] | None = None,
 ) -> str:
     """Build the user prompt for the judge/portfolio manager.
 
@@ -557,6 +600,7 @@ def build_judge_prompt(
         fmp_context: FMP enriched stock data keyed by ticker (may be None).
         regime_context: Pre-formatted market regime header block, or empty.
         sector_consensus: Pre-formatted sector sentiment consensus block, or empty.
+        live_quotes: Real-time FMP quotes keyed by ticker (may be None).
 
     Returns:
         Formatted user prompt string.
@@ -585,6 +629,11 @@ def build_judge_prompt(
         parts.append(f"\n## HISTORICAL PERFORMANCE CONTEXT\n{reflection_context}")
 
     parts.append(f"\n{_format_data_availability(tickers, screening, charts, sentiments)}")
+    parts.append(
+        f"\n## LIVE MARKET DATA (real-time)\n{_format_live_quotes(live_quotes, tickers)}"
+        "\nIMPORTANT: Use these LIVE prices for entry, stop-loss, and take-profit levels. "
+        "Other data sections may reflect earlier prices from when those stages ran."
+    )
     parts.append(f"\n## FUNDAMENTALS (Perplexity)\n{_format_screening_data(screening, tickers)}")
     parts.append(f"\n## QUANTITATIVE DATA (FMP)\n{_format_fmp_data(fmp_context, tickers)}")
     parts.append(f"\n## TECHNICAL ANALYSIS (Claude)\n{_format_chart_data(charts, tickers)}")

@@ -163,6 +163,7 @@ async def run_debate(
     fmp_context: dict | None = None,
     regime_context: str = "",
     sector_consensus: str = "",
+    live_quotes: dict | None = None,
 ) -> tuple[list[Recommendation], list[dict]]:
     """Run the GPT debate/synthesis stage for all tickers.
 
@@ -198,6 +199,7 @@ async def run_debate(
             sentiments,
             config,
             fmp_context=fmp_context,
+            live_quotes=live_quotes,
         )
         all_metadata.extend(debate_metadata)
 
@@ -213,6 +215,7 @@ async def run_debate(
         fmp_context=fmp_context,
         regime_context=regime_context,
         sector_consensus=sector_consensus,
+        live_quotes=live_quotes,
     )
     all_metadata.append(judge_metadata)
 
@@ -249,6 +252,7 @@ async def _run_debate_phase(
     sentiments: list[SentimentAnalysis],
     config: StrategyConfig,
     fmp_context: dict | None = None,
+    live_quotes: dict | None = None,
 ) -> tuple[list[DebateCase] | None, list[DebateCase] | None, list[dict]]:
     """Run bull and bear analysts in parallel.
 
@@ -256,10 +260,22 @@ async def _run_debate_phase(
         Tuple of (bull_cases or None, bear_cases or None, metadata list).
     """
     bull_prompt = build_bull_prompt(
-        tickers, screening, charts, sentiments, config, fmp_context=fmp_context
+        tickers,
+        screening,
+        charts,
+        sentiments,
+        config,
+        fmp_context=fmp_context,
+        live_quotes=live_quotes,
     )
     bear_prompt = build_bear_prompt(
-        tickers, screening, charts, sentiments, config, fmp_context=fmp_context
+        tickers,
+        screening,
+        charts,
+        sentiments,
+        config,
+        fmp_context=fmp_context,
+        live_quotes=live_quotes,
     )
 
     bull_metadata: dict = {
@@ -334,6 +350,7 @@ async def _run_judge_phase(
     fmp_context: dict | None = None,
     regime_context: str = "",
     sector_consensus: str = "",
+    live_quotes: dict | None = None,
 ) -> tuple[list[Recommendation], dict]:
     """Run the judge to produce final recommendations.
 
@@ -352,6 +369,7 @@ async def _run_judge_phase(
         fmp_context=fmp_context,
         regime_context=regime_context,
         sector_consensus=sector_consensus,
+        live_quotes=live_quotes,
     )
 
     metadata: dict = {

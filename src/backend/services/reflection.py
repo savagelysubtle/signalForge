@@ -145,7 +145,9 @@ async def _fetch_stage_context(
         elif row["stage"] == "perplexity":
             tickers_list = parsed.get("tickers") or []
             for td in tickers_list:
-                if isinstance(td, dict) and (td.get("ticker") or "").endswith(row.get("ticker") or ""):
+                if isinstance(td, dict) and (td.get("ticker") or "").endswith(
+                    row.get("ticker") or ""
+                ):
                     context[key]["sector"] = td.get("sector", "")
                     break
 
