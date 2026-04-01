@@ -672,7 +672,11 @@ async def fetch_market_movers(
 
 
 class FmpQuote(BaseModel):
-    """Basic quote data from FMP (used for VIX and similar indices)."""
+    """Real-time quote data from FMP ``/stable/quote`` endpoint.
+
+    Used for VIX, individual stock quotes, and any symbol needing
+    live intraday price data.
+    """
 
     symbol: str = ""
     price: float | None = None
@@ -681,6 +685,9 @@ class FmpQuote(BaseModel):
     dayLow: float | None = None
     dayHigh: float | None = None
     previousClose: float | None = None
+    volume: int | None = None
+    avgVolume: int | None = None
+    open: float | None = None
 
 
 _VIX_LABELS: list[tuple[float, str]] = [
@@ -716,6 +723,39 @@ async def fetch_vix_quote() -> tuple[float | None, str]:
         return None, "unknown"
 
 
+async def fetch_quotes(symbols: list[str]) -> dict[str, FmpQuote]:
+    """Fetch real-time quotes for multiple symbols via FMP ``/stable/quote``.
+
+    Requests all symbols in a single comma-separated API call.
+
+    Args:
+        symbols: List of ticker symbols (e.g. ``["AAPL", "MSFT"]``).
+
+    Returns:
+        Mapping of symbol → FmpQuote. Missing symbols are omitted.
+    """
+    if not symbols:
+        return {}
+    try:
+        joined = ",".join(symbols)
+        data = await _fmp_get("quote", {"symbol": joined})
+        if not isinstance(data, list):
+            return {}
+        result: dict[str, FmpQuote] = {}
+        for item in data:
+            try:
+                quote = FmpQuote.model_validate(item)
+                if quote.symbol:
+                    result[quote.symbol] = quote
+            except Exception:
+                logger.debug("Skipping unparseable quote item: %s", item)
+        logger.info("Fetched live quotes for %d/%d symbols", len(result), len(symbols))
+        return result
+    except Exception as exc:
+        logger.warning("Failed to fetch live quotes: %s", exc)
+        return {}
+
+
 async def fetch_technical_indicator(
     symbol: str,
     timeframe: str = "daily",
@@ -736,10 +776,7 @@ async def fetch_technical_indicator(
         Most recent indicator value, or ``None`` if unavailable.
     """
     api_key = _get_api_key()
-    url = (
-        f"https://financialmodelingprep.com/api/v3/technical_indicator/"
-        f"{timeframe}/{symbol}"
-    )
+    url = f"https://financialmodelingprep.com/api/v3/technical_indicator/{timeframe}/{symbol}"
     params = {"type": indicator_type, "period": period, "apikey": api_key}
     try:
         async with _semaphore, httpx.AsyncClient(timeout=FMP_TIMEOUT) as client:
@@ -784,10 +821,16 @@ async def filter_by_rsi(
             passed.append(stock)
             continue
         if strategy_type == "momentum" and rsi > 75:
-            logger.info("RSI filter: rejecting %s (RSI=%.1f, overbought for momentum)", stock.symbol, rsi)
+            logger.info(
+                "RSI filter: rejecting %s (RSI=%.1f, overbought for momentum)", stock.symbol, rsi
+            )
             continue
         if strategy_type == "mean_reversion" and rsi < 30:
-            logger.info("RSI filter: rejecting %s (RSI=%.1f, oversold for mean-reversion)", stock.symbol, rsi)
+            logger.info(
+                "RSI filter: rejecting %s (RSI=%.1f, oversold for mean-reversion)",
+                stock.symbol,
+                rsi,
+            )
             continue
         passed.append(stock)
 
@@ -1391,7 +1434,12 @@ REGIME_WEIGHT_DELTAS: dict[str, dict[str, float]] = {
     "range_bound": {"fundamental": 10.0, "quality": 5.0, "momentum": -10.0, "sentiment": -5.0},
     "high_volatility": {"quality": 20.0, "fundamental": 5.0, "momentum": -15.0, "sentiment": -10.0},
     "risk_off": {"quality": 20.0, "fundamental": 10.0, "momentum": -20.0, "sentiment": -10.0},
-    "sector_rotation": {"momentum": 10.0, "sentiment": 10.0, "fundamental": -10.0, "quality": -10.0},
+    "sector_rotation": {
+        "momentum": 10.0,
+        "sentiment": 10.0,
+        "fundamental": -10.0,
+        "quality": -10.0,
+    },
 }
 
 

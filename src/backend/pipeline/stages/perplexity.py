@@ -31,7 +31,6 @@ from pipeline.prompts.perplexity_analysis import (
 )
 from pipeline.prompts.perplexity_analysis import get_prompt_hash as analysis_hash
 from pipeline.prompts.perplexity_discovery import (
-    DISCOVERY_SYSTEM_PROMPT,
     build_discovery_prompt,
     build_prompted_discovery_prompt,
     build_system_prompt,
@@ -865,12 +864,18 @@ async def run_bull_bear_discovery(
     try:
         (bull_result, bull_cit), (bear_result, bear_cit) = await asyncio.gather(
             _call_with_retry(
-                system_prompt, bull_prompt, tools=tools,
-                response_format=_RESPONSE_FORMAT, search_mode=search_mode,
+                system_prompt,
+                bull_prompt,
+                tools=tools,
+                response_format=_RESPONSE_FORMAT,
+                search_mode=search_mode,
             ),
             _call_with_retry(
-                system_prompt, bear_prompt, tools=tools,
-                response_format=_RESPONSE_FORMAT, search_mode=search_mode,
+                system_prompt,
+                bear_prompt,
+                tools=tools,
+                response_format=_RESPONSE_FORMAT,
+                search_mode=search_mode,
             ),
         )
 

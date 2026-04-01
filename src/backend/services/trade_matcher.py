@@ -338,5 +338,5 @@ def _days_between(ts1: str, ts2: str) -> float | None:
         if dt2.tzinfo is None:
             dt2 = dt2.replace(tzinfo=UTC)
         return abs((dt1 - dt2).total_seconds()) / 86400.0
-    except ValueError, TypeError:
+    except (ValueError, TypeError):
         return None

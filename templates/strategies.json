@@ -17,8 +17,8 @@
       "ADX",
       "Supertrend"
     ],
-    "chart_timeframe": "D",
-    "additional_timeframes": ["4H", "W"],
+    "chart_timeframe": "4H",
+    "additional_timeframes": ["D", "W"],
     "short_timeframes": [],
     "short_tf_indicators": ["VWAP", "EMA_9", "EMA_21", "RSI", "Volume"],
     "ta_focus": "52-week high breakout with volume confirmation, EMA 9 > 21 > 50 > 200 full bullish stack, ADX > 25 trend strength, Supertrend green, RSI 55-70 momentum zone, MACD positive histogram expanding",
@@ -84,8 +84,8 @@
       "ADX",
       "Bollinger_Bands"
     ],
-    "chart_timeframe": "D",
-    "additional_timeframes": ["4H", "W"],
+    "chart_timeframe": "4H",
+    "additional_timeframes": ["D", "W"],
     "short_timeframes": [],
     "short_tf_indicators": ["EMA_21", "EMA_50", "MACD", "RSI", "Volume"],
     "ta_focus": "EMA 50 above EMA 200 golden cross confirmed, price above both EMAs, ADX > 25 confirming trend strength, RSI 50-70 bullish zone, MACD above zero line with positive histogram, Bollinger Bands expanding on breakout, volume above average on up-days",
@@ -150,8 +150,8 @@
       "ADX",
       "Williams_R"
     ],
-    "chart_timeframe": "D",
-    "additional_timeframes": ["4H", "W"],
+    "chart_timeframe": "4H",
+    "additional_timeframes": ["D", "W"],
     "short_timeframes": [],
     "short_tf_indicators": ["EMA_9", "EMA_21", "EMA_50", "RSI", "Volume"],
     "ta_focus": "Price above EMA 50 and 200 uptrend confirmed, pullback touching or near 21 EMA on declining volume, RSI reset to 40-55 range from overbought without breaking below 40, MACD still above zero, Williams %R showing mild oversold -50 to -65 for entry timing, ADX above 20 confirming trend intact, bounce candle with volume expansion",
@@ -218,8 +218,8 @@
       "ADX",
       "Supertrend"
     ],
-    "chart_timeframe": "D",
-    "additional_timeframes": ["4H", "W"],
+    "chart_timeframe": "4H",
+    "additional_timeframes": ["D", "W"],
     "short_timeframes": [],
     "short_tf_indicators": [
       "EMA_21",
@@ -288,8 +288,8 @@
       "Supertrend",
       "Williams_R"
     ],
-    "chart_timeframe": "D",
-    "additional_timeframes": ["4H", "W"],
+    "chart_timeframe": "4H",
+    "additional_timeframes": ["D", "W"],
     "short_timeframes": [],
     "short_tf_indicators": ["VWAP", "EMA_21", "RSI", "Williams_R", "Volume"],
     "ta_focus": "RSI < 35 with bullish divergence vs price, Bollinger Band lower band touch or pierce with reversal candle, Supertrend about to flip green, Williams %R below -80 oversold, MACD histogram reducing on downside showing seller exhaustion, EMA 200 acting as support, volume spike on reversal day confirming buyers stepping in",
@@ -350,8 +350,8 @@
       "Bollinger_Bands",
       "Williams_R"
     ],
-    "chart_timeframe": "D",
-    "additional_timeframes": ["4H", "W"],
+    "chart_timeframe": "4H",
+    "additional_timeframes": ["D", "W"],
     "short_timeframes": [],
     "short_tf_indicators": ["VWAP", "EMA_21", "EMA_50", "RSI", "Volume"],
     "ta_focus": "Accumulation zones near EMA 200 or multi-month support, RSI reset below 45 from oversold bounce, MACD bullish divergence, Bollinger Bands lower band touch with reversal candle, ADX below 20 in base then rising on entry, volume expansion on green days vs red days accumulation signature",
@@ -415,8 +415,8 @@
       "Bollinger_Bands",
       "Williams_R"
     ],
-    "chart_timeframe": "D",
-    "additional_timeframes": ["4H"],
+    "chart_timeframe": "4H",
+    "additional_timeframes": ["D"],
     "short_timeframes": ["1H"],
     "short_tf_indicators": ["VWAP", "EMA_21", "RSI", "Williams_R", "Volume"],
     "ta_focus": "Pre-earnings Bollinger Band squeeze consolidation, price above EMA 50 and 200, ADX rising indicating building momentum, RSI 50-65 pre-catalyst coiling, MACD positive bias, volume decreasing during consolidation coiling, ATR expanding as earnings approach indicating IV pickup",
@@ -706,8 +706,8 @@
       "Supertrend",
       "Bollinger_Bands"
     ],
-    "chart_timeframe": "D",
-    "additional_timeframes": ["4H", "W"],
+    "chart_timeframe": "4H",
+    "additional_timeframes": ["D", "W"],
     "short_timeframes": [],
     "short_tf_indicators": ["VWAP", "EMA_21", "EMA_50", "RSI", "Volume"],
     "ta_focus": "EMA 50/200 golden cross or bullish stack, Supertrend green on daily, RSI 50-70 momentum zone, MACD histogram positive and expanding, Bollinger Bands widening on breakout, volume above 20-day average on up days, ATR expanding indicating trend acceleration",

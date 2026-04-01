@@ -119,15 +119,10 @@ def build_regime_prompt(
                 + "--- END SECTOR PERFORMANCE ---\n"
             )
 
-    parts.append(
-        "Search for:\n"
-        "1. S&P 500 current trend and recent price action (last 1-2 weeks)\n"
-    )
+    parts.append("Search for:\n1. S&P 500 current trend and recent price action (last 1-2 weeks)\n")
     if vix_value is None:
         parts.append("2. Current VIX (CBOE Volatility Index) level\n")
-    parts.append(
-        "3. Market breadth — approximate % of S&P 500 stocks above their 200-day MA\n"
-    )
+    parts.append("3. Market breadth — approximate % of S&P 500 stocks above their 200-day MA\n")
     if not sector_data:
         parts.append("4. Sector performance — which sectors are leading and lagging\n")
     parts.append(

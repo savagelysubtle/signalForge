@@ -28,7 +28,9 @@ def _build_score_drivers(stock: FmpEnrichedStock) -> list[tuple[str, float | Non
         f_parts.append(f"PE: {stock.pe_ratio:.1f}")
     if stock.net_profit_margin is not None:
         f_parts.append(f"margin: {stock.net_profit_margin:.1f}%")
-    drivers.append(("Fundamental", stock.score_fundamental, f"({', '.join(f_parts)})" if f_parts else ""))
+    drivers.append(
+        ("Fundamental", stock.score_fundamental, f"({', '.join(f_parts)})" if f_parts else "")
+    )
 
     m_parts: list[str] = []
     if stock.price_change_3m is not None:
@@ -44,7 +46,9 @@ def _build_score_drivers(stock: FmpEnrichedStock) -> list[tuple[str, float | Non
         s_parts.append(f"insider: {'NET BUY' if stock.insider_net_buys > 0 else 'net sell'}")
     if stock.analyst_target_upside is not None:
         s_parts.append(f"analyst upside: {stock.analyst_target_upside:+.0f}%")
-    drivers.append(("Sentiment", stock.score_sentiment, f"({', '.join(s_parts)})" if s_parts else ""))
+    drivers.append(
+        ("Sentiment", stock.score_sentiment, f"({', '.join(s_parts)})" if s_parts else "")
+    )
 
     q_parts: list[str] = []
     if stock.piotroski_score is not None:
