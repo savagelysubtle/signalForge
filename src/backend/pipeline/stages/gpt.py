@@ -41,7 +41,9 @@ from services.keyring_service import get_api_key
 
 logger = logging.getLogger(__name__)
 
-GPT_MODEL = "gpt-4.1"
+GPT_MODEL = "gpt-5.4"
+
+_semaphore = asyncio.Semaphore(3)
 
 
 def _get_client() -> AsyncOpenAI:
@@ -136,15 +138,16 @@ async def _call_gpt(
     if error_context:
         full_user_prompt = f"{user_prompt}\n\n---\nCORRECTION: {error_context}"
 
-    response = await client.chat.completions.create(
-        model=GPT_MODEL,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": full_user_prompt},
-        ],
-        temperature=0.7,
-        max_tokens=8192,
-    )
+    async with _semaphore:
+        response = await client.chat.completions.create(
+            model=GPT_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": full_user_prompt},
+            ],
+            temperature=0.7,
+            max_completion_tokens=8192,
+        )
 
     return response.choices[0].message.content or ""
 
@@ -157,6 +160,10 @@ async def run_debate(
     config: StrategyConfig,
     reflection_context: str,
     run_id: str,
+    fmp_context: dict | None = None,
+    regime_context: str = "",
+    sector_consensus: str = "",
+    live_quotes: dict | None = None,
 ) -> tuple[list[Recommendation], list[dict]]:
     """Run the GPT debate/synthesis stage for all tickers.
 
@@ -172,6 +179,9 @@ async def run_debate(
         config: Strategy configuration with risk params and debate toggle.
         reflection_context: Historical performance injection prompt.
         run_id: Pipeline run UUID for metadata tracking.
+        fmp_context: FMP enriched stock data keyed by ticker (may be None).
+        regime_context: Pre-formatted market regime header, or empty.
+        sector_consensus: Pre-formatted sector sentiment consensus, or empty.
 
     Returns:
         Tuple of (list of Recommendation results,
@@ -188,6 +198,8 @@ async def run_debate(
             charts,
             sentiments,
             config,
+            fmp_context=fmp_context,
+            live_quotes=live_quotes,
         )
         all_metadata.extend(debate_metadata)
 
@@ -200,11 +212,15 @@ async def run_debate(
         bear_cases,
         reflection_context,
         config,
+        fmp_context=fmp_context,
+        regime_context=regime_context,
+        sector_consensus=sector_consensus,
+        live_quotes=live_quotes,
     )
     all_metadata.append(judge_metadata)
 
     for rec in recommendations:
-        if rec.action in ("BUY", "SELL"):
+        if rec.action in ("BUY", "SHORT"):
             missing = []
             if rec.entry_price is None:
                 missing.append("entry_price")
@@ -235,14 +251,32 @@ async def _run_debate_phase(
     charts: list[ChartAnalysis],
     sentiments: list[SentimentAnalysis],
     config: StrategyConfig,
+    fmp_context: dict | None = None,
+    live_quotes: dict | None = None,
 ) -> tuple[list[DebateCase] | None, list[DebateCase] | None, list[dict]]:
     """Run bull and bear analysts in parallel.
 
     Returns:
         Tuple of (bull_cases or None, bear_cases or None, metadata list).
     """
-    bull_prompt = build_bull_prompt(tickers, screening, charts, sentiments, config)
-    bear_prompt = build_bear_prompt(tickers, screening, charts, sentiments, config)
+    bull_prompt = build_bull_prompt(
+        tickers,
+        screening,
+        charts,
+        sentiments,
+        config,
+        fmp_context=fmp_context,
+        live_quotes=live_quotes,
+    )
+    bear_prompt = build_bear_prompt(
+        tickers,
+        screening,
+        charts,
+        sentiments,
+        config,
+        fmp_context=fmp_context,
+        live_quotes=live_quotes,
+    )
 
     bull_metadata: dict = {
         "stage": "gpt_bull",
@@ -280,6 +314,8 @@ async def _run_debate_phase(
         bull_cases = bull_result.cases
         bull_metadata["status"] = "success"
         bull_metadata["raw_response"] = bull_result.model_dump_json()
+        if hasattr(bull_result, "cases"):
+            bull_metadata["retry_count"] = getattr(bull_result, "_retry_count", 0)
     else:
         bull_metadata["status"] = "validation_failed"
 
@@ -291,6 +327,8 @@ async def _run_debate_phase(
         bear_cases = bear_result.cases
         bear_metadata["status"] = "success"
         bear_metadata["raw_response"] = bear_result.model_dump_json()
+        if hasattr(bear_result, "cases"):
+            bear_metadata["retry_count"] = getattr(bear_result, "_retry_count", 0)
     else:
         bear_metadata["status"] = "validation_failed"
 
@@ -309,6 +347,10 @@ async def _run_judge_phase(
     bear_cases: list[DebateCase] | None,
     reflection_context: str,
     config: StrategyConfig,
+    fmp_context: dict | None = None,
+    regime_context: str = "",
+    sector_consensus: str = "",
+    live_quotes: dict | None = None,
 ) -> tuple[list[Recommendation], dict]:
     """Run the judge to produce final recommendations.
 
@@ -324,6 +366,10 @@ async def _run_judge_phase(
         bear_cases,
         reflection_context,
         config,
+        fmp_context=fmp_context,
+        regime_context=regime_context,
+        sector_consensus=sector_consensus,
+        live_quotes=live_quotes,
     )
 
     metadata: dict = {
@@ -341,6 +387,7 @@ async def _run_judge_phase(
         if result is not None:
             metadata["status"] = "success"
             metadata["raw_response"] = result.model_dump_json()
+            metadata["retry_count"] = getattr(result, "_retry_count", 0)
             return result.recommendations, metadata
 
         metadata["status"] = "validation_failed"

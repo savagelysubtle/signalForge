@@ -5,11 +5,13 @@
 > **Version:** 0.1.0 (Draft)
 > **Last Updated:** March 12, 2026
 
+> **⚠️ Document status (March 2026):** Sections below still describe an early **desktop + SQLite + Tauri** vision and “fully local” assumptions. The **shipping product** is **cloud-hosted** (React on Vercel, FastAPI on Railway, Supabase Auth + Postgres + Storage). For accurate tech stack, deployment, API surface, and the implemented self-learning loop, use the repo root **`CLAUDE.md`**.
+
 ---
 
 ## 1. Product Overview
 
-SignalForge is a desktop intelligence platform that orchestrates multiple AI models to analyze stocks and produce structured trading recommendations. It is **not** a trading platform — it generates actionable analysis that the user reviews and manually executes via TradingView (connected to Questrade).
+SignalForge is a web application (historically also conceived as a desktop intelligence platform) that orchestrates multiple AI models to analyze stocks and produce structured trading recommendations. It is **not** a trading platform — it generates actionable analysis that the user reviews and manually executes via TradingView (connected to Questrade).
 
 The core premise: no single AI model excels at everything. Perplexity excels at grounded web research, Gemini at real-time news synthesis, Claude at visual chart pattern recognition, and GPT at quantitative reasoning. SignalForge chains them into a pipeline where each model handles what it does best, passing structured data downstream until a final recommendation emerges.
 
@@ -84,15 +86,17 @@ Periodically (or on-demand), the system analyzes the accumulated data — recomm
 
 ## 5. Feature Requirements
 
-### 5.1 Command Bar
+### 5.1 Command Bar / Search
 
 | Requirement | Priority | Notes |
 |---|---|---|
-| Text input for comma-separated tickers | P0 | Simple text field, no autocomplete needed for MVP |
-| Strategy dropdown selector | P0 | Populated from saved strategies in SQLite |
+| Text input for comma-separated tickers | P0 | Auto-classified as `analysis` mode |
+| Strategy dropdown selector | P0 | Populated from saved strategies |
 | "Run Analysis" button | P0 | Triggers pipeline execution |
 | Pipeline status indicator | P0 | Shows current stage, ticker being processed, elapsed time |
-| Combined mode (strategy + manual tickers) | P1 | Merge both inputs into a single pipeline run |
+| Combined mode (strategy + manual tickers) | P1 | **Shipped** — merge both inputs |
+| Free-form prompt mode | P1 | **Shipped** — natural language drives Perplexity screening (`prompt` mode) |
+| Auto-classification of input | P1 | **Shipped** — CommandBar detects discovery/analysis/combined/prompt from what's typed |
 
 ### 5.2 Recommendations View (Default)
 
@@ -142,13 +146,13 @@ Periodically (or on-demand), the system analyzes the accumulated data — recomm
 
 | Requirement | Priority | Notes |
 |---|---|---|
-| Confidence calibration chart | P1 | GPT confidence vs actual win rate |
-| Strategy performance comparison | P1 | Which strategies produce best results |
-| Sector performance breakdown | P2 | Win rate by sector |
-| Override accuracy | P1 | When user passes on a recommendation, were they right? |
-| Claude TA accuracy | P2 | How often Claude's pattern detection was correct |
-| Prompt version performance tracking | P2 | Compare prompt iterations |
-| Generate reflection summary button | P1 | Trigger self-learning analysis on demand |
+| Confidence calibration chart | P1 | **Shipped:** bucketed win rates in Insights + overview API |
+| Strategy performance comparison | P1 | **Not in UI/API yet** — reflections are user-wide today |
+| Sector performance breakdown | P2 | Partially used inside reflection engine; not a dedicated Insights chart |
+| Override accuracy | P1 | Pass reasons captured; “were they right?” analytics not surfaced |
+| Claude TA accuracy | P2 | Stage data exists in `stage_outputs`; no dedicated accuracy view |
+| Prompt version performance tracking | P2 | Hashes stored per run; correlation UI not built |
+| Generate reflection summary button | P1 | **Shipped:** InsightsView + `POST /api/insights/reflect` |
 
 ### 5.6 Settings
 
@@ -179,33 +183,37 @@ Periodically (or on-demand), the system analyzes the accumulated data — recomm
 
 ### 6.3 Security
 
-- API keys stored locally using OS keyring (Windows Credential Manager via `keyring` library)
+- API keys stored as Railway environment variables (dev: `.env`); never committed to version control or stored in the database
 - No API keys transmitted anywhere except to their respective API endpoints
-- No telemetry, no cloud sync, no external data transmission beyond the four LLM APIs and chart image API
-- All data stays local in SQLite
+- No telemetry or tracking beyond the six external APIs (Perplexity, Anthropic, Google, OpenAI, Chart-Img, FMP)
+- Auth via Supabase JWT (ES256, verified by JWKS on every request)
+- Multi-tenant data isolation: every DB query filters on `user_id` extracted from the verified JWT
 
 ### 6.4 Privacy
 
-- Fully local application — no user accounts, no cloud services, no tracking
-- SQLite database stored in user's app data directory
-- No data leaves the machine except API calls to Perplexity, Anthropic, Google, OpenAI, and the chart image service
+- User accounts managed by Supabase Auth (email/password)
+- Pipeline data, decisions, and outcomes stored in Supabase PostgreSQL (cloud-hosted)
+- Chart images stored in Supabase Storage
+- No data shared with third parties beyond the LLM/chart API calls required for analysis
 
 ---
 
 ## 7. Tech Stack
 
-| Component | Technology | Rationale |
+| Component | Technology | Notes |
 |---|---|---|
-| Desktop shell | Tauri 2.x (Rust) | Lightweight, native feel, Steve knows Rust |
-| Frontend | React + TypeScript | Rich widget ecosystem, TradingView embeds work in webview |
-| Backend | Python (FastAPI) | All pipeline logic, LLM orchestration, DB access |
-| Database | SQLite | Simple, local, no server, portable |
-| LLM clients | `openai`, `anthropic`, `google-generativeai` SDKs | Official Python SDKs for each provider |
-| Validation | Pydantic v2 | Schema validation for all LLM outputs |
+| Frontend hosting | Vercel (static SPA) | `src/frontend` built by `bun run build` |
+| Backend hosting | Railway (Docker) | Python 3.14 FastAPI |
+| Auth | Supabase Auth | Email/password, ES256 JWT via JWKS |
+| Database | Supabase PostgreSQL | Accessed via PostgREST (Supabase Python SDK) |
+| Chart storage | Supabase Storage | Public `charts` bucket |
+| Frontend | React 19 + TypeScript 5.9 + Tailwind v4 + Vite 8 + React Router v7 | |
+| Backend | Python 3.14 FastAPI + Pydantic v2 | |
+| LLM SDKs | `openai`, `anthropic`, `google-generativeai`, `perplexityai` | Official SDKs |
+| Data APIs | FMP (Financial Modeling Prep), Chart-Img v2 | FMP is optional |
 | Async | `asyncio` + `httpx` | Parallel pipeline stages |
-| Chart generation | Chart-Img API (TradingView charts) | Generates chart images for Claude Vision |
-| Package management | `uv` | Fast, Astral ecosystem |
-| Linting | `ruff` (Black rules, f-string format) | Steve's standard Python tooling |
+| Package management | `uv` (Python), `bun` (frontend) | |
+| Linting/Formatting | `ruff` + `ty` | Astral toolchain |
 
 ---
 
@@ -245,6 +253,12 @@ Periodically (or on-demand), the system analyzes the accumulated data — recomm
 - **Value:** Complete analysis pipeline with actionable recommendations
 
 ### Phase 5: Self-Learning Loop
+
+**Status — implemented in codebase:** Manual outcome logging, on-demand reflection
+generation (`POST /api/insights/reflect`, requires ≥5 outcomes), Insights dashboard
+and per-recommendation Feedback tab, and reflection context injection into the GPT
+judge prompt on each run. `pipeline_runs.prompt_versions` records per-stage prompt
+hashes for future analytics.
 
 - Manual outcome logging
 - Reflection summary generation
@@ -298,10 +312,8 @@ Since this is a personal tool, success is measured by:
 ## 11. Out of Scope
 
 - Automated trade execution (by design — human in the loop always)
-- Multi-user support or accounts
-- Cloud sync or remote access
 - Real-time streaming data (use TradingView for that)
 - Options analysis (stocks and ETFs only for MVP)
-- Backtesting engine (may be added later, but not in initial scope)
+- Backtesting engine
 - Mobile app
 - Broker API integration for order placement

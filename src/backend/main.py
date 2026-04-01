@@ -109,11 +109,21 @@ async def health_check() -> dict[str, str]:
 
 # --- Route registration (imported after app creation) ---
 from api.charts import router as charts_router  # noqa: E402
+from api.decisions import router as decisions_router  # noqa: E402
+from api.outcomes import router as outcomes_router  # noqa: E402
 from api.pipeline import router as pipeline_router  # noqa: E402
+from api.questrade import router as questrade_router  # noqa: E402
+from api.recommendations import router as recommendations_router  # noqa: E402
+from api.reflections import router as reflections_router  # noqa: E402
 from api.settings import router as settings_router  # noqa: E402
 from api.strategies import router as strategies_router  # noqa: E402
 
 app.include_router(charts_router, prefix="/api")
+app.include_router(decisions_router, prefix="/api")
+app.include_router(outcomes_router, prefix="/api")
 app.include_router(pipeline_router, prefix="/api")
+app.include_router(recommendations_router, prefix="/api")
+app.include_router(reflections_router, prefix="/api")
 app.include_router(strategies_router, prefix="/api")
+app.include_router(questrade_router, prefix="/api")
 app.include_router(settings_router, prefix="/api")

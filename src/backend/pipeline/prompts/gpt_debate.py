@@ -7,18 +7,41 @@ bull/bear/judge debate to produce final trading recommendations.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from pipeline.schemas import (
     ChartAnalysis,
     DebateCase,
+    NewsCatalyst,
     ScreeningResult,
     SentimentAnalysis,
     StrategyConfig,
 )
 from utils.hashing import prompt_hash
 
-BULL_PROMPT_VERSION = "v1"
-BEAR_PROMPT_VERSION = "v1"
-JUDGE_PROMPT_VERSION = "v3"
+if TYPE_CHECKING:
+    from services.fmp_service import FmpEnrichedStock, FmpQuote
+
+BULL_PROMPT_VERSION = "v3"
+BEAR_PROMPT_VERSION = "v3"
+JUDGE_PROMPT_VERSION = "v8"
+
+_BIAS_SCORE: dict[str, int] = {
+    "strongly_bullish": 2,
+    "bullish": 1,
+    "neutral": 0,
+    "bearish": -1,
+    "strongly_bearish": -2,
+}
+
+_TF_WEIGHT: dict[str, float] = {
+    "W": 0.40,
+    "D": 0.40,
+    "4H": 0.15,
+    "2H": 0.10,
+    "1H": 0.05,
+    "15m": 0.05,
+}
 
 # ---------------------------------------------------------------------------
 # System Prompts
@@ -85,7 +108,7 @@ Guidelines:
 JUDGE_SYSTEM_PROMPT = """\
 You are a senior portfolio manager presiding over a bull/bear debate.
 Your job is to weigh both sides, consider the raw data, apply risk management
-rules, and produce final BUY/SELL/HOLD recommendations for each ticker.
+rules, and produce final BUY/SHORT/HOLD recommendations for each ticker.
 
 You must return ONLY valid JSON — no commentary outside the JSON structure.
 
@@ -94,7 +117,7 @@ Return a JSON object with this exact structure:
   "recommendations": [
     {
       "ticker": "<SYMBOL>",
-      "action": "BUY" | "SELL" | "HOLD",
+      "action": "BUY" | "SHORT" | "HOLD",
       "confidence": <float from 0.0 to 1.0>,
       "entry_price": <float or null>,
       "stop_loss": <float or null>,
@@ -127,7 +150,7 @@ Return a JSON object with this exact structure:
 
 Decision framework:
 - BUY: Bull case significantly outweighs bear case, with favorable risk/reward
-- SELL: Bear case dominates, or risk/reward is unfavorable for current holders
+- SHORT: Bear case dominates; bearish setup with favorable short risk/reward for active shorting
 - HOLD: Mixed signals, insufficient conviction, or wait-for-confirmation setup
 
 Confidence calibration:
@@ -137,9 +160,9 @@ Confidence calibration:
 - 0.40-0.55: Low conviction, likely HOLD unless specific catalyst
 - <0.40: Very weak signal, default to HOLD
 
-Entry price rules (CRITICAL — MANDATORY for BUY and SELL):
+Entry price rules (CRITICAL — MANDATORY for BUY and SHORT):
 - entry_price, stop_loss, and take_profit are REQUIRED (non-null) for ALL BUY
-  and SELL recommendations. NEVER return null for these fields on BUY or SELL.
+  and SHORT recommendations. NEVER return null for these fields on BUY or SHORT.
 - The "Current/Last Price" in the TECHNICAL ANALYSIS section is the live market
   price at the time of chart capture. Use it as the anchor for ALL price targets.
 - If recommending BUY and the current price IS at or near a favorable entry
@@ -152,18 +175,62 @@ Entry price rules (CRITICAL — MANDATORY for BUY and SELL):
 - NEVER set an entry_price the stock has already traded through and is unlikely
   to revisit in the near term. The user cannot enter at a price that's behind
   the market.
-- For SELL recommendations, entry_price represents the short entry or exit
-  level — same anchoring logic applies.
+- For SHORT recommendations, entry_price represents the short entry level —
+  same anchoring logic applies. Prefer entries near resistance.
 - For HOLD recommendations, set entry_price to the price level at which you
   would convert to BUY (the trigger price). Set stop_loss and take_profit
   to null for HOLD.
 
 Risk management rules:
 - Position sizes should respect the provided risk parameters
-- entry_price, stop_loss, and take_profit MUST be set (non-null) for BUY and SELL
-- risk_reward_ratio = (take_profit - entry) / (entry - stop_loss) — REQUIRED for BUY/SELL
+- entry_price, stop_loss, and take_profit MUST be set (non-null) for BUY and SHORT
+- risk_reward_ratio = (take_profit - entry) / (entry - stop_loss) — REQUIRED for BUY/SHORT
 - Reduce position_size_pct when confidence is low
 - Flag warnings for any unusual risks (earnings approaching, low liquidity, etc.)
+
+ATR-based stop loss (PREFERRED method when ATR data is available):
+- Look for the ATR indicator reading in the TECHNICAL ANALYSIS section. It will
+  appear as "ATR: <numeric value> (<signal>)" in the indicators list.
+- For BUY: stop_loss = entry_price - (1.5 x ATR) as a baseline. Adjust tighter
+  (1.0x ATR) for scalp/intraday strategies or wider (2.0x ATR) for swing/position
+  trades based on the strategy's trading style and the chart timeframe.
+- For SHORT: stop_loss = entry_price + (1.5 x ATR) as a baseline, with the same
+  style-based adjustments.
+- ALWAYS cross-check the ATR-derived stop against key_levels from the chart
+  analysis. If a strong support (for BUY) or resistance (for SHORT) level sits
+  between the entry and the ATR-derived stop, prefer the structural level as it
+  provides a more meaningful invalidation point.
+- If multiple timeframes are available, prefer the ATR from the primary
+  (longest swing) timeframe for stop placement.
+- If ATR data is not present in any chart analysis, fall back to placing stops
+  beyond the nearest key support/resistance level.
+
+Weighted bias score (multi-timeframe alignment metric):
+- The TECHNICAL ANALYSIS section includes a "Weighted bias score" for each
+  ticker with multiple timeframes analyzed. This is a numeric summary ranging
+  from -2.0 (all timeframes strongly bearish) to +2.0 (all strongly bullish).
+- Scores above +1.2: strong bullish alignment — supports BUY with elevated
+  confidence and full position sizing.
+- Scores below -1.2: strong bearish alignment — supports SHORT with conviction.
+- Scores between -0.8 and +0.8: mixed or neutral — suggests HOLD, reduced
+  position sizing, or wait-for-confirmation.
+- Scores between +0.8 and +1.2 or -0.8 and -1.2: moderate alignment — proceed
+  with caution, use smaller position size.
+
+Historical performance memory (when HISTORICAL PERFORMANCE section is present):
+- SHORT-TERM MEMORY reflects the last 14 days. It reveals active streaks and
+  temporary suppressions. Treat suppressions as strong warnings: if a pattern
+  is flagged "reduce confidence by 40%", multiply your confidence by 0.6 for
+  signals relying on that pattern.
+- LONG-TERM MEMORY is the statistical baseline across all history. Pattern
+  accuracy, sector win rates, and timeframe alignment stats represent durable
+  trends. Use them to calibrate confidence and position sizing.
+- When short-term and long-term conflict (e.g. a pattern has 70% long-term
+  win rate but 0% in the last 2 weeks), PRIORITIZE short-term for the next
+  1-2 recommendations. Recent performance better reflects current market
+  conditions. Add a warning noting the conflict.
+- "DO NOT FIRE" on single-TF alignment means you should default to HOLD
+  unless other data sources provide overwhelming evidence.
 """
 
 
@@ -269,6 +336,44 @@ def _format_single_chart(ca: ChartAnalysis) -> str:
     return "\n".join(lines)
 
 
+def _synthesize_timeframes(ticker: str, charts: list[ChartAnalysis]) -> str:
+    """Generate a cross-timeframe synthesis section for GPT.
+
+    Identifies convergence (all timeframes agree) or divergence
+    (timeframes conflict) and highlights the alignment for GPT
+    to factor into its confidence assessment.
+    """
+    biases = {ca.timeframe: ca.overall_bias for ca in charts}
+    all_bullish = all("bullish" in b for b in biases.values())
+    all_bearish = all("bearish" in b for b in biases.values())
+
+    lines = [f"\n#### Multi-Timeframe Synthesis for {ticker}"]
+    lines.append(f"Timeframes analyzed: {', '.join(biases.keys())}")
+    lines.append(f"Bias alignment: {', '.join(f'{tf}={b}' for tf, b in biases.items())}")
+
+    if all_bullish:
+        lines.append("CONVERGENCE: All timeframes bullish — HIGH confidence signal.")
+    elif all_bearish:
+        lines.append("CONVERGENCE: All timeframes bearish — HIGH confidence signal.")
+    else:
+        lines.append("DIVERGENCE: Timeframes show mixed signals — assess carefully.")
+        for tf, bias in biases.items():
+            if "bullish" in bias and any("bearish" in b for b in biases.values()):
+                lines.append(f"  - {tf} is {bias} while other timeframes are bearish")
+            elif "bearish" in bias and any("bullish" in b for b in biases.values()):
+                lines.append(f"  - {tf} is {bias} while other timeframes are bullish")
+
+    total_weight = sum(_TF_WEIGHT.get(tf, 0.10) for tf in biases)
+    if total_weight > 0:
+        weighted = sum(_BIAS_SCORE.get(b, 0) * _TF_WEIGHT.get(tf, 0.10) for tf, b in biases.items())
+        normalized = weighted / total_weight
+        lines.append(
+            f"Weighted bias score: {normalized:+.2f} (threshold: +/-1.2 to fire with conviction)"
+        )
+
+    return "\n".join(lines)
+
+
 def _format_chart_data(charts: list[ChartAnalysis], tickers: list[str]) -> str:
     """Format Claude chart analysis results for GPT prompts.
 
@@ -293,7 +398,16 @@ def _format_chart_data(charts: list[ChartAnalysis], tickers: list[str]) -> str:
         for ca in ticker_charts:
             parts.append(_format_single_chart(ca))
 
+        if len(ticker_charts) > 1:
+            parts.append(_synthesize_timeframes(ticker, ticker_charts))
+
     return "\n".join(parts)
+
+
+def _format_catalyst(c: NewsCatalyst) -> str:
+    """Format a single catalyst with recency when available."""
+    recency = f" — {c.hours_ago}h ago" if c.hours_ago is not None else ""
+    return f"  [{c.impact.upper()}] {c.headline} ({c.significance}){recency}"
 
 
 def _format_sentiment_data(sentiments: list[SentimentAnalysis], tickers: list[str]) -> str:
@@ -311,21 +425,67 @@ def _format_sentiment_data(sentiments: list[SentimentAnalysis], tickers: list[st
 
         lines = [
             f"\n### {sa.ticker}",
-            f"Sentiment: {sa.sentiment_score:+.2f} ({sa.sentiment_label})",
+            f"Sentiment: {sa.sentiment_score:+.2f} [{sa.sentiment_bucket}] ({sa.sentiment_label})",
         ]
         if sa.key_catalysts:
-            catalyst_strs = [
-                f"  [{c.impact.upper()}] {c.headline} ({c.significance})"
-                for c in sa.key_catalysts[:5]
-            ]
+            catalyst_strs = [_format_catalyst(c) for c in sa.key_catalysts[:5]]
             lines.append("Key catalysts:\n" + "\n".join(catalyst_strs))
-        if sa.sector_sentiment:
-            lines.append(f"Sector sentiment: {sa.sector_sentiment}")
+        sect = sa.sector_sentiment
+        lines.append(f"Sector sentiment: {sect.score:+.2f} ({sect.label}) — {sect.key_driver}")
         if sa.summary:
             lines.append(f"Summary: {sa.summary}")
         parts.append("\n".join(lines))
 
     return "\n".join(parts)
+
+
+def _format_live_quotes(
+    live_quotes: dict[str, FmpQuote] | None,
+    tickers: list[str],
+) -> str:
+    """Format real-time FMP quote data for GPT prompts.
+
+    Args:
+        live_quotes: Mapping of symbol → FmpQuote, or None.
+        tickers: List of tickers being analyzed.
+
+    Returns:
+        Formatted live market data block, or a note that data is unavailable.
+    """
+    if not live_quotes:
+        return "No real-time quote data available."
+
+    lines: list[str] = []
+    for ticker in tickers:
+        quote = live_quotes.get(ticker)
+        if not quote or quote.price is None:
+            continue
+        parts = [f"**{ticker}**: ${quote.price:.2f}"]
+        if quote.changesPercentage is not None:
+            parts.append(f"({quote.changesPercentage:+.2f}%)")
+        if quote.dayLow is not None and quote.dayHigh is not None:
+            parts.append(f"Range: ${quote.dayLow:.2f}-${quote.dayHigh:.2f}")
+        if quote.open is not None:
+            parts.append(f"Open: ${quote.open:.2f}")
+        if quote.volume is not None and quote.avgVolume:
+            rvol = quote.volume / quote.avgVolume
+            parts.append(f"Vol: {quote.volume:,} (RVOL: {rvol:.1f}x)")
+        lines.append(" | ".join(parts))
+
+    return "\n".join(lines) if lines else "No real-time quote data available."
+
+
+def _format_fmp_data(
+    fmp_context: dict[str, FmpEnrichedStock] | None,
+    tickers: list[str],
+) -> str:
+    """Format structured FMP data for GPT prompts."""
+    if not fmp_context:
+        return "No FMP pre-screening data available."
+
+    from pipeline.fmp_context import format_fmp_for_gpt
+
+    return format_fmp_for_gpt(fmp_context, tickers)
 
 
 def build_bull_prompt(
@@ -334,6 +494,8 @@ def build_bull_prompt(
     charts: list[ChartAnalysis],
     sentiments: list[SentimentAnalysis],
     config: StrategyConfig,
+    fmp_context: dict[str, FmpEnrichedStock] | None = None,
+    live_quotes: dict[str, FmpQuote] | None = None,
 ) -> str:
     """Build the user prompt for the bull analyst.
 
@@ -343,6 +505,8 @@ def build_bull_prompt(
         charts: List of ChartAnalysis from Claude (may be empty).
         sentiments: List of SentimentAnalysis from Gemini (may be empty).
         config: Strategy configuration with trading style.
+        fmp_context: FMP enriched stock data keyed by ticker (may be None).
+        live_quotes: Real-time FMP quotes keyed by ticker (may be None).
 
     Returns:
         Formatted user prompt string.
@@ -356,7 +520,9 @@ def build_bull_prompt(
         parts.append(f"\nTrading context: {config.trading_style}")
 
     parts.append(f"\n{_format_data_availability(tickers, screening, charts, sentiments)}")
+    parts.append(f"\n## LIVE MARKET DATA (real-time)\n{_format_live_quotes(live_quotes, tickers)}")
     parts.append(f"\n## FUNDAMENTALS (Perplexity)\n{_format_screening_data(screening, tickers)}")
+    parts.append(f"\n## QUANTITATIVE DATA (FMP)\n{_format_fmp_data(fmp_context, tickers)}")
     parts.append(f"\n## TECHNICAL ANALYSIS (Claude)\n{_format_chart_data(charts, tickers)}")
     parts.append(f"\n## NEWS SENTIMENT (Gemini)\n{_format_sentiment_data(sentiments, tickers)}")
     parts.append("\nReturn your bull case as JSON matching the schema in your instructions.")
@@ -370,6 +536,8 @@ def build_bear_prompt(
     charts: list[ChartAnalysis],
     sentiments: list[SentimentAnalysis],
     config: StrategyConfig,
+    fmp_context: dict[str, FmpEnrichedStock] | None = None,
+    live_quotes: dict[str, FmpQuote] | None = None,
 ) -> str:
     """Build the user prompt for the bear analyst.
 
@@ -379,6 +547,8 @@ def build_bear_prompt(
         charts: List of ChartAnalysis from Claude (may be empty).
         sentiments: List of SentimentAnalysis from Gemini (may be empty).
         config: Strategy configuration with trading style.
+        fmp_context: FMP enriched stock data keyed by ticker (may be None).
+        live_quotes: Real-time FMP quotes keyed by ticker (may be None).
 
     Returns:
         Formatted user prompt string.
@@ -392,7 +562,9 @@ def build_bear_prompt(
         parts.append(f"\nTrading context: {config.trading_style}")
 
     parts.append(f"\n{_format_data_availability(tickers, screening, charts, sentiments)}")
+    parts.append(f"\n## LIVE MARKET DATA (real-time)\n{_format_live_quotes(live_quotes, tickers)}")
     parts.append(f"\n## FUNDAMENTALS (Perplexity)\n{_format_screening_data(screening, tickers)}")
+    parts.append(f"\n## QUANTITATIVE DATA (FMP)\n{_format_fmp_data(fmp_context, tickers)}")
     parts.append(f"\n## TECHNICAL ANALYSIS (Claude)\n{_format_chart_data(charts, tickers)}")
     parts.append(f"\n## NEWS SENTIMENT (Gemini)\n{_format_sentiment_data(sentiments, tickers)}")
     parts.append("\nReturn your bear case as JSON matching the schema in your instructions.")
@@ -409,6 +581,10 @@ def build_judge_prompt(
     bear_cases: list[DebateCase] | None,
     reflection_context: str,
     config: StrategyConfig,
+    fmp_context: dict[str, FmpEnrichedStock] | None = None,
+    regime_context: str = "",
+    sector_consensus: str = "",
+    live_quotes: dict[str, FmpQuote] | None = None,
 ) -> str:
     """Build the user prompt for the judge/portfolio manager.
 
@@ -421,6 +597,10 @@ def build_judge_prompt(
         bear_cases: Bear debate cases from GPT (or None if debate disabled/failed).
         reflection_context: Historical performance injection prompt (may be empty).
         config: Strategy configuration with risk params.
+        fmp_context: FMP enriched stock data keyed by ticker (may be None).
+        regime_context: Pre-formatted market regime header block, or empty.
+        sector_consensus: Pre-formatted sector sentiment consensus block, or empty.
+        live_quotes: Real-time FMP quotes keyed by ticker (may be None).
 
     Returns:
         Formatted user prompt string.
@@ -428,11 +608,19 @@ def build_judge_prompt(
     rp = config.risk_params
     parts = [
         f"Produce final recommendations for: {', '.join(tickers)}",
-        "\n## RISK PARAMETERS",
-        f"- Max position size: {rp.max_position_pct}% of portfolio",
-        f"- Minimum risk/reward ratio: {rp.min_risk_reward}",
-        f"- Max portfolio risk: {rp.max_portfolio_risk_pct}%",
     ]
+
+    if regime_context:
+        parts.append(f"\n{regime_context}")
+
+    parts.extend(
+        [
+            "\n## RISK PARAMETERS",
+            f"- Max position size: {rp.max_position_pct}% of portfolio",
+            f"- Minimum risk/reward ratio: {rp.min_risk_reward}",
+            f"- Max portfolio risk: {rp.max_portfolio_risk_pct}%",
+        ]
+    )
 
     if config.trading_style:
         parts.append(f"- Trading style: {config.trading_style}")
@@ -441,9 +629,18 @@ def build_judge_prompt(
         parts.append(f"\n## HISTORICAL PERFORMANCE CONTEXT\n{reflection_context}")
 
     parts.append(f"\n{_format_data_availability(tickers, screening, charts, sentiments)}")
+    parts.append(
+        f"\n## LIVE MARKET DATA (real-time)\n{_format_live_quotes(live_quotes, tickers)}"
+        "\nIMPORTANT: Use these LIVE prices for entry, stop-loss, and take-profit levels. "
+        "Other data sections may reflect earlier prices from when those stages ran."
+    )
     parts.append(f"\n## FUNDAMENTALS (Perplexity)\n{_format_screening_data(screening, tickers)}")
+    parts.append(f"\n## QUANTITATIVE DATA (FMP)\n{_format_fmp_data(fmp_context, tickers)}")
     parts.append(f"\n## TECHNICAL ANALYSIS (Claude)\n{_format_chart_data(charts, tickers)}")
     parts.append(f"\n## NEWS SENTIMENT (Gemini)\n{_format_sentiment_data(sentiments, tickers)}")
+
+    if sector_consensus:
+        parts.append(f"\n## SECTOR SENTIMENT CONSENSUS\n{sector_consensus}")
 
     if bull_cases:
         bull_map = {bc.ticker: bc for bc in bull_cases}

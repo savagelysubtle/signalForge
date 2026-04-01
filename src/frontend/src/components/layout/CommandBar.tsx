@@ -32,7 +32,9 @@ export function CommandBar() {
   const [selectedStrategy, setSelectedStrategy] = useState<string>('');
   const [inputText, setInputText] = useState<string>('');
 
-  const allStrategies = [...templates, ...strategies];
+  const allStrategies = [...templates, ...strategies].filter(
+    (s, i, arr) => arr.findIndex((t) => t.id === s.id) === i,
+  );
 
   const { kind: inputKind, tickers: parsedTickers } = useMemo(
     () => classifyInput(inputText),
@@ -44,7 +46,7 @@ export function CommandBar() {
 
     if (inputKind === 'prompt') return 'prompt';
     if (hasStrategy && inputKind === 'tickers') return 'combined';
-    if (hasStrategy && inputKind === 'empty') return 'discovery';
+    if (inputKind === 'empty') return 'discovery';
     if (inputKind === 'tickers') return 'analysis';
     return 'none';
   }, [selectedStrategy, inputKind]);
@@ -84,35 +86,36 @@ export function CommandBar() {
 
   const modeColors: Record<RunMode, string> = {
     none: '',
-    discovery: 'text-accent-green',
-    analysis: 'text-accent-blue',
-    combined: 'text-accent-yellow',
-    prompt: 'text-purple-400',
+    discovery: 'text-accent-profit',
+    analysis: 'text-accent-signal',
+    combined: 'text-accent-alert',
+    prompt: 'text-accent-electric',
   };
 
   const placeholderText = selectedStrategy
     ? 'Tickers (AAPL, NVDA) or prompt ("oil stocks under $50") or leave empty'
-    : 'Tickers (AAPL, NVDA) or prompt ("find undervalued tech stocks")';
+    : 'Tickers (AAPL, NVDA) or prompt ("find undervalued tech stocks") or leave empty';
 
   const runningLabel = (() => {
     if (runMode === 'prompt') return 'Searching with prompt...';
     if (selectedStrategyName) return `Discovering via ${selectedStrategyName}...`;
-    return `Analyzing ${parsedTickers.join(', ')}...`;
+    if (parsedTickers.length > 0) return `Analyzing ${parsedTickers.join(', ')}...`;
+    return 'Discovering market movers...';
   })();
 
   return (
-    <div className="h-16 border-b border-border bg-bg-secondary flex items-center px-4 gap-4 shrink-0">
+    <div className="h-16 border-b border-border-gutter bg-bg-asphalt flex items-center px-4 gap-4 shrink-0">
       <div className="flex-1 flex items-center gap-3">
         <select
           value={selectedStrategy}
           onChange={(e) => setSelectedStrategy(e.target.value)}
           disabled={isRunning}
-          className="bg-bg-tertiary border border-border rounded px-3 py-1.5 text-sm text-text-primary focus:outline-none focus:border-accent-blue min-w-[180px]"
+          className="bg-bg-concrete border border-border-gutter rounded-md px-3 py-1.5 text-sm text-text-primary focus:outline-none focus:border-accent-signal transition-colors min-w-[180px]"
         >
           <option value="">No Strategy</option>
           {allStrategies.map(s => (
             <option key={s.id} value={s.id}>
-              {s.is_template ? `📋 ${s.name}` : s.name}
+              {s.is_template ? `// ${s.name}` : s.name}
             </option>
           ))}
         </select>
@@ -124,13 +127,13 @@ export function CommandBar() {
           onChange={(e) => setInputText(e.target.value)}
           disabled={isRunning}
           onKeyDown={(e) => { if (e.key === 'Enter' && runMode !== 'none') handleRun(); }}
-          className="bg-bg-tertiary border border-border rounded px-3 py-1.5 text-sm text-text-primary placeholder:text-text-secondary/50 focus:outline-none focus:border-accent-blue flex-1 max-w-lg"
+          className="bg-bg-concrete border border-border-gutter rounded-md px-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-signal transition-colors flex-1 max-w-lg"
         />
 
         <button
           onClick={handleRun}
           disabled={isRunning || runMode === 'none'}
-          className="flex items-center gap-2 bg-accent-blue text-bg-primary px-4 py-1.5 rounded text-sm font-medium hover:bg-opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity"
+          className="flex items-center gap-2 bg-accent-signal text-bg-void px-4 py-1.5 rounded-md text-sm font-medium hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200 font-display"
         >
           {isRunning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
           {isRunning ? 'Analyzing...' : 'Run'}
@@ -139,29 +142,29 @@ export function CommandBar() {
 
       <div className="flex items-center gap-3 text-sm shrink-0">
         {runMode !== 'none' && !isRunning && (
-          <span className={`flex items-center gap-1.5 ${modeColors[runMode]}`}>
+          <span className={`flex items-center gap-1.5 font-display text-xs ${modeColors[runMode]}`}>
             {modeIcon[runMode]}
             {modeLabel[runMode]}
           </span>
         )}
 
         {isRunning && (
-          <span className="flex items-center gap-2 text-accent-blue">
-            <span className="relative flex h-3 w-3">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent-blue opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-3 w-3 bg-accent-blue"></span>
+          <span className="flex items-center gap-2 text-accent-signal font-display text-xs">
+            <span className="relative flex h-2.5 w-2.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent-signal opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-accent-signal"></span>
             </span>
             {runningLabel}
           </span>
         )}
         {!isRunning && !error && runMode === 'none' && (
-          <span className="flex items-center gap-2 text-text-secondary">
-            <div className="w-2 h-2 rounded-full bg-text-secondary" />
+          <span className="flex items-center gap-2 text-text-muted text-xs">
+            <div className="w-1.5 h-1.5 rounded-full bg-text-muted" />
             Select a strategy or enter tickers
           </span>
         )}
         {!isRunning && error && (
-          <span className="flex items-center gap-2 text-accent-red" title={error}>
+          <span className="flex items-center gap-2 text-accent-loss text-xs" title={error}>
             <XCircle className="w-4 h-4" />
             Error
           </span>

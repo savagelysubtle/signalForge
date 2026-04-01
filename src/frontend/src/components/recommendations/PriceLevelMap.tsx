@@ -15,12 +15,12 @@ interface PriceLine {
 }
 
 const LINE_STYLES: Record<PriceLine['type'], { stroke: string; opacity: number; dashArray?: string }> = {
-  support: { stroke: '#22c55e', opacity: 1 },
-  resistance: { stroke: '#ef4444', opacity: 1 },
-  current: { stroke: '#e2e8f0', opacity: 1 },
-  entry: { stroke: '#3b82f6', opacity: 0.9, dashArray: '6 4' },
-  stop: { stroke: '#ef4444', opacity: 0.9, dashArray: '6 4' },
-  target: { stroke: '#22c55e', opacity: 0.9, dashArray: '6 4' },
+  support: { stroke: '#00e59b', opacity: 1 },
+  resistance: { stroke: '#ff3b5c', opacity: 1 },
+  current: { stroke: '#e8ecf4', opacity: 1 },
+  entry: { stroke: '#4d8dff', opacity: 0.9, dashArray: '6 4' },
+  stop: { stroke: '#ff3b5c', opacity: 0.9, dashArray: '6 4' },
+  target: { stroke: '#00e59b', opacity: 0.9, dashArray: '6 4' },
 };
 
 const STRENGTH_OPACITY: Record<string, number> = {
@@ -30,17 +30,17 @@ const STRENGTH_OPACITY: Record<string, number> = {
 };
 
 const TREND_ARROWS: Record<string, string> = {
-  bullish: '▲',
-  bearish: '▼',
-  neutral: '▶',
-  transitioning: '⟳',
+  bullish: '\u25B2',
+  bearish: '\u25BC',
+  neutral: '\u25B6',
+  transitioning: '\u27F3',
 };
 
 const TREND_COLORS: Record<string, string> = {
-  bullish: 'text-accent-green',
-  bearish: 'text-accent-red',
-  neutral: 'text-accent-yellow',
-  transitioning: 'text-accent-blue',
+  bullish: 'text-accent-profit',
+  bearish: 'text-accent-loss',
+  neutral: 'text-accent-alert',
+  transitioning: 'text-accent-signal',
 };
 
 function buildPriceLines(analysis: ChartAnalysis, recommendation: Recommendation | null): PriceLine[] {
@@ -112,7 +112,7 @@ function PriceLineRow({
         width={line.label.length * 6.5 + 12}
         height={18}
         rx={4}
-        fill="rgba(15, 15, 20, 0.85)"
+        fill="rgba(8, 9, 13, 0.9)"
         stroke={style.stroke}
         strokeWidth={0.5}
         opacity={effectiveOpacity}
@@ -124,7 +124,7 @@ function PriceLineRow({
         fontSize={10}
         fontWeight={isCurrent ? 700 : 500}
         opacity={effectiveOpacity}
-        fontFamily="ui-monospace, monospace"
+        fontFamily="'JetBrains Mono Variable', 'JetBrains Mono', monospace"
       >
         {line.label}
       </text>
@@ -135,7 +135,7 @@ function PriceLineRow({
         width={line.price.toFixed(2).length * 7 + 12}
         height={18}
         rx={4}
-        fill="rgba(15, 15, 20, 0.85)"
+        fill="rgba(8, 9, 13, 0.9)"
         stroke={style.stroke}
         strokeWidth={0.5}
         opacity={effectiveOpacity}
@@ -148,7 +148,7 @@ function PriceLineRow({
         fontWeight={700}
         textAnchor="end"
         opacity={effectiveOpacity}
-        fontFamily="ui-monospace, monospace"
+        fontFamily="'JetBrains Mono Variable', 'JetBrains Mono', monospace"
       >
         ${line.price.toFixed(2)}
       </text>
@@ -190,8 +190,8 @@ export function PriceLevelMap({ analysis, recommendation }: PriceLevelMapProps) 
 
   if (lines.length === 0) {
     return (
-      <div className="flex items-center justify-center h-full text-text-secondary flex-col gap-2">
-        <span className="text-sm">Price Level Map</span>
+      <div className="flex items-center justify-center h-full text-text-muted flex-col gap-2">
+        <span className="text-sm font-body">Price Level Map</span>
         <span className="text-xs opacity-50">No price data available</span>
       </div>
     );
@@ -200,12 +200,12 @@ export function PriceLevelMap({ analysis, recommendation }: PriceLevelMapProps) 
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Header badges */}
-      <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0">
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-border-gutter shrink-0">
         <div className="flex items-center gap-2">
           <span className={clsx('text-lg', TREND_COLORS[analysis.trend_direction])}>
             {TREND_ARROWS[analysis.trend_direction]}
           </span>
-          <span className="text-xs text-text-secondary">
+          <span className="text-xs text-text-secondary font-body">
             {analysis.trend_direction} / {analysis.trend_strength}
           </span>
         </div>
@@ -213,16 +213,16 @@ export function PriceLevelMap({ analysis, recommendation }: PriceLevelMapProps) 
         <div className="flex items-center gap-3">
           {action && (
             <span className={clsx(
-              'text-xs font-bold px-2.5 py-1 rounded',
-              action === 'BUY' && 'bg-accent-green/15 text-accent-green',
-              action === 'SELL' && 'bg-accent-red/15 text-accent-red',
-              action === 'HOLD' && 'bg-accent-yellow/15 text-accent-yellow',
+              'text-xs font-display font-bold px-2.5 py-1 rounded',
+              action === 'BUY' && 'bg-accent-profit/15 text-accent-profit',
+              action === 'SHORT' && 'bg-accent-loss/15 text-accent-loss',
+              action === 'HOLD' && 'bg-accent-alert/15 text-accent-alert',
             )}>
               {action}
             </span>
           )}
           {rrRatio != null && (
-            <span className="text-xs font-mono text-text-secondary bg-bg-tertiary px-2 py-1 rounded">
+            <span className="text-xs font-display text-text-secondary bg-bg-concrete px-2 py-1 rounded">
               R:R {rrRatio.toFixed(1)}:1
             </span>
           )}
@@ -231,11 +231,11 @@ export function PriceLevelMap({ analysis, recommendation }: PriceLevelMapProps) 
 
       {/* Patterns */}
       {analysis.patterns_detected.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 px-4 py-2 border-b border-border shrink-0">
+        <div className="flex flex-wrap gap-1.5 px-4 py-2 border-b border-border-gutter shrink-0">
           {analysis.patterns_detected.map((pattern, i) => (
             <span
               key={i}
-              className="text-[10px] px-2 py-0.5 rounded bg-accent-blue/10 text-accent-blue border border-accent-blue/20"
+              className="text-[10px] font-display px-2 py-0.5 rounded bg-accent-signal-dim text-accent-signal border border-accent-signal/20"
             >
               {pattern}
             </span>
@@ -255,9 +255,9 @@ export function PriceLevelMap({ analysis, recommendation }: PriceLevelMapProps) 
           {/* Gradient background zones */}
           <defs>
             <linearGradient id="bgGradient" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#ef4444" stopOpacity="0.04" />
-              <stop offset="50%" stopColor="#1e1e2e" stopOpacity="0.02" />
-              <stop offset="100%" stopColor="#22c55e" stopOpacity="0.04" />
+              <stop offset="0%" stopColor="#ff3b5c" stopOpacity="0.04" />
+              <stop offset="50%" stopColor="#181c27" stopOpacity="0.02" />
+              <stop offset="100%" stopColor="#00e59b" stopOpacity="0.04" />
             </linearGradient>
           </defs>
           <rect
@@ -303,7 +303,7 @@ export function PriceLevelMap({ analysis, recommendation }: PriceLevelMapProps) 
               y={Math.min(priceToY(recommendation.entry_price), priceToY(recommendation.stop_loss))}
               width={svgWidth}
               height={Math.abs(priceToY(recommendation.entry_price) - priceToY(recommendation.stop_loss))}
-              fill="#ef4444"
+              fill="#ff3b5c"
               opacity={0.06}
               rx={2}
             />
@@ -316,7 +316,7 @@ export function PriceLevelMap({ analysis, recommendation }: PriceLevelMapProps) 
               y={Math.min(priceToY(recommendation.entry_price), priceToY(recommendation.take_profit))}
               width={svgWidth}
               height={Math.abs(priceToY(recommendation.entry_price) - priceToY(recommendation.take_profit))}
-              fill="#22c55e"
+              fill="#00e59b"
               opacity={0.06}
               rx={2}
             />
@@ -325,18 +325,18 @@ export function PriceLevelMap({ analysis, recommendation }: PriceLevelMapProps) 
       </div>
 
       {/* Footer legend */}
-      <div className="flex items-center justify-center gap-4 px-4 py-2 border-t border-border shrink-0 text-[10px] text-text-secondary">
+      <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 px-4 py-2 border-t border-border-gutter shrink-0 text-[10px] text-text-muted">
         <span className="flex items-center gap-1">
-          <span className="w-3 h-0.5 bg-[#22c55e] inline-block rounded" /> Support
+          <span className="w-3 h-0.5 bg-[#00e59b] inline-block rounded" /> Support
         </span>
         <span className="flex items-center gap-1">
-          <span className="w-3 h-0.5 bg-[#ef4444] inline-block rounded" /> Resistance
+          <span className="w-3 h-0.5 bg-[#ff3b5c] inline-block rounded" /> Resistance
         </span>
         <span className="flex items-center gap-1">
-          <span className="w-3 h-0.5 bg-[#e2e8f0] inline-block rounded" /> Current
+          <span className="w-3 h-0.5 bg-[#e8ecf4] inline-block rounded" /> Current
         </span>
         <span className="flex items-center gap-1">
-          <span className="w-3 h-0.5 border-t border-dashed border-[#3b82f6] inline-block" /> Trade
+          <span className="w-3 h-0.5 border-t border-dashed border-[#4d8dff] inline-block" /> Trade
         </span>
       </div>
     </div>

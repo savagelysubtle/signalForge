@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from functools import wraps
 from typing import TypeVar
@@ -22,12 +23,27 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def _strip_control_chars(text: str) -> str:
+    """Remove ASCII control characters that LLMs sometimes embed in JSON strings.
+
+    Preserves tab (0x09), newline (0x0a), and carriage return (0x0d) which are
+    valid JSON whitespace.
+    """
+    return _CONTROL_CHAR_RE.sub("", text)
+
 
 def extract_json(text: str) -> str:
-    """Extract a JSON object or array from LLM text that may include markdown fences.
+    """Extract a JSON object or array from LLM text.
+
+    Handles markdown fences (````json ...` ```) and ``<think>`` reasoning
+    tokens emitted by models like ``sonar-reasoning-pro``.
 
     Args:
-        text: Raw LLM response text, possibly wrapped in ```json ... ```.
+        text: Raw LLM response text.
 
     Returns:
         The extracted JSON string.
@@ -35,7 +51,7 @@ def extract_json(text: str) -> str:
     Raises:
         ValueError: If no JSON object/array can be located in the text.
     """
-    stripped = text.strip()
+    stripped = _THINK_RE.sub("", text).strip()
     if stripped.startswith("```"):
         lines = stripped.split("\n", 1)
         body = lines[1] if len(lines) > 1 else ""
@@ -68,6 +84,7 @@ def validate_llm_json(raw_text: str, schema: type[T]) -> T:  # noqa: UP047
         ValidationError: If the JSON does not match the schema.
     """
     json_str = extract_json(raw_text)
+    json_str = _strip_control_chars(json_str)
     data = json.loads(json_str)
     return schema.model_validate(data)
 
@@ -118,7 +135,9 @@ def with_validation_retry(  # noqa: UP047
 
                 try:
                     raw_text = await fn(*args, **kwargs)
-                    return validate_llm_json(raw_text, schema)
+                    validated = validate_llm_json(raw_text, schema)
+                    validated.__dict__["_retry_count"] = attempt
+                    return validated
                 except (ValueError, json.JSONDecodeError) as exc:
                     last_error = f"JSON parse error: {exc}"
                 except ValidationError as exc:

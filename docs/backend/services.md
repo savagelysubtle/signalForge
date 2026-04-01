@@ -121,19 +121,56 @@ frontend. The settings endpoint only returns boolean presence.
 
 **File:** [`services/reflection.py`](../../src/backend/services/reflection.py)
 
-Powers the self-learning loop. Queries past outcomes and decisions to
-generate performance context that gets injected into the GPT judge prompt.
+Powers the self-learning loop. Queries past outcomes, decisions, and stage outputs to compute performance metrics and generate a memory injection that gets embedded in the GPT judge prompt on every run.
 
 ### Functions
 
 | Function | Purpose |
 |----------|---------|
-| `load_reflection_context()` | Load the most recent reflection's `injection_prompt` text |
+| `generate_reflection(user_id)` | Full generation: fetch decisions + outcomes + recommendations + stage_outputs, compute FinMem two-layer metrics, optionally call GPT-4o-mini for strategic advice, store new row in `reflections` table. Requires ≥5 logged outcomes. |
+| `load_reflection_context(user_id)` | Load the most recent reflection's `injection_prompt` text for GPT judge injection |
+| `_compute_metrics(...)` | Compute win/loss, P&L, pattern accuracy, sector win rates, TF alignment, confidence calibration, streak |
+| `_format_short_term_memory(...)` | 14-day window: current streak, pattern/sector suppression alerts |
+| `_format_long_term_memory(...)` | All-time: durable pattern accuracy, sector rates, TF alignment stats, calibration buckets |
+| `build_memory_injection(...)` | Assemble two-layer injection from short-term + long-term formatted strings |
 
-The reflection engine generates two artifacts:
-1. **Human-readable summary** — displayed in the Insights view
-2. **Injection prompt** — prepended to the GPT judge system prompt with
-   concrete stats (win rates, confidence calibration, sector performance)
+### FinMem Architecture
 
-Reflections are stored in the `reflections` table and triggered manually
-or after N outcome entries.
+The reflection engine implements a two-layer memory system:
+
+**Short-term (14 days):**
+- Recent trade streak (last 5 trades)
+- Pattern suppression alerts (e.g., "double bottom 0/2 — reduce confidence by 40%")
+- Sector suppression flags
+
+**Long-term (all-time):**
+- Pattern accuracy with minimum 3-sample threshold
+- Sector win rates
+- Timeframe alignment categories (`all_agree`, `partial`, `single_tf`) with confidence annotations
+- Confidence calibration by bucket (high >0.75 / medium 0.55–0.75 / low <0.55)
+
+The `injection_prompt` is prepended to the GPT judge system prompt as `## HISTORICAL PERFORMANCE CONTEXT` on every subsequent pipeline run. The GPT judge prompt includes explicit instructions to apply suppression multipliers and prioritize short-term signals over long-term when they conflict.
+
+**Trigger:** Manual only. The user clicks "Generate Reflection" in `InsightsView` which calls `POST /api/insights/reflect`.
+
+---
+
+## FMP Service
+
+**File:** [`services/fmp_service.py`](../../src/backend/services/fmp_service.py)
+
+Optional Stage 0 pre-screener using the Financial Modeling Prep API. Only active when `FMP_API_KEY` is set and `fmp_screener.enabled = true` on the strategy.
+
+### Key Functions
+
+| Function | Purpose |
+|----------|---------|
+| `run_stock_screener(config, user_id)` | Call FMP `/stable/company-screener`, enrich results with `ratios-ttm` + `key-metrics-ttm` (concurrent), apply post-filters (P/E, ROE, debt/equity) |
+| `run_crypto_screener(config)` | Fetch `/stable/batch-crypto-quotes`, filter by market cap / volume / price range, sort by market cap |
+
+### How It Works
+
+1. **Stock path:** Company screener → concurrent ratios-ttm enrichment (Semaphore(5)) → client-side P/E, ROE, debt/equity filtering → truncate to `limit`
+2. **Crypto path:** Batch quotes → market cap/volume/price filter → top-N by market cap
+
+The FMP service also exposes a **Perplexity function-calling tool** via `pipeline/tools/fmp_tool.py` so the Perplexity Agent API can invoke FMP dynamically during its tool-calling rounds (max 3 rounds per run).

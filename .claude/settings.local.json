@@ -45,7 +45,26 @@
       "Bash(powershell.exe -Command \"foreach \\($pid in @\\(23032,9564,28112,19868,25892\\)\\) { try { Stop-Process -Id $pid -Force } catch {} }\")",
       "Bash(powershell.exe -Command \"Stop-Process -Id 23032 -Force; Stop-Process -Id 9564 -Force; Stop-Process -Id 28112 -Force; Stop-Process -Id 19868 -Force; Stop-Process -Id 25892 -Force\")",
       "WebFetch(domain:doc.chart-img.com)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(xargs grep:*)",
+      "Bash(find /d/Coding/signalForge -name *.sql -o -name *migration* -o -name *schema*)",
+      "Bash(bun run:*)",
+      "Bash(tasklist:*)",
+      "Bash(powershell:*)",
+      "Bash(powershell.exe:*)",
+      "Bash(while read:*)",
+      "Bash(do echo:*)",
+      "Bash(winget install:*)",
+      "Read(//c/Program Files/PowerShell/**)",
+      "Bash(rm -rf .venv)",
+      "Bash(uv venv:*)",
+      "Bash(uv sync:*)",
+      "Bash(wc -l src/frontend/src/**/*.tsx src/frontend/src/**/*.ts src/frontend/src/**/*.css)",
+      "Bash(find src/frontend/src/ -type f \\\\\\( -name \"*.ts\" -o -name \"*.tsx\" -o -name \"*.css\" \\\\\\) -exec wc -l {} +)",
+      "Bash(bunx tsc:*)",
+      "Bash(for f:*)",
+      "Bash(do)",
+      "Bash(git commit:*)"
     ]
   }
 }

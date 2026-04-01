@@ -1,21 +1,23 @@
 import { useState } from 'react';
 import type { Recommendation, DebateCase } from '../../types';
+import { motion, AnimatePresence } from 'motion/react';
+import { ShieldAlert, ChevronDown, ChevronUp } from 'lucide-react';
 import clsx from 'clsx';
 
 interface SynthesisTabProps {
   recommendation: Recommendation | null;
 }
 
-const ACTION_CONFIG: Record<string, { text: string; color: string; bg: string }> = {
-  BUY: { text: 'BUY', color: 'text-accent-green', bg: 'bg-accent-green/15' },
-  SELL: { text: 'SELL', color: 'text-accent-red', bg: 'bg-accent-red/15' },
-  HOLD: { text: 'HOLD', color: 'text-accent-yellow', bg: 'bg-accent-yellow/15' },
+const ACTION_CONFIG: Record<string, { text: string; color: string; bg: string; border: string }> = {
+  BUY: { text: 'BUY', color: 'text-accent-profit', bg: 'bg-accent-profit/25', border: 'border border-accent-profit/40' },
+  SHORT: { text: 'SHORT', color: 'text-accent-loss', bg: 'bg-accent-loss/25', border: 'border border-accent-loss/40' },
+  HOLD: { text: 'HOLD', color: 'text-accent-alert', bg: 'bg-accent-alert/25', border: 'border border-accent-alert/40' },
 };
 
-function confidenceBarColor(confidence: number): string {
-  if (confidence >= 0.7) return 'bg-accent-green';
-  if (confidence >= 0.55) return 'bg-accent-yellow';
-  return 'bg-accent-red';
+function confidenceBarColor(action: string): string {
+  if (action === 'BUY') return 'bg-accent-profit';
+  if (action === 'SHORT') return 'bg-accent-loss';
+  return 'bg-accent-alert';
 }
 
 function TradeParams({ rec }: { rec: Recommendation }) {
@@ -31,11 +33,11 @@ function TradeParams({ rec }: { rec: Recommendation }) {
   if (params.length === 0) return null;
 
   return (
-    <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
+    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
       {params.map(p => (
-        <div key={p.label} className="bg-bg-primary rounded-lg p-3 border border-border">
-          <div className="text-xs text-text-secondary mb-1">{p.label}</div>
-          <div className="text-sm font-semibold text-text-primary tabular-nums">{p.value}</div>
+        <div key={p.label} className="bg-bg-void rounded-lg p-3 border border-border-gutter min-w-0">
+          <div className="text-xs text-text-muted mb-1 font-body truncate">{p.label}</div>
+          <div className="text-sm font-display font-semibold text-text-primary tabular-nums truncate">{p.value}</div>
         </div>
       ))}
     </div>
@@ -45,66 +47,78 @@ function TradeParams({ rec }: { rec: Recommendation }) {
 function DebateCaseSection({ debateCase, title }: { debateCase: DebateCase; title: string }) {
   const [isOpen, setIsOpen] = useState(false);
   const isBull = debateCase.stance === 'bull';
-  const stanceColor = isBull ? 'text-accent-green' : 'text-accent-red';
-  const stanceBg = isBull ? 'bg-accent-green/10' : 'bg-accent-red/10';
+  const stanceColor = isBull ? 'text-accent-profit' : 'text-accent-loss';
+  const stanceBg = isBull ? 'bg-accent-profit/10' : 'bg-accent-loss/10';
 
   return (
-    <div className="bg-bg-tertiary rounded-lg border border-border overflow-hidden">
+    <div className="bg-bg-concrete rounded-lg border border-border-gutter overflow-hidden">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="w-full flex items-center justify-between px-4 py-3 hover:bg-bg-primary/50 transition-colors"
+        className="w-full flex items-center justify-between px-4 py-3 hover:bg-bg-steel/30 transition-colors"
       >
         <div className="flex items-center gap-3">
-          <span className={clsx('text-sm font-semibold', stanceColor)}>{title}</span>
-          <span className={clsx('text-xs px-2 py-0.5 rounded', stanceBg, stanceColor)}>
+          <span className={clsx('text-sm font-semibold font-body', stanceColor)}>{title}</span>
+          <span className={clsx('text-xs font-display px-2 py-0.5 rounded', stanceBg, stanceColor)}>
             {(debateCase.confidence * 100).toFixed(0)}% confident
           </span>
         </div>
-        <span className="text-text-secondary text-sm">{isOpen ? '\u25B2' : '\u25BC'}</span>
+        <span className="text-text-muted text-sm">{isOpen ? '\u25B2' : '\u25BC'}</span>
       </button>
 
-      {isOpen && (
-        <div className="px-4 pb-4 border-t border-border pt-3 space-y-3">
-          {debateCase.key_arguments.length > 0 && (
-            <div>
-              <h4 className="text-xs font-semibold text-text-secondary mb-2">Key Arguments</h4>
-              <ul className="space-y-1.5">
-                {debateCase.key_arguments.map((arg, i) => (
-                  <li key={i} className="flex items-start gap-2 text-sm text-text-primary">
-                    <span className={clsx('mt-1.5 w-1.5 h-1.5 rounded-full shrink-0', isBull ? 'bg-accent-green' : 'bg-accent-red')} />
-                    {arg}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
+      <AnimatePresence initial={false}>
+        {isOpen && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2, ease: 'easeInOut' }}
+            className="overflow-hidden"
+          >
+            <div className="px-4 pb-4 border-t border-border-gutter pt-3 space-y-3">
+              {debateCase.key_arguments.length > 0 && (
+                <div>
+                  <h4 className="text-xs font-semibold text-text-muted mb-2 font-body">Key Arguments</h4>
+                  <ul className="space-y-1.5">
+                    {debateCase.key_arguments.map((arg, i) => (
+                      <li key={i} className="flex items-start gap-2 text-sm text-text-primary">
+                        <span className={clsx('mt-1.5 w-1.5 h-1.5 rounded-full shrink-0', isBull ? 'bg-accent-profit' : 'bg-accent-loss')} />
+                        {arg}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
-          {debateCase.strongest_signal && (
-            <div>
-              <h4 className="text-xs font-semibold text-text-secondary mb-1">Strongest Signal</h4>
-              <p className="text-sm text-text-primary">{debateCase.strongest_signal}</p>
-            </div>
-          )}
+              {debateCase.strongest_signal && (
+                <div>
+                  <h4 className="text-xs font-semibold text-text-muted mb-1 font-body">Strongest Signal</h4>
+                  <p className="text-sm text-text-primary">{debateCase.strongest_signal}</p>
+                </div>
+              )}
 
-          {debateCase.weakest_counter && (
-            <div>
-              <h4 className="text-xs font-semibold text-text-secondary mb-1">Weakest Counter</h4>
-              <p className="text-sm text-text-secondary">{debateCase.weakest_counter}</p>
+              {debateCase.weakest_counter && (
+                <div>
+                  <h4 className="text-xs font-semibold text-text-muted mb-1 font-body">Weakest Counter</h4>
+                  <p className="text-sm text-text-secondary">{debateCase.weakest_counter}</p>
+                </div>
+              )}
             </div>
-          )}
-        </div>
-      )}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
 
 export function SynthesisTab({ recommendation }: SynthesisTabProps) {
+  const [reasoningExpanded, setReasoningExpanded] = useState(false);
+
   if (!recommendation) {
     return (
-      <div className="flex items-center justify-center h-full text-text-secondary">
+      <div className="flex items-center justify-center h-full text-text-muted">
         <div className="text-center">
-          <h3 className="text-lg font-semibold mb-2">No Synthesis Data</h3>
-          <p>GPT analysis was not available for this ticker.</p>
+          <h3 className="text-lg font-semibold mb-2 font-body">No Synthesis Data</h3>
+          <p className="text-sm">GPT analysis was not available for this ticker.</p>
         </div>
       </div>
     );
@@ -116,26 +130,49 @@ export function SynthesisTab({ recommendation }: SynthesisTabProps) {
   return (
     <div className="p-6 overflow-y-auto h-full">
       {/* Action + Confidence Header */}
-      <div className="bg-bg-tertiary rounded-lg border border-border p-6 mb-6">
-        <div className="flex items-center justify-between mb-4">
-          <div className={clsx('text-3xl font-bold px-5 py-2 rounded-lg', action.bg, action.color)}>
+      <div className="bg-bg-concrete rounded-lg border border-border-gutter p-6 mb-6">
+        <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
+          <div className={clsx('text-3xl font-display font-bold px-5 py-2 rounded-lg', action.bg, action.color, action.border)}>
             {action.text}
           </div>
           <div className="text-right">
-            <div className="text-xs text-text-secondary mb-1">Confidence</div>
-            <div className="text-3xl font-bold tabular-nums text-text-primary">
+            <div className="text-xs text-text-muted mb-1 font-body">Confidence</div>
+            <div className={clsx('text-3xl font-display font-bold tabular-nums', action.color)}>
               {confidencePct}%
             </div>
           </div>
         </div>
-        {/* Confidence bar */}
-        <div className="w-full h-2 bg-bg-primary rounded-full overflow-hidden">
+        {/* Confidence bar — color matches signal direction */}
+        <div className="w-full h-2 bg-bg-void rounded-full overflow-hidden">
           <div
-            className={clsx('h-full rounded-full transition-all', confidenceBarColor(recommendation.confidence))}
+            className={clsx('h-full rounded-full transition-all', confidenceBarColor(recommendation.action))}
             style={{ width: `${confidencePct}%` }}
           />
         </div>
       </div>
+
+      {/* Risk Violations */}
+      {recommendation.risk_violations && recommendation.risk_violations.length > 0 && (
+        <div className="mb-6 bg-accent-alert-dim border border-accent-alert/30 rounded-lg p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <ShieldAlert className="w-4 h-4 text-accent-alert" />
+            <h3 className="text-sm font-display font-semibold text-accent-alert">
+              Risk Flags
+              <span className="ml-2 text-xs font-normal text-accent-alert/70">
+                ({recommendation.risk_violations.length})
+              </span>
+            </h3>
+          </div>
+          <ul className="space-y-1.5">
+            {recommendation.risk_violations.map((v, i) => (
+              <li key={i} className="flex items-start gap-2 text-sm text-accent-alert">
+                <span className="mt-1.5 w-1.5 h-1.5 rounded-full shrink-0 bg-accent-alert" />
+                {v}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Trade Parameters */}
       <div className="mb-6">
@@ -144,23 +181,49 @@ export function SynthesisTab({ recommendation }: SynthesisTabProps) {
 
       {/* Judge Reasoning */}
       {recommendation.judge_reasoning && (
-        <div className="mb-6">
-          <h3 className="text-sm font-semibold text-text-secondary mb-2">Judge Reasoning</h3>
-          <p className="text-sm text-text-primary leading-relaxed">{recommendation.judge_reasoning}</p>
+        <div className="bg-bg-concrete rounded-lg border border-border-gutter p-6 mb-6">
+          <h3 className="text-sm font-semibold text-text-secondary mb-2 font-body">Judge Reasoning</h3>
+          <AnimatePresence initial={false}>
+            <motion.p
+              key={reasoningExpanded ? 'expanded' : 'collapsed'}
+              className={clsx(
+                'text-sm text-text-primary leading-relaxed',
+                !reasoningExpanded && 'line-clamp-4',
+              )}
+            >
+              {recommendation.judge_reasoning}
+            </motion.p>
+          </AnimatePresence>
+          <button
+            onClick={() => setReasoningExpanded(prev => !prev)}
+            className="mt-2 flex items-center gap-1 text-xs text-accent-signal hover:text-accent-signal/80 transition-colors font-body"
+          >
+            {reasoningExpanded ? (
+              <>
+                <ChevronUp className="w-3.5 h-3.5" />
+                Show less
+              </>
+            ) : (
+              <>
+                <ChevronDown className="w-3.5 h-3.5" />
+                Read full reasoning
+              </>
+            )}
+          </button>
         </div>
       )}
 
       {/* Key Factors */}
       {recommendation.key_factors.length > 0 && (
-        <div className="mb-6">
-          <h3 className="text-sm font-semibold text-text-secondary mb-2">
+        <div className="bg-bg-concrete rounded-lg border border-border-gutter p-6 mb-6">
+          <h3 className="text-sm font-semibold text-text-secondary mb-2 font-body">
             Key Factors
-            <span className="ml-2 text-xs font-normal">({recommendation.key_factors.length})</span>
+            <span className="ml-2 text-xs font-normal text-text-muted">({recommendation.key_factors.length})</span>
           </h3>
           <ul className="space-y-1.5">
             {recommendation.key_factors.map((factor, i) => (
               <li key={i} className="flex items-start gap-2 text-sm text-text-primary">
-                <span className="mt-1.5 w-1.5 h-1.5 rounded-full shrink-0 bg-accent-blue" />
+                <span className="mt-1.5 w-1.5 h-1.5 rounded-full shrink-0 bg-accent-signal" />
                 {factor}
               </li>
             ))}
@@ -171,15 +234,15 @@ export function SynthesisTab({ recommendation }: SynthesisTabProps) {
       {/* Warnings */}
       {recommendation.warnings.length > 0 && (
         <div className="mb-6">
-          <h3 className="text-sm font-semibold text-accent-yellow mb-2">
+          <h3 className="text-sm font-semibold text-accent-alert mb-2 font-body">
             Warnings
-            <span className="ml-2 text-xs font-normal">({recommendation.warnings.length})</span>
+            <span className="ml-2 text-xs font-normal text-accent-alert/70">({recommendation.warnings.length})</span>
           </h3>
-          <div className="bg-accent-yellow/5 border border-accent-yellow/20 rounded-lg p-4">
+          <div className="bg-accent-alert-dim border border-accent-alert/20 rounded-lg p-4">
             <ul className="space-y-1.5">
               {recommendation.warnings.map((warning, i) => (
-                <li key={i} className="flex items-start gap-2 text-sm text-accent-yellow">
-                  <span className="mt-1.5 w-1.5 h-1.5 rounded-full shrink-0 bg-accent-yellow" />
+                <li key={i} className="flex items-start gap-2 text-sm text-accent-alert">
+                  <span className="mt-1.5 w-1.5 h-1.5 rounded-full shrink-0 bg-accent-alert" />
                   {warning}
                 </li>
               ))}

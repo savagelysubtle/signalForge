@@ -15,36 +15,44 @@ APIs directly — everything goes through this FastAPI server.
 src/backend/
 ├── main.py                    # FastAPI app, lifespan, CORS, rate limiting
 ├── config.py                  # Settings from env vars, AppData paths
-├── api/                       # Route handlers (4 routers)
+├── api/                       # Route handlers (8 routers)
 │   ├── pipeline.py            # /api/pipeline/* — trigger and query runs
 │   ├── strategies.py          # /api/strategies/* — CRUD strategies
 │   ├── charts.py              # /api/charts/* — on-demand chart images
-│   └── settings.py            # /api/settings/* — API key status
+│   ├── settings.py            # /api/settings/* — API key status
+│   ├── decisions.py           # /api/decisions/* — follow/pass decisions
+│   ├── outcomes.py            # /api/outcomes/* — trade outcomes
+│   ├── recommendations.py     # /api/recommendations/* — with decision/outcome status
+│   └── insights.py            # /api/insights/* — overview + reflection
 ├── middleware/
 │   └── auth.py                # JWT verification, CurrentUser dependency
 ├── pipeline/                  # The LLM analysis pipeline
 │   ├── orchestrator.py        # Execution engine (runs all stages)
 │   ├── schemas.py             # Pydantic models (data contracts)
 │   ├── validation.py          # JSON extraction, retry logic
-│   ├── stages/                # One file per LLM provider
-│   │   ├── perplexity.py      # Stage 1: stock screening
+│   ├── stages/                # One file per LLM stage
+│   │   ├── perplexity.py      # Stage 1: stock/crypto screening
 │   │   ├── gemini.py          # Stage 2: news sentiment
-│   │   ├── claude.py          # Stage 3: chart analysis
-│   │   └── gpt.py             # Stage 4: bull/bear/judge debate
+│   │   ├── claude.py          # Stage 3: chart analysis (multi-timeframe)
+│   │   ├── gpt.py             # Stage 4: bull/bear/judge debate
+│   │   ├── regime.py          # Market regime classifier
+│   │   └── risk_validator.py  # Risk parameter validation
 │   └── prompts/               # Versioned prompt templates
 │       ├── perplexity_discovery.py
 │       ├── perplexity_analysis.py
 │       ├── gemini_sentiment.py
 │       ├── claude_chart.py
-│       └── gpt_debate.py
+│       ├── gpt_debate.py
+│       └── regime_classifier.py
 ├── services/                  # Business logic layer
 │   ├── strategy.py            # Strategy CRUD + template seeding
 │   ├── chart_image.py         # Chart-Img v2 API + Supabase Storage
+│   ├── fmp_service.py         # FMP pre-screening (Stage 0, optional)
 │   ├── keyring_service.py     # API key loading from env
 │   └── reflection.py          # Self-learning context from outcomes
 ├── database/
 │   ├── connection.py          # Supabase async client (singleton)
-│   └── migrations/            # SQL schema files (001–005)
+│   └── migrations/            # SQL schema files (001–010+)
 └── utils/
     └── hashing.py             # Prompt hash utility
 ```
@@ -92,7 +100,8 @@ There is no `config/` directory. All config lives in a single
 | `ANTHROPIC_API_KEY` | Claude Vision |
 | `GOOGLE_API_KEY` | Gemini |
 | `OPENAI_API_KEY` | GPT |
-| `CHART_IMG_API_KEY` | Chart-Img v2 |
+| `CHARTIMG_API_KEY` | Chart-Img v2 |
+| `FMP_API_KEY` | FMP pre-screening (optional) |
 
 All keys come from `.env` in development or Railway environment variables in
 production. Never stored in the database or committed to version control.

@@ -9,13 +9,15 @@ from __future__ import annotations
 from pipeline.schemas import StrategyConfig
 from utils.hashing import prompt_hash
 
-PROMPT_VERSION = "v5"
+PROMPT_VERSION = "v8"
 
 ANALYSIS_SYSTEM_PROMPT = """\
-You are a financial research analyst. You will be given a list of ticker
-symbols (stocks, ETFs, or crypto). Research each one and return structured
-fundamental data. You must return ONLY valid JSON — no commentary outside
-the JSON structure.
+You are a financial research analyst with a focus on the Canadian market
+(TSX, TSXV). You will be given a list of ticker symbols (stocks, ETFs, or
+crypto). Research each one and return structured fundamental data. When a
+ticker could resolve to both a Canadian and US listing, prefer the Canadian
+listing unless the user explicitly specified otherwise. You must return
+ONLY valid JSON — no commentary outside the JSON structure.
 
 Return a JSON object with this exact structure:
 {
@@ -31,6 +33,11 @@ Return a JSON object with this exact structure:
       "pe_ratio": <number or null>,
       "revenue_growth": "<e.g. +15% YoY or null>",
       "free_cash_flow": "<e.g. $2.3B or null>",
+      "relative_volume": <number or null (e.g. 2.4 means 2.4x average daily volume)>,
+      "price_change_pct": <number or null (today's % price change, e.g. 4.2 for +4.2%)>,
+      "price": <number or null (current or last traded price)>,
+      "week_52_high": <number or null>,
+      "week_52_low": <number or null>,
       "key_highlights": ["<highlight 1>", "<highlight 2>"],
       "risk_factors": ["<risk 1>", "<risk 2>"],
       "sources": ["<url or source name>"]

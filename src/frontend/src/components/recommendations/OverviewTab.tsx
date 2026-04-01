@@ -13,28 +13,28 @@ export function OverviewTab({ data }: OverviewTabProps) {
   return (
     <div className="p-6 overflow-y-auto h-full">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-        <div className="bg-bg-tertiary p-4 rounded-lg border border-border">
-          <div className="text-xs text-text-secondary mb-1">Market Cap</div>
-          <div className="text-lg font-semibold">{formatValue(data.market_cap)}</div>
+        <div className="bg-bg-concrete p-4 rounded-lg border border-border-gutter">
+          <div className="text-xs text-text-muted mb-1 font-body">Market Cap</div>
+          <div className="text-lg font-display font-semibold">{formatValue(data.market_cap)}</div>
         </div>
-        <div className="bg-bg-tertiary p-4 rounded-lg border border-border">
-          <div className="text-xs text-text-secondary mb-1">P/E Ratio</div>
-          <div className="text-lg font-semibold">{formatValue(data.pe_ratio)}</div>
+        <div className="bg-bg-concrete p-4 rounded-lg border border-border-gutter">
+          <div className="text-xs text-text-muted mb-1 font-body">P/E Ratio</div>
+          <div className="text-lg font-display font-semibold">{formatValue(data.pe_ratio)}</div>
         </div>
-        <div className="bg-bg-tertiary p-4 rounded-lg border border-border">
-          <div className="text-xs text-text-secondary mb-1">Revenue Growth</div>
-          <div className="text-lg font-semibold">{formatValue(data.revenue_growth)}</div>
+        <div className="bg-bg-concrete p-4 rounded-lg border border-border-gutter">
+          <div className="text-xs text-text-muted mb-1 font-body">Revenue Growth</div>
+          <div className="text-lg font-display font-semibold">{formatValue(data.revenue_growth)}</div>
         </div>
-        <div className="bg-bg-tertiary p-4 rounded-lg border border-border">
-          <div className="text-xs text-text-secondary mb-1">Free Cash Flow</div>
-          <div className="text-lg font-semibold">{formatValue(data.free_cash_flow)}</div>
+        <div className="bg-bg-concrete p-4 rounded-lg border border-border-gutter">
+          <div className="text-xs text-text-muted mb-1 font-body">Free Cash Flow</div>
+          <div className="text-lg font-display font-semibold">{formatValue(data.free_cash_flow)}</div>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
-        <div>
-          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-accent-green"></span>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+        <div className="bg-bg-concrete rounded-lg border border-border-gutter p-6">
+          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2 font-body">
+            <span className="w-2 h-2 rounded-full bg-accent-profit"></span>
             Key Highlights
           </h3>
           <ul className="space-y-3">
@@ -45,14 +45,14 @@ export function OverviewTab({ data }: OverviewTabProps) {
                 </li>
               ))
             ) : (
-              <li className="text-sm text-text-secondary">No highlights available.</li>
+              <li className="text-sm text-text-muted">No highlights available.</li>
             )}
           </ul>
         </div>
 
-        <div>
-          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-accent-red"></span>
+        <div id="risk-factors" className="bg-bg-concrete rounded-lg border border-border-gutter p-6">
+          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2 font-body">
+            <span className="w-2 h-2 rounded-full bg-accent-loss"></span>
             Risk Factors
           </h3>
           <ul className="space-y-3">
@@ -63,18 +63,18 @@ export function OverviewTab({ data }: OverviewTabProps) {
                 </li>
               ))
             ) : (
-              <li className="text-sm text-text-secondary">No risk factors identified.</li>
+              <li className="text-sm text-text-muted">No risk factors identified.</li>
             )}
           </ul>
         </div>
       </div>
 
       {data.sources.length > 0 && (
-        <div className="mt-8 pt-6 border-t border-border">
-          <h4 className="text-sm font-semibold text-text-secondary mb-3">Sources</h4>
+        <div className="bg-bg-concrete rounded-lg border border-border-gutter p-6">
+          <h4 className="text-sm font-semibold text-text-secondary mb-3 font-body">Sources</h4>
           <div className="flex flex-wrap gap-2">
             {data.sources.map((source, i) => (
-              <span key={i} className="text-xs bg-bg-tertiary px-2 py-1 rounded text-text-secondary">
+              <span key={i} className="text-xs bg-bg-void px-2 py-1 rounded text-text-secondary border border-border-subtle">
                 {source}
               </span>
             ))}

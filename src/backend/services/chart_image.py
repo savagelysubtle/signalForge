@@ -20,6 +20,7 @@ from supabase import Client, create_client
 from config import paths, settings
 from pipeline.schemas import TechnicalLevel
 from services.keyring_service import get_api_key
+from utils.ticker import normalize_ticker
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +30,11 @@ INDICATOR_MAP: dict[str, str] = {
     "RSI": "Relative Strength Index",
     "MACD": "MACD",
     "Bollinger Bands": "Bollinger Bands",
+    "Bollinger_Bands": "Bollinger Bands",
     "Stochastic": "Stochastic",
     "ATR": "Average True Range",
+    "EMA_9": "Moving Average Exponential",
+    "EMA_21": "Moving Average Exponential",
     "EMA_20": "Moving Average Exponential",
     "EMA_50": "Moving Average Exponential",
     "EMA_200": "Moving Average Exponential",
@@ -42,10 +46,15 @@ INDICATOR_MAP: dict[str, str] = {
     "CCI": "Commodity Channel Index",
     "Ichimoku": "Ichimoku Cloud",
     "DMI": "Directional Movement",
+    "ADX": "Directional Movement",
     "Parabolic SAR": "Parabolic SAR",
+    "Supertrend": "Supertrend",
+    "Williams_R": "Williams %R",
 }
 
 INDICATOR_INPUTS: dict[str, dict] = {
+    "EMA_9": {"length": 9},
+    "EMA_21": {"length": 21},
     "EMA_20": {"length": 20},
     "EMA_50": {"length": 50},
     "EMA_200": {"length": 200},
@@ -54,7 +63,9 @@ INDICATOR_INPUTS: dict[str, dict] = {
 }
 
 TIMEFRAME_MAP: dict[str, str] = {
+    "5m": "5m",
     "15m": "15m",
+    "30m": "30m",
     "1H": "1h",
     "2H": "2h",
     "4H": "4h",
@@ -86,25 +97,75 @@ EXCHANGE_SUFFIX_MAP: dict[str, str] = {
 
 _US_EXCHANGE_FALLBACKS = ["NASDAQ", "NYSE", "AMEX"]
 
+_CANADIAN_EXCHANGE_FALLBACKS = ["TSX", "TSXV"]
+
+_TRUST_UNIT_SUFFIXES = ("-UN", "-U", "-DB", "-PR", "-WT", "-RT")
+
+
+def _fix_canadian_symbol(symbol: str) -> str:
+    """Convert FMP/LLM hyphenated suffixes to TradingView dot format.
+
+    Canadian trust units, preferred shares, warrants, and debentures use
+    hyphen separators in FMP data (``REI-UN``) but dots on TradingView
+    (``REI.UN``).
+
+    Args:
+        symbol: The symbol portion (after the exchange prefix).
+
+    Returns:
+        Symbol with hyphens converted to dots for known suffixes.
+    """
+    for suffix in _TRUST_UNIT_SUFFIXES:
+        if symbol.endswith(suffix):
+            return symbol[: -len(suffix)] + "." + suffix[1:]
+    if "-" in symbol and symbol.split("-")[-1] in ("A", "B", "C", "D", "E", "H"):
+        return symbol.replace("-", ".")
+    return symbol
+
 
 def _to_tradingview_symbols(ticker: str) -> list[str]:
     """Convert ticker to one or more TradingView ``EXCHANGE:SYMBOL`` candidates.
 
     Chart-Img v2 requires ``EXCHANGE:SYMBOL`` format. For non-US tickers
-    (Yahoo suffixes or already-prefixed), returns a single candidate. For
-    bare US symbols, returns candidates for NASDAQ, NYSE, and AMEX since
-    we cannot know the exchange at this point.
+    (Yahoo suffixes or already-prefixed), returns candidates with fallbacks.
+    For bare US symbols, returns candidates for NASDAQ, NYSE, and AMEX.
+
+    Canadian tickers (TSX/TSXV prefixed or .TO/.V suffixed) get both TSX and
+    TSXV as candidates, since Perplexity may guess the wrong exchange.
+    US exchanges are appended as final fallbacks for Canadian-prefixed tickers
+    because LLMs sometimes mislabel US stocks with a TSX prefix.
+
+    The ticker is normalized first to strip whitespace and convert Yahoo
+    suffixes, so malformed input like ``TSX: CVE`` or ``ENB.TO`` is handled.
+    Canadian trust-unit hyphens are converted to dots (``REI-UN`` → ``REI.UN``).
 
     Examples:
-        TSX:ENB    -> ["TSX:ENB"]
-        AC.TO      -> ["TSX:AC"]
+        TSX:ENB    -> ["TSX:ENB", "TSXV:ENB", "NASDAQ:ENB", "NYSE:ENB", "AMEX:ENB"]
+        TSX:REI-UN -> ["TSX:REI.UN", "TSXV:REI.UN"]
+        TSXV:NVX   -> ["TSXV:NVX", "TSX:NVX", "NASDAQ:NVX", "NYSE:NVX", "AMEX:NVX"]
+        AC.TO      -> ["TSX:AC", "TSXV:AC"]
         AAPL       -> ["NASDAQ:AAPL", "NYSE:AAPL", "AMEX:AAPL"]
+        TSX: CVE   -> ["TSX:CVE", "TSXV:CVE", "NASDAQ:CVE", "NYSE:CVE", "AMEX:CVE"]
     """
+    ticker = normalize_ticker(ticker)
     if ":" in ticker:
+        exchange, symbol = ticker.split(":", 1)
+        if exchange in _CANADIAN_EXCHANGE_FALLBACKS:
+            symbol = _fix_canadian_symbol(symbol)
+            candidates = [
+                f"{ex}:{symbol}" for ex in _CANADIAN_EXCHANGE_FALLBACKS if ex == exchange
+            ] + [f"{ex}:{symbol}" for ex in _CANADIAN_EXCHANGE_FALLBACKS if ex != exchange]
+            if not any(c in symbol for c in (".", "-")):
+                candidates += [f"{ex}:{symbol}" for ex in _US_EXCHANGE_FALLBACKS]
+            return candidates
         return [ticker]
     for suffix, exchange in EXCHANGE_SUFFIX_MAP.items():
         if ticker.endswith(suffix):
             base = ticker[: -len(suffix)]
+            if exchange in _CANADIAN_EXCHANGE_FALLBACKS:
+                return [f"{ex}:{base}" for ex in _CANADIAN_EXCHANGE_FALLBACKS if ex == exchange] + [
+                    f"{ex}:{base}" for ex in _CANADIAN_EXCHANGE_FALLBACKS if ex != exchange
+                ]
             return [f"{exchange}:{base}"]
     return [f"{ex}:{ticker}" for ex in _US_EXCHANGE_FALLBACKS]
 
@@ -201,6 +262,7 @@ async def fetch_chart_image(
     interval = TIMEFRAME_MAP.get(timeframe, "1D")
     studies = _map_indicators(indicators)
     tv_symbols = _to_tradingview_symbols(ticker)
+    logger.info("Chart-Img candidates for '%s': %s", ticker, tv_symbols)
 
     headers = {
         "x-api-key": api_key,
@@ -208,8 +270,10 @@ async def fetch_chart_image(
     }
 
     response = None
+    last_symbol = ticker
     async with httpx.AsyncClient(timeout=30.0) as client:
         for tv_symbol in tv_symbols:
+            last_symbol = tv_symbol
             body: dict = {
                 "symbol": tv_symbol,
                 "interval": interval,
@@ -234,9 +298,10 @@ async def fetch_chart_image(
     if response is None or response.status_code >= 400:
         error_detail = response.text[:500] if response else "No response"
         logger.error("Chart-Img all candidates failed for %s: %s", ticker, error_detail)
-        if response is not None:
-            response.raise_for_status()
-        raise RuntimeError(f"Chart-Img: no valid exchange found for {ticker}")
+        raise RuntimeError(
+            f"Chart-Img HTTP {response.status_code if response else 'N/A'} "
+            f"for {last_symbol}: {error_detail}"
+        )
 
     image_bytes = response.content
 

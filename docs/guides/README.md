@@ -2,6 +2,9 @@
 
 Step-by-step instructions for common development tasks.
 
+For the full strategy architecture, indicator rationale, FMP screener field usage,
+and win-rate foundations, see **[Strategy Design Guide](strategies.md)**.
+
 ---
 
 ## Adding a New Chart Indicator
@@ -71,12 +74,29 @@ Step-by-step instructions for common development tasks.
    }
    ```
 
-2. **Reload templates**: The template only loads if the `strategies` table
-   is empty. To add a template to an existing database, either:
-   - Insert it manually via SQL/Supabase dashboard
-   - Drop all rows from `strategies` and restart the backend
+2. **Reload templates**: Templates sync automatically on backend startup.
+   `ensure_defaults()` upserts templates by name — new templates are inserted,
+   existing ones are updated. Just restart the backend after editing the JSON.
 
-3. The template appears automatically in the frontend's template selector.
+3. **Include `fmp_screener`** — all templates should include an `fmp_screener`
+   block. Set `"enabled": false` if FMP pre-screening is not desired for that
+   strategy:
+
+   ```json
+   "fmp_screener": {
+     "enabled": false,
+     "is_crypto": false,
+     "country": "Canada",
+     "exchange": "TSX",
+     "market_cap_min": 500000000,
+     "market_cap_max": null,
+     "volume_min": 100000,
+     "limit": 20,
+     "enrich_with_ratios": true
+   }
+   ```
+
+4. The template appears automatically in the frontend's template selector.
 
 ---
 
@@ -92,6 +112,7 @@ Step-by-step instructions for common development tasks.
    | Gemini (sentiment) | `gemini_sentiment.py` |
    | Claude (chart) | `claude_chart.py` |
    | GPT (bull/bear/judge) | `gpt_debate.py` |
+   | Regime classifier | `regime_classifier.py` |
 
 2. **Bump `PROMPT_VERSION`**: Increment the version string (e.g.,
    `"v3"` → `"v4"`). The hash updates automatically.
@@ -105,7 +126,58 @@ Step-by-step instructions for common development tasks.
 
 ---
 
-## Adding a New Pipeline Stage
+## Configuring FMP Pre-Screening on a Strategy
+
+FMP (Financial Modeling Prep) is an optional Stage 0 screener. It runs before Perplexity to produce a pre-filtered ticker list.
+
+**Prerequisite:** `FMP_API_KEY` must be set as an environment variable.
+
+### Adding FMP config to a strategy template
+
+Add or update the `fmp_screener` field in [`templates/strategies.json`](../../templates/strategies.json):
+
+```json
+"fmp_screener": {
+  "enabled": true,
+  "is_crypto": false,
+  "country": "Canada",
+  "exchange": "TSX",
+  "sector": null,
+  "industry": null,
+  "market_cap_min": 100000000,
+  "market_cap_max": null,
+  "price_min": 1.0,
+  "price_max": null,
+  "volume_min": 50000,
+  "beta_min": null,
+  "beta_max": null,
+  "is_actively_trading": true,
+  "is_etf": false,
+  "limit": 20,
+  "pe_max": 40.0,
+  "pe_min": null,
+  "roe_min": null,
+  "debt_equity_max": null,
+  "enrich_with_ratios": true
+}
+```
+
+### FMP Screener Config fields
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `enabled` | bool | Master switch — if false, Stage 0 is skipped entirely |
+| `is_crypto` | bool | Crypto path: uses batch-crypto-quotes instead of company-screener |
+| `country` | str | Filter by country (e.g., `"Canada"`, `"US"`) |
+| `exchange` | str | Filter by exchange (e.g., `"TSX"`, `"NASDAQ"`) |
+| `market_cap_min/max` | float | Market cap range in dollars |
+| `volume_min` | int | Minimum average volume |
+| `enrich_with_ratios` | bool | Fetch `ratios-ttm` + `key-metrics-ttm` per result (slower but richer context) |
+| `pe_max/min` | float | Post-filter by P/E ratio |
+| `roe_min` | float | Post-filter by return on equity |
+| `debt_equity_max` | float | Post-filter by debt/equity ratio |
+
+---
 
 1. **Define schemas** in
    [`pipeline/schemas.py`](../../src/backend/pipeline/schemas.py):

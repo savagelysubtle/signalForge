@@ -15,7 +15,7 @@ description: >
 src/frontend/src/
 ├── components/
 │   ├── auth/          # LoginPage, ProtectedRoute
-│   ├── layout/        # MainLayout, Sidebar, CommandBar
+│   ├── layout/        # MainLayout, TopBar, CommandBar (Sidebar may exist but is often unused)
 │   ├── recommendations/  # DetailView, tabs, cards
 │   └── shared/        # Reusable: AssetTypeBadge, TradingViewWidget
 ├── views/             # Top-level pages (routed)
@@ -31,12 +31,12 @@ src/frontend/src/
 ```
 App → AuthProvider → BrowserRouter
   ├── /login → LoginPage
-  └── ProtectedRoute → MainLayout (Sidebar + CommandBar + Outlet)
-      ├── / → RecommendationsView (TickerCardList + DetailView)
-      │       └── DetailView tabs: Overview, Chart, Sentiment, Synthesis, Raw
+  └── ProtectedRoute → MainLayout (TopBar + Outlet)
+      ├── / → RecommendationsView (SearchScreen / ResultsScreen + DetailView)
+      │       └── DetailView tabs: Overview, Chart, Sentiment, Synthesis, Feedback, Raw
       ├── /history → HistoryView
       ├── /strategies → StrategiesView
-      ├── /insights → InsightsView (placeholder)
+      ├── /insights → InsightsView (trade journal + insights dashboard)
       └── /settings → SettingsView
 ```
 
@@ -44,7 +44,7 @@ App → AuthProvider → BrowserRouter
 
 1. Create `src/frontend/src/views/MyView.tsx`
 2. Add route in `App.tsx` inside the `<Route element={<MainLayout />}>` group
-3. Add nav icon in `Sidebar.tsx` using lucide-react
+3. Add nav item in `TopBar.tsx` (or legacy `Sidebar.tsx` if still used) using lucide-react
 
 ## Adding a Detail Tab
 

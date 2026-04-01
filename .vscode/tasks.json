@@ -1,5 +1,11 @@
 {
   "version": "2.0.0",
+  "options": {
+    "shell": {
+      "executable": "C:/Program Files/PowerShell/7/pwsh.exe",
+      "args": ["-NoProfile", "-Command"]
+    }
+  },
   "tasks": [
     {
       "label": "Start Frontend",
@@ -23,8 +29,20 @@
       }
     },
     {
+      "label": "Kill Port 8420",
+      "type": "shell",
+      "command": "Get-NetTCPConnection -LocalPort 8420 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }; Start-Sleep -Milliseconds 500",
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared",
+        "group": "signalforge"
+      },
+      "problemMatcher": []
+    },
+    {
       "label": "Start Backend",
       "type": "shell",
+      "dependsOn": ["Kill Port 8420"],
       "command": "cd '${workspaceFolder}/src/backend' && uv run --python 3.14 uvicorn main:app --reload --reload-dir . --port 8420",
       "isBackground": true,
       "problemMatcher": {

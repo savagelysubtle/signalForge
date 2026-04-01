@@ -50,7 +50,9 @@ class Settings(BaseModel):
     supabase_service_key: str = ""
     supabase_jwt_secret: str = ""
     supabase_anon_key: str = ""
-    allowed_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
+    allowed_origins: list[str] = Field(
+        default_factory=lambda: ["http://localhost:5173", "https://localhost:5173"]
+    )
     port: int = 8420
 
     @classmethod
@@ -64,7 +66,7 @@ class Settings(BaseModel):
         allowed_origins = (
             [origin.strip() for origin in allowed_origins_str.split(",") if origin.strip()]
             if allowed_origins_str
-            else ["http://localhost:5173"]
+            else ["http://localhost:5173", "https://localhost:5173"]
         )
 
         return cls(

@@ -83,7 +83,8 @@ Strategy configurations that drive every pipeline stage.
 | `is_template` | BOOLEAN | Default FALSE |
 | `created_at` | TIMESTAMPTZ | |
 | `updated_at` | TIMESTAMPTZ | |
-| `run_count` | INTEGER | Default 0 |
+| `run_count` | INTEGER | Default 0 (column exists; never incremented in code) |
+| `fmp_screener` | TEXT | JSON: `FmpScreenerConfig`, added in migration 006 |
 
 **Unique constraint:** `(user_id, name)`
 
@@ -106,6 +107,7 @@ Tracks each pipeline execution.
 | `duration_seconds` | REAL | |
 | `prompt_versions` | TEXT | JSON: `{"perplexity": "hash", ...}` |
 | `stage_errors` | TEXT | JSON array of error objects |
+| `user_prompt` | TEXT | Free-form text for `prompt` mode, added in migration 007 |
 
 ---
 
@@ -161,7 +163,7 @@ Final trade recommendations from the GPT judge.
 | `run_id` | TEXT FK → pipeline_runs | |
 | `user_id` | TEXT NOT NULL | |
 | `ticker` | TEXT NOT NULL | |
-| `action` | TEXT | `BUY`, `SELL`, `HOLD` |
+| `action` | TEXT | `BUY`, `SHORT`, `HOLD` (migration 010 renamed SELL → SHORT) |
 | `confidence` | REAL | 0.0–1.0 |
 | `entry_price` | REAL | |
 | `stop_loss` | REAL | |
@@ -224,6 +226,7 @@ Self-learning summaries generated from outcome analysis.
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | TEXT PK | |
+| `user_id` | TEXT NOT NULL | Added in migration 008 (`DEFAULT 'system'`) |
 | `generated_at` | TIMESTAMPTZ | |
 | `recommendations_analyzed` | INTEGER | |
 | `decisions_analyzed` | INTEGER | |
@@ -263,6 +266,11 @@ SQL migrations are stored in
 | `003_add_secondary_timeframe.sql` | Add `secondary_timeframe` to strategies |
 | `004_additional_timeframes.sql` | Add `additional_timeframes` JSON column |
 | `005_short_timeframes.sql` | Add `short_timeframes` and `short_tf_indicators` |
+| `006_add_fmp_screener.sql` | Add `fmp_screener` JSON column to strategies |
+| `007_add_user_prompt.sql` | Add `user_prompt` TEXT to pipeline_runs |
+| `008_add_user_id_to_reflections.sql` | Add `user_id` to reflections for multi-tenant isolation |
+| `009_add_atr_to_chart_indicators.sql` | ATR metadata in chart indicators |
+| `010_rename_sell_to_short.sql` | Rename `SELL` → `SHORT` in recommendations.action |
 
 Migrations are applied manually via the Supabase SQL editor or CLI.
 There is no automated migration runner yet.

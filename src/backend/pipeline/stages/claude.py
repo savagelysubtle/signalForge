@@ -30,9 +30,37 @@ from services.keyring_service import get_api_key
 
 logger = logging.getLogger(__name__)
 
-CLAUDE_MODEL = "claude-sonnet-4-20250514"
+CLAUDE_MODEL = "claude-opus-4-6"
 
 _semaphore = asyncio.Semaphore(3)
+
+
+def _format_quote_for_claude(live_quotes: dict | None, ticker: str) -> str | None:
+    """Format a single ticker's live quote for the Claude prompt.
+
+    Args:
+        live_quotes: Mapping of ticker → FmpQuote (may be None).
+        ticker: The ticker to format.
+
+    Returns:
+        Formatted string or None if no quote available.
+    """
+    if not live_quotes or ticker not in live_quotes:
+        return None
+    q = live_quotes[ticker]
+    if q.price is None:
+        return None
+    parts = [f"Price: ${q.price:.2f}"]
+    if q.changesPercentage is not None:
+        parts.append(f"Change: {q.changesPercentage:+.2f}%")
+    if q.open is not None:
+        parts.append(f"Open: ${q.open:.2f}")
+    if q.dayLow is not None and q.dayHigh is not None:
+        parts.append(f"Day range: ${q.dayLow:.2f}-${q.dayHigh:.2f}")
+    if q.volume is not None and q.avgVolume:
+        rvol = q.volume / q.avgVolume
+        parts.append(f"Volume: {q.volume:,} (RVOL: {rvol:.1f}x avg)")
+    return "\n".join(parts)
 
 
 def _get_client() -> AsyncAnthropic:
@@ -109,11 +137,15 @@ async def _analyze_ticker(
     user_id: str = "",
     timeframe_override: str | None = None,
     indicators_override: list[str] | None = None,
+    fmp_context_str: str | None = None,
+    regime_context: str = "",
+    live_quote_context: str | None = None,
 ) -> tuple[ChartAnalysis | None, dict]:
     """Run chart analysis for a single ticker and timeframe.
 
     Fetches the chart image, sends it to Claude Vision with news context,
-    and returns a validated ChartAnalysis.
+    FMP fundamental context, and real-time quote data, and returns a
+    validated ChartAnalysis.
 
     Args:
         ticker: Stock/crypto ticker symbol.
@@ -125,6 +157,9 @@ async def _analyze_ticker(
             strategy's ``chart_timeframe``.
         indicators_override: If set, use these indicators instead of
             the strategy's ``chart_indicators`` (for short-TF analysis).
+        fmp_context_str: Pre-formatted FMP fundamental context, or None.
+        regime_context: Pre-formatted market regime header, or empty.
+        live_quote_context: Pre-formatted real-time quote string, or None.
 
     Returns:
         Tuple of (validated ChartAnalysis or None, metadata dict).
@@ -137,6 +172,9 @@ async def _analyze_ticker(
         sentiment,
         timeframe_override=timeframe_override,
         indicators_override=effective_indicators,
+        fmp_context=fmp_context_str,
+        regime_context=regime_context,
+        live_quote_context=live_quote_context,
     )
     metadata: dict = {
         "stage": "claude",
@@ -183,6 +221,7 @@ async def _analyze_ticker(
             result.chart_image_path = image_path
             metadata["status"] = "success"
             metadata["raw_response"] = result.model_dump_json()
+            metadata["retry_count"] = getattr(result, "_retry_count", 0)
         else:
             metadata["status"] = "validation_failed"
 
@@ -201,30 +240,56 @@ async def run_chart_analysis(
     sentiments: list[SentimentAnalysis],
     run_id: str,
     user_id: str = "",
+    fmp_context: dict | None = None,
+    regime_context: str = "",
+    live_quotes: dict | None = None,
 ) -> tuple[list[ChartAnalysis], list[dict]]:
     """Run chart analysis for all tickers in parallel.
 
-    Each ticker gets its own Claude Vision call with a chart screenshot
-    and news context from Gemini. Calls are rate-limited by a semaphore
-    (max 3 concurrent to respect Anthropic rate limits).
+    Each ticker gets its own Claude Vision call with a chart screenshot,
+    news context from Gemini, fundamental context from FMP, and real-time
+    quote data. Calls are rate-limited by a semaphore (max 3 concurrent).
 
     Args:
         tickers: List of ticker symbols from screening.
         config: Strategy configuration with chart params.
         sentiments: List of SentimentAnalysis results from Gemini.
         run_id: Pipeline run UUID for chart image filenames.
+        user_id: User UUID for storage path isolation.
+        fmp_context: Mapping of ticker -> FmpEnrichedStock for
+            fundamental context injection into chart prompts.
+        regime_context: Pre-formatted market regime header, or empty.
+        live_quotes: Mapping of ticker -> FmpQuote for real-time
+            price injection into chart prompts (may be None).
 
     Returns:
         Tuple of (list of successful ChartAnalysis results,
         list of per-ticker metadata dicts).
     """
+    from pipeline.fmp_context import format_fmp_for_claude
+
     sentiment_map: dict[str, SentimentAnalysis] = {s.ticker: s for s in sentiments}
 
     tasks = []
     task_tickers: list[str] = []
     for ticker in tickers:
         sentiment = sentiment_map.get(ticker)
-        tasks.append(_analyze_ticker(ticker, config, sentiment, run_id, user_id))
+        fmp_str: str | None = None
+        if fmp_context and ticker in fmp_context:
+            fmp_str = format_fmp_for_claude(fmp_context[ticker])
+        quote_str = _format_quote_for_claude(live_quotes, ticker) if live_quotes else None
+        tasks.append(
+            _analyze_ticker(
+                ticker,
+                config,
+                sentiment,
+                run_id,
+                user_id,
+                fmp_context_str=fmp_str,
+                regime_context=regime_context,
+                live_quote_context=quote_str,
+            )
+        )
         task_tickers.append(ticker)
         for extra_tf in config.additional_timeframes:
             if extra_tf != config.chart_timeframe:
@@ -236,6 +301,9 @@ async def run_chart_analysis(
                         run_id,
                         user_id,
                         timeframe_override=extra_tf,
+                        fmp_context_str=fmp_str,
+                        regime_context=regime_context,
+                        live_quote_context=quote_str,
                     )
                 )
                 task_tickers.append(ticker)
@@ -250,6 +318,9 @@ async def run_chart_analysis(
                         user_id,
                         timeframe_override=short_tf,
                         indicators_override=config.short_tf_indicators,
+                        fmp_context_str=fmp_str,
+                        regime_context=regime_context,
+                        live_quote_context=quote_str,
                     )
                 )
                 task_tickers.append(ticker)
