@@ -10,7 +10,7 @@ todos:
     content:
       Install recharts via bun and add TradeHistoryEntry types (frontend +
       backend)
-    status: pending
+    status: in_progress
   - id: backend-history
     content:
       New GET /api/insights/trade-history endpoint returning closed outcomes as
