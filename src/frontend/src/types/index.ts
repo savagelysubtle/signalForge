@@ -415,6 +415,16 @@ export interface ConfidenceCalibration {
   win_rate: number;
 }
 
+export interface TradeHistoryEntry {
+  date: string;
+  ticker: string;
+  pnl_dollars: number;
+  pnl_percent: number | null;
+  cumulative_pnl: number;
+  action: string;
+  confidence: number;
+}
+
 export interface PerformanceOverview {
   total_recommendations: number;
   total_decisions: number;

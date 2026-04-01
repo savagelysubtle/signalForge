@@ -10,50 +10,50 @@ todos:
     content:
       Install recharts via bun and add TradeHistoryEntry types (frontend +
       backend)
-    status: in_progress
+    status: completed
   - id: backend-history
     content:
       New GET /api/insights/trade-history endpoint returning closed outcomes as
       time-series with cumulative PnL
-    status: pending
+    status: completed
   - id: hero-strip
     content:
       Redesign Hero P&L strip — Net P&L hero card (2x size, glow), compact
       supporting metrics with visual weight hierarchy
-    status: pending
+    status: completed
   - id: equity-curve
     content:
       Build EquityCurveChart component with Recharts AreaChart, green/red
       gradient, tooltip, responsive
-    status: pending
+    status: completed
   - id: pnl-calendar
     content:
       Build PnL Calendar Heatmap — CSS grid month view, color-coded cells by
       daily P&L, click-to-filter
-    status: pending
+    status: completed
   - id: date-grouped-journal
     content:
       Restructure RecommendationJournal with date-grouped sections, sticky
       headers with daily aggregate P&L
-    status: pending
+    status: completed
   - id: journal-row-polish
     content:
       Improve JournalRow visual hierarchy — differentiate
       pending/open/closed/passed with bg tints and border effects
-    status: pending
+    status: completed
   - id: reflection-panel
     content:
       Replace raw text ReflectionPanel with structured cards — performance
       summary, pattern alerts, AI insight, collapsible raw prompt
-    status: pending
+    status: completed
   - id: data-flow
     content:
       Update useInsights hook and api client to fetch trade history for charts
-    status: pending
+    status: completed
   - id: polish
     content:
       Animated P&L counters, improved empty states, final visual polish pass
-    status: pending
+    status: completed
 isProject: false
 ---
 

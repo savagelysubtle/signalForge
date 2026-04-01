@@ -19,6 +19,7 @@ import type {
   BrokerageAccount,
   PendingMatch,
   SyncResultResponse,
+  TradeHistoryEntry,
 } from "../types";
 
 const BASE_URL = import.meta.env.VITE_API_URL || "";
@@ -144,6 +145,7 @@ export const api = {
 
   // Insights
   getPerformanceOverview: () => request<PerformanceOverview>("/api/insights/overview"),
+  getTradeHistory: () => request<TradeHistoryEntry[]>("/api/insights/trade-history"),
   triggerReflection: () =>
     request<ReflectionResponse>("/api/insights/reflect", { method: "POST" }),
   getLatestReflection: () => request<ReflectionResponse>("/api/insights/reflections/latest"),

@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException
 
 from database.connection import get_db
 from middleware.auth import CurrentUser
-from pipeline.schemas import PerformanceOverview, ReflectionResponse
+from pipeline.schemas import PerformanceOverview, ReflectionResponse, TradeHistoryEntry
 from services.reflection import generate_reflection
 
 router = APIRouter(prefix="/insights", tags=["insights"])
@@ -66,6 +66,66 @@ async def get_latest_reflection(user_id: CurrentUser) -> ReflectionResponse:
         injection_prompt=r["injection_prompt"],
         metrics=json.loads(r["metrics"]) if isinstance(r["metrics"], str) else r["metrics"],
     )
+
+
+@router.get("/trade-history", response_model=list[TradeHistoryEntry])
+async def get_trade_history(user_id: CurrentUser) -> list[TradeHistoryEntry]:
+    """Return resolved outcomes as a time-series with cumulative PnL.
+
+    Used by the equity curve chart and P&L calendar heatmap. Includes any
+    outcome that has either a recorded exit_price or a non-null pnl_dollars,
+    sorted by logged_at ascending.
+    """
+    client = await get_db()
+
+    out_resp = (
+        await client.table("outcomes")
+        .select("ticker, pnl_dollars, pnl_percent, logged_at, recommendation_id")
+        .eq("user_id", user_id)
+        .or_("exit_price.not.is.null,pnl_dollars.not.is.null")
+        .order("logged_at", desc=False)
+        .execute()
+    )
+    outcomes = out_resp.data if out_resp and out_resp.data else []
+
+    if not outcomes:
+        return []
+
+    rec_ids = list({o["recommendation_id"] for o in outcomes if o.get("recommendation_id")})
+    conf_map: dict[str, tuple[str, float]] = {}
+    if rec_ids:
+        rec_resp = (
+            await client.table("recommendations")
+            .select("id, action, confidence")
+            .in_("id", rec_ids)
+            .execute()
+        )
+        for r in rec_resp.data:
+            conf_map[r["id"]] = (r.get("action", ""), r.get("confidence", 0.5))
+
+    result: list[TradeHistoryEntry] = []
+    cumulative = 0.0
+    for o in outcomes:
+        pnl = o.get("pnl_dollars") or 0.0
+        cumulative += pnl
+        rec_id = o.get("recommendation_id", "")
+        action, confidence = conf_map.get(rec_id, ("", 0.5))
+        logged_at = str(o.get("logged_at", ""))
+        date_str = logged_at[:10] if len(logged_at) >= 10 else logged_at
+
+        result.append(
+            TradeHistoryEntry(
+                date=date_str,
+                ticker=o.get("ticker", ""),
+                pnl_dollars=pnl,
+                pnl_percent=o.get("pnl_percent"),
+                cumulative_pnl=round(cumulative, 2),
+                action=action,
+                confidence=confidence,
+            )
+        )
+
+    return result
 
 
 @router.get("/overview", response_model=PerformanceOverview)

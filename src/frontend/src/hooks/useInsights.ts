@@ -7,6 +7,7 @@ import type {
   RecommendationWithStatus,
   DecisionCreate,
   OutcomeCreate,
+  TradeHistoryEntry,
 } from "../types";
 
 const PAGE_SIZE = 50;
@@ -23,6 +24,7 @@ export function useInsights() {
   const [overview, setOverview] = useState<PerformanceOverview | null>(null);
   const [recommendations, setRecommendations] = useState<RecommendationWithStatus[]>([]);
   const [reflection, setReflection] = useState<ReflectionResponse | null>(null);
+  const [tradeHistory, setTradeHistory] = useState<TradeHistoryEntry[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -50,12 +52,14 @@ export function useInsights() {
             }
           : undefined;
 
-      const [ov, recs] = await Promise.all([
+      const [ov, recs, history] = await Promise.all([
         api.getPerformanceOverview(),
         api.listRecommendations(PAGE_SIZE, p * PAGE_SIZE, apiFilters),
+        api.getTradeHistory().catch(() => [] as TradeHistoryEntry[]),
       ]);
       setOverview(ov);
       setRecommendations(recs);
+      setTradeHistory(history);
       setHasMore(recs.length === PAGE_SIZE);
 
       try {
@@ -162,6 +166,7 @@ export function useInsights() {
     overview,
     recommendations,
     reflection,
+    tradeHistory,
     isLoading,
     isGenerating,
     error,

@@ -1,6 +1,15 @@
-import { useEffect, useState } from "react";
-import { motion, AnimatePresence } from "motion/react";
+import { useEffect, useMemo, useState } from "react";
+import { motion, AnimatePresence, useMotionValue, useTransform, animate } from "motion/react";
 import clsx from "clsx";
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from "recharts";
 import {
   Loader2,
   Brain,
@@ -14,7 +23,6 @@ import {
   XCircle,
   ArrowUpRight,
   ArrowDownRight,
-  Clock,
   ChevronDown,
   ChevronUp,
   ChevronLeft,
@@ -25,6 +33,9 @@ import {
   Link2,
   Pencil,
   SlidersHorizontal,
+  Calendar,
+  Activity,
+  Zap,
 } from "lucide-react";
 import { useInsights } from "../hooks/useInsights";
 import type { JournalFilters } from "../hooks/useInsights";
@@ -37,6 +48,7 @@ import type {
   DecisionCreate,
   OutcomeCreate,
   PendingMatch,
+  TradeHistoryEntry,
 } from "../types";
 
 export function InsightsView() {
@@ -44,6 +56,7 @@ export function InsightsView() {
     overview,
     recommendations,
     reflection,
+    tradeHistory,
     isLoading,
     isGenerating,
     error,
@@ -68,6 +81,7 @@ export function InsightsView() {
   const [showPendingBanner, setShowPendingBanner] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [autoConfirmToast, setAutoConfirmToast] = useState<string | null>(null);
+  const [calendarFilterDate, setCalendarFilterDate] = useState<string | null>(null);
 
   useEffect(() => {
     fetchAll();
@@ -269,7 +283,21 @@ export function InsightsView() {
         )}
       </AnimatePresence>
 
-      {overview && <StatsGrid overview={overview} />}
+      {overview && <HeroPnLStrip overview={overview} />}
+
+      {/* Charts Row */}
+      <div className="grid grid-cols-1 xl:grid-cols-5 gap-6">
+        <div className="xl:col-span-3">
+          <EquityCurveChart data={tradeHistory} />
+        </div>
+        <div className="xl:col-span-2">
+          <PnLCalendar
+            data={tradeHistory}
+            selectedDate={calendarFilterDate}
+            onSelectDate={(d) => setCalendarFilterDate(d === calendarFilterDate ? null : d)}
+          />
+        </div>
+      </div>
 
       <RecommendationJournal
         recommendations={recommendations}
@@ -284,6 +312,7 @@ export function InsightsView() {
         onPrevPage={prevPage}
         filters={filters}
         onApplyFilters={applyFilters}
+        calendarFilterDate={calendarFilterDate}
       />
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
@@ -489,103 +518,445 @@ function MatchRow({
 // Stats Grid
 // ---------------------------------------------------------------------------
 
-function StatsGrid({ overview }: { overview: PerformanceOverview }) {
-  const stats = [
-    {
-      label: "Win Rate",
-      value: overview.win_rate != null ? `${overview.win_rate.toFixed(1)}%` : "—",
-      icon: Target,
-      color: overview.win_rate != null && overview.win_rate >= 50 ? "profit" : "loss",
-    },
-    {
-      label: "Total P&L",
-      value: `$${overview.total_pnl_dollars.toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
-      icon: overview.total_pnl_dollars >= 0 ? TrendingUp : TrendingDown,
-      color: overview.total_pnl_dollars >= 0 ? "profit" : "loss",
-    },
-    {
-      label: "Trades",
-      value: `${overview.wins}W / ${overview.losses}L / ${overview.breakeven}BE`,
-      icon: BarChart3,
-      color: "signal",
-    },
-    {
-      label: "Decisions",
-      value: `${overview.total_following} follow / ${overview.total_passing} pass`,
-      icon: CheckCircle2,
-      color: "electric",
-    },
-    {
-      label: "Avg Return",
-      value: overview.avg_pnl_percent != null ? `${overview.avg_pnl_percent.toFixed(2)}%` : "—",
-      icon:
-        overview.avg_pnl_percent != null && overview.avg_pnl_percent >= 0
-          ? ArrowUpRight
-          : ArrowDownRight,
-      color:
-        overview.avg_pnl_percent != null && overview.avg_pnl_percent >= 0 ? "profit" : "loss",
-    },
-    {
-      label: "Avg Hold",
-      value: overview.avg_holding_days != null ? `${overview.avg_holding_days.toFixed(1)}d` : "—",
-      icon: Clock,
-      color: "alert",
-    },
-  ];
+// ---------------------------------------------------------------------------
+// Animated counter for P&L values
+// ---------------------------------------------------------------------------
 
-  const colorMap: Record<string, { bg: string; text: string; iconColor: string }> = {
-    profit: {
-      bg: "bg-accent-profit-dim",
-      text: "text-accent-profit",
-      iconColor: "text-accent-profit",
-    },
-    loss: { bg: "bg-accent-loss-dim", text: "text-accent-loss", iconColor: "text-accent-loss" },
-    signal: {
-      bg: "bg-accent-signal-dim",
-      text: "text-accent-signal",
-      iconColor: "text-accent-signal",
-    },
-    electric: {
-      bg: "bg-accent-electric-dim",
-      text: "text-accent-electric",
-      iconColor: "text-accent-electric",
-    },
-    alert: {
-      bg: "bg-accent-alert-dim",
-      text: "text-accent-alert",
-      iconColor: "text-accent-alert",
-    },
+function AnimatedNumber({ value, prefix = "", suffix = "", decimals = 2, className }: {
+  value: number;
+  prefix?: string;
+  suffix?: string;
+  decimals?: number;
+  className?: string;
+}) {
+  const motionVal = useMotionValue(0);
+  const display = useTransform(motionVal, (v) => {
+    const sign = v >= 0 ? (prefix === "$" ? "+$" : "+") : (prefix === "$" ? "-$" : "");
+    return `${sign}${Math.abs(v).toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}${suffix}`;
+  });
+
+  useEffect(() => {
+    const controls = animate(motionVal, value, {
+      duration: 1.2,
+      ease: [0.25, 0.46, 0.45, 0.94],
+    });
+    return controls.stop;
+  }, [value, motionVal]);
+
+  return <motion.span className={className}>{display}</motion.span>;
+}
+
+// ---------------------------------------------------------------------------
+// Hero P&L Strip
+// ---------------------------------------------------------------------------
+
+function HeroPnLStrip({ overview }: { overview: PerformanceOverview }) {
+  const pnl = overview.total_pnl_dollars;
+  const isPositive = pnl >= 0;
+
+  const profitFactor = useMemo(() => {
+    if (overview.wins === 0 && overview.losses === 0) return null;
+    if (overview.losses === 0) return overview.wins > 0 ? Infinity : null;
+    const winCount = overview.wins || 0;
+    const lossCount = overview.losses || 0;
+    return winCount / lossCount;
+  }, [overview.wins, overview.losses]);
+
+  const winRateRadius = 18;
+  const winRateCircumference = 2 * Math.PI * winRateRadius;
+  const winRateOffset =
+    overview.win_rate != null
+      ? winRateCircumference * (1 - overview.win_rate / 100)
+      : winRateCircumference;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4 }}
+      className="grid grid-cols-2 md:grid-cols-6 gap-3"
+    >
+      {/* Hero Net P&L — spans 2 cols */}
+      <motion.div
+        className={clsx(
+          "col-span-2 relative overflow-hidden rounded-lg border p-5",
+          isPositive
+            ? "bg-accent-profit/6 border-accent-profit/25"
+            : "bg-accent-loss/6 border-accent-loss/25",
+        )}
+        initial={{ scale: 0.95, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        transition={{ duration: 0.5, delay: 0.05 }}
+      >
+        <div
+          className={clsx(
+            "absolute inset-0 blur-3xl opacity-15 pointer-events-none",
+            isPositive ? "bg-accent-profit" : "bg-accent-loss",
+          )}
+        />
+        <div className="relative">
+          <div className="flex items-center gap-2 mb-2">
+            <div className={clsx(
+              "w-8 h-8 rounded-lg flex items-center justify-center",
+              isPositive ? "bg-accent-profit/15" : "bg-accent-loss/15",
+            )}>
+              {isPositive ? (
+                <TrendingUp className="w-4 h-4 text-accent-profit" />
+              ) : (
+                <TrendingDown className="w-4 h-4 text-accent-loss" />
+              )}
+            </div>
+            <span className="text-[10px] text-text-muted font-display uppercase tracking-widest">
+              Net P&L
+            </span>
+          </div>
+          <AnimatedNumber
+            value={pnl}
+            prefix="$"
+            decimals={2}
+            className={clsx(
+              "text-3xl font-display font-black tabular-nums tracking-tight",
+              isPositive ? "text-accent-profit" : "text-accent-loss",
+            )}
+          />
+        </div>
+      </motion.div>
+
+      {/* Win Rate with circular indicator */}
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3, delay: 0.1 }}
+        className="bg-bg-asphalt/80 backdrop-blur-sm border border-border-gutter rounded-lg p-4 flex items-center gap-3"
+      >
+        <svg width="44" height="44" className="shrink-0 -rotate-90">
+          <circle
+            cx="22" cy="22" r={winRateRadius}
+            fill="none" stroke="var(--color-bg-concrete)" strokeWidth="3"
+          />
+          <motion.circle
+            cx="22" cy="22" r={winRateRadius}
+            fill="none"
+            stroke={overview.win_rate != null && overview.win_rate >= 50 ? "var(--color-accent-profit)" : "var(--color-accent-loss)"}
+            strokeWidth="3"
+            strokeLinecap="round"
+            strokeDasharray={winRateCircumference}
+            initial={{ strokeDashoffset: winRateCircumference }}
+            animate={{ strokeDashoffset: winRateOffset }}
+            transition={{ duration: 1, delay: 0.3, ease: "easeOut" }}
+          />
+        </svg>
+        <div>
+          <p className={clsx(
+            "text-lg font-display font-bold tabular-nums",
+            overview.win_rate != null && overview.win_rate >= 50 ? "text-accent-profit" : "text-accent-loss",
+          )}>
+            {overview.win_rate != null ? `${overview.win_rate.toFixed(1)}%` : "\u2014"}
+          </p>
+          <p className="text-[10px] text-text-muted font-display uppercase tracking-wider">Win Rate</p>
+        </div>
+      </motion.div>
+
+      {/* Profit Factor */}
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3, delay: 0.15 }}
+        className="bg-bg-asphalt/80 backdrop-blur-sm border border-border-gutter rounded-lg p-4"
+      >
+        <div className="flex items-center gap-2 mb-1.5">
+          <Activity className="w-3.5 h-3.5 text-accent-electric" />
+          <span className="text-[10px] text-text-muted font-display uppercase tracking-wider">Profit Factor</span>
+        </div>
+        <p className="text-lg font-display font-bold text-text-primary tabular-nums">
+          {profitFactor != null ? (profitFactor === Infinity ? "\u221E" : profitFactor.toFixed(2)) : "\u2014"}
+        </p>
+      </motion.div>
+
+      {/* Trades */}
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3, delay: 0.2 }}
+        className="bg-bg-asphalt/80 backdrop-blur-sm border border-border-gutter rounded-lg p-4"
+      >
+        <div className="flex items-center gap-2 mb-1.5">
+          <BarChart3 className="w-3.5 h-3.5 text-accent-signal" />
+          <span className="text-[10px] text-text-muted font-display uppercase tracking-wider">Trades</span>
+        </div>
+        <p className="text-sm font-display font-bold text-text-primary tabular-nums">
+          <span className="text-accent-profit">{overview.wins}W</span>
+          {" / "}
+          <span className="text-accent-loss">{overview.losses}L</span>
+          {overview.breakeven > 0 && <span className="text-text-muted"> / {overview.breakeven}BE</span>}
+        </p>
+      </motion.div>
+
+      {/* Avg Return */}
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3, delay: 0.25 }}
+        className="bg-bg-asphalt/80 backdrop-blur-sm border border-border-gutter rounded-lg p-4"
+      >
+        <div className="flex items-center gap-2 mb-1.5">
+          {overview.avg_pnl_percent != null && overview.avg_pnl_percent >= 0 ? (
+            <ArrowUpRight className="w-3.5 h-3.5 text-accent-profit" />
+          ) : (
+            <ArrowDownRight className="w-3.5 h-3.5 text-accent-loss" />
+          )}
+          <span className="text-[10px] text-text-muted font-display uppercase tracking-wider">Avg Return</span>
+        </div>
+        <p className={clsx(
+          "text-lg font-display font-bold tabular-nums",
+          overview.avg_pnl_percent != null && overview.avg_pnl_percent >= 0 ? "text-accent-profit" : "text-accent-loss",
+        )}>
+          {overview.avg_pnl_percent != null ? `${overview.avg_pnl_percent.toFixed(2)}%` : "\u2014"}
+        </p>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Equity Curve Chart
+// ---------------------------------------------------------------------------
+
+function EquityCurveChart({ data }: { data: TradeHistoryEntry[] }) {
+  if (data.length === 0) {
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.35, delay: 0.1 }}
+        className="bg-bg-asphalt/80 backdrop-blur-sm border border-border-gutter rounded-lg overflow-hidden h-[350px] flex flex-col"
+      >
+        <div className="px-5 py-3.5 border-b border-border-subtle flex items-center gap-2">
+          <TrendingUp className="w-4 h-4 text-accent-profit" />
+          <h2 className="text-sm font-display font-semibold">Equity Curve</h2>
+        </div>
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center space-y-2">
+            <Zap className="w-8 h-8 text-accent-signal/30 mx-auto" />
+            <p className="text-sm text-text-muted font-body">
+              Close your first trade to see your equity curve.
+            </p>
+          </div>
+        </div>
+      </motion.div>
+    );
+  }
+
+  const lastPnl = data[data.length - 1]?.cumulative_pnl ?? 0;
+  const isPositive = lastPnl >= 0;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.35, delay: 0.1 }}
+      className="bg-bg-asphalt/80 backdrop-blur-sm border border-border-gutter rounded-lg overflow-hidden h-[350px] flex flex-col"
+    >
+      <div className="px-5 py-3.5 border-b border-border-subtle flex items-center gap-2">
+        <TrendingUp className="w-4 h-4 text-accent-profit" />
+        <h2 className="text-sm font-display font-semibold">Equity Curve</h2>
+      </div>
+      <div className="flex-1 p-4 pt-2">
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+            <defs>
+              <linearGradient id="equityGradient" x1="0" y1="0" x2="0" y2="1">
+                <stop
+                  offset="0%"
+                  stopColor={isPositive ? "var(--color-accent-profit)" : "var(--color-accent-loss)"}
+                  stopOpacity={0.3}
+                />
+                <stop
+                  offset="100%"
+                  stopColor={isPositive ? "var(--color-accent-profit)" : "var(--color-accent-loss)"}
+                  stopOpacity={0}
+                />
+              </linearGradient>
+            </defs>
+            <CartesianGrid
+              strokeDasharray="3 3"
+              stroke="var(--color-border-subtle)"
+              opacity={0.5}
+            />
+            <XAxis
+              dataKey="date"
+              tick={{ fontSize: 10, fill: "var(--color-text-muted)" }}
+              tickLine={false}
+              axisLine={{ stroke: "var(--color-border-subtle)" }}
+            />
+            <YAxis
+              tick={{ fontSize: 10, fill: "var(--color-text-muted)" }}
+              tickLine={false}
+              axisLine={false}
+              tickFormatter={(v: number) => `$${v}`}
+            />
+            <Tooltip
+              contentStyle={{
+                backgroundColor: "var(--color-bg-concrete)",
+                border: "1px solid var(--color-border-gutter)",
+                borderRadius: "8px",
+                fontSize: "12px",
+                color: "var(--color-text-primary)",
+              }}
+              formatter={(value) => [`$${Number(value).toFixed(2)}`, "Cumulative P&L"]}
+              labelStyle={{ color: "var(--color-text-muted)", fontSize: "10px" }}
+            />
+            <Area
+              type="monotone"
+              dataKey="cumulative_pnl"
+              stroke={isPositive ? "var(--color-accent-profit)" : "var(--color-accent-loss)"}
+              strokeWidth={2}
+              fill="url(#equityGradient)"
+              dot={false}
+              activeDot={{
+                r: 4,
+                stroke: isPositive ? "var(--color-accent-profit)" : "var(--color-accent-loss)",
+                strokeWidth: 2,
+                fill: "var(--color-bg-void)",
+              }}
+            />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+    </motion.div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// P&L Calendar Heatmap
+// ---------------------------------------------------------------------------
+
+function PnLCalendar({
+  data,
+  selectedDate,
+  onSelectDate,
+}: {
+  data: TradeHistoryEntry[];
+  selectedDate: string | null;
+  onSelectDate: (date: string) => void;
+}) {
+  const [viewDate, setViewDate] = useState(() => new Date());
+
+  const dailyPnl = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const entry of data) {
+      map.set(entry.date, (map.get(entry.date) ?? 0) + entry.pnl_dollars);
+    }
+    return map;
+  }, [data]);
+
+  const year = viewDate.getFullYear();
+  const month = viewDate.getMonth();
+  const firstDay = new Date(year, month, 1);
+  const lastDay = new Date(year, month + 1, 0);
+  const startDow = (firstDay.getDay() + 6) % 7; // Mon=0
+  const daysInMonth = lastDay.getDate();
+
+  const cells: (number | null)[] = [];
+  for (let i = 0; i < startDow; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+  while (cells.length % 7 !== 0) cells.push(null);
+
+  const monthLabel = viewDate.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+
+  const maxAbsPnl = useMemo(() => {
+    let max = 0;
+    for (const v of dailyPnl.values()) max = Math.max(max, Math.abs(v));
+    return max || 1;
+  }, [dailyPnl]);
+
+  const getCellColor = (pnl: number) => {
+    const intensity = Math.min(Math.abs(pnl) / maxAbsPnl, 1);
+    if (pnl > 0) return `rgba(63, 185, 80, ${0.15 + intensity * 0.5})`;
+    if (pnl < 0) return `rgba(248, 81, 73, ${0.15 + intensity * 0.5})`;
+    return "transparent";
   };
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
-      {stats.map((stat, i) => {
-        const colors = colorMap[stat.color];
-        const Icon = stat.icon;
-        return (
-          <motion.div
-            key={stat.label}
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.3, delay: i * 0.05 }}
-            className="bg-bg-asphalt/80 backdrop-blur-sm border border-border-gutter rounded-lg p-4"
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.35, delay: 0.15 }}
+      className="bg-bg-asphalt/80 backdrop-blur-sm border border-border-gutter rounded-lg overflow-hidden h-[350px] flex flex-col"
+    >
+      <div className="px-5 py-3.5 border-b border-border-subtle flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Calendar className="w-4 h-4 text-accent-alert" />
+          <h2 className="text-sm font-display font-semibold">P&L Calendar</h2>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => setViewDate(new Date(year, month - 1, 1))}
+            className="p-1 rounded hover:bg-bg-surface transition-colors"
           >
-            <div className="flex items-center gap-2 mb-2">
-              <div
-                className={clsx(
-                  "w-7 h-7 rounded-md flex items-center justify-center",
-                  colors.bg,
-                )}
-              >
-                <Icon className={clsx("w-3.5 h-3.5", colors.iconColor)} />
-              </div>
+            <ChevronLeft className="w-3.5 h-3.5 text-text-muted" />
+          </button>
+          <span className="text-xs font-display text-text-secondary min-w-[120px] text-center">
+            {monthLabel}
+          </span>
+          <button
+            onClick={() => setViewDate(new Date(year, month + 1, 1))}
+            className="p-1 rounded hover:bg-bg-surface transition-colors"
+          >
+            <ChevronRight className="w-3.5 h-3.5 text-text-muted" />
+          </button>
+        </div>
+      </div>
+
+      <div className="flex-1 p-4 flex flex-col">
+        {/* Day labels */}
+        <div className="grid grid-cols-7 gap-1 mb-1">
+          {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d) => (
+            <div key={d} className="text-center text-[9px] text-text-muted font-display uppercase tracking-wider">
+              {d}
             </div>
-            <p className={clsx("text-lg font-display font-bold", colors.text)}>{stat.value}</p>
-            <p className="text-xs text-text-muted font-body mt-0.5">{stat.label}</p>
-          </motion.div>
-        );
-      })}
-    </div>
+          ))}
+        </div>
+        {/* Calendar grid */}
+        <div className="grid grid-cols-7 gap-1 flex-1">
+          {cells.map((day, i) => {
+            if (day == null) return <div key={`empty-${i}`} />;
+            const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+            const pnl = dailyPnl.get(dateStr);
+            const hasTrade = pnl !== undefined;
+            const isSelected = selectedDate === dateStr;
+            return (
+              <button
+                key={dateStr}
+                onClick={() => hasTrade && onSelectDate(dateStr)}
+                className={clsx(
+                  "rounded-md flex flex-col items-center justify-center text-center transition-all duration-150 min-h-[36px]",
+                  hasTrade && "cursor-pointer hover:ring-1 hover:ring-accent-signal/40",
+                  !hasTrade && "cursor-default",
+                  isSelected && "ring-2 ring-accent-signal",
+                )}
+                style={{ backgroundColor: hasTrade ? getCellColor(pnl!) : "var(--color-bg-concrete)" }}
+              >
+                <span className={clsx(
+                  "text-[10px] font-display",
+                  hasTrade ? "text-text-primary font-semibold" : "text-text-muted/50",
+                )}>
+                  {day}
+                </span>
+                {hasTrade && (
+                  <span className={clsx(
+                    "text-[8px] font-display font-bold tabular-nums",
+                    pnl! >= 0 ? "text-accent-profit" : "text-accent-loss",
+                  )}>
+                    {pnl! >= 0 ? "+" : ""}{pnl!.toFixed(0)}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </motion.div>
   );
 }
 
@@ -606,6 +977,7 @@ function RecommendationJournal({
   onPrevPage,
   filters,
   onApplyFilters,
+  calendarFilterDate,
 }: {
   recommendations: RecommendationWithStatus[];
   onRecordDecision: (recId: string, body: DecisionCreate) => Promise<void>;
@@ -619,18 +991,20 @@ function RecommendationJournal({
   onPrevPage: () => void;
   filters: JournalFilters;
   onApplyFilters: (f: JournalFilters) => void;
+  calendarFilterDate?: string | null;
 }) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showFilters, setShowFilters] = useState(false);
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
   const CONFIDENCE_STOPS = [0, 25, 50, 75, 100];
 
   const confidenceMinPct = Math.round(filters.confidenceMin * 100);
   const confidenceMaxPct = Math.round(filters.confidenceMax * 100);
   const hasActiveFilters =
-    filters.action.length > 0 || filters.confidenceMin > 0 || filters.confidenceMax < 1;
+    filters.action.length > 0 || filters.confidenceMin > 0 || filters.confidenceMax < 1 || !!calendarFilterDate;
   const activeFilterCount =
-    filters.action.length + (filters.confidenceMin > 0 || filters.confidenceMax < 1 ? 1 : 0);
+    filters.action.length + (filters.confidenceMin > 0 || filters.confidenceMax < 1 ? 1 : 0) + (calendarFilterDate ? 1 : 0);
 
   const toggleAction = (action: "BUY" | "SHORT" | "HOLD") => {
     const current = new Set(filters.action);
@@ -657,6 +1031,37 @@ function RecommendationJournal({
 
   const rangeStart = page * pageSize + 1;
   const rangeEnd = page * pageSize + recommendations.length;
+
+  // Group recommendations by date
+  const dateGroups = useMemo(() => {
+    let filtered = recommendations;
+    if (calendarFilterDate) {
+      filtered = recommendations.filter((r) => r.created_at.startsWith(calendarFilterDate));
+    }
+
+    const groups = new Map<string, RecommendationWithStatus[]>();
+    for (const rec of filtered) {
+      const dateKey = rec.created_at.slice(0, 10);
+      const existing = groups.get(dateKey);
+      if (existing) existing.push(rec);
+      else groups.set(dateKey, [rec]);
+    }
+    return [...groups.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+  }, [recommendations, calendarFilterDate]);
+
+  const toggleGroupCollapse = (dateKey: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(dateKey)) next.delete(dateKey);
+      else next.add(dateKey);
+      return next;
+    });
+  };
+
+  const formatDateHeader = (dateKey: string) => {
+    const d = new Date(dateKey + "T12:00:00");
+    return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+  };
 
   return (
     <motion.div
@@ -691,7 +1096,7 @@ function RecommendationJournal({
           </button>
           <span className="text-xs text-text-muted font-display">
             {recommendations.length > 0
-              ? `${rangeStart}–${rangeEnd}`
+              ? `${rangeStart}\u2013${rangeEnd}`
               : "0 recommendations"}
           </span>
           {(page > 0 || hasMore) && (
@@ -779,7 +1184,7 @@ function RecommendationJournal({
                       </option>
                     ))}
                   </select>
-                  <span className="text-text-muted text-[11px]">–</span>
+                  <span className="text-text-muted text-[11px]">\u2013</span>
                   <select
                     value={confidenceMaxPct}
                     onChange={(e) => setConfidenceMax(Number(e.target.value))}
@@ -809,7 +1214,7 @@ function RecommendationJournal({
         )}
       </AnimatePresence>
 
-      {recommendations.length === 0 && page === 0 ? (
+      {dateGroups.length === 0 && page === 0 ? (
         <div className="p-8 text-center">
           <div className="w-12 h-12 rounded-xl bg-accent-signal-dim flex items-center justify-center mx-auto mb-3">
             <BarChart3 className="w-6 h-6 text-accent-signal" />
@@ -820,25 +1225,76 @@ function RecommendationJournal({
               : "No recommendations yet. Run a pipeline analysis to get started."}
           </p>
         </div>
-      ) : recommendations.length === 0 && page > 0 ? (
+      ) : dateGroups.length === 0 && page > 0 ? (
         <div className="p-8 text-center">
           <p className="text-sm text-text-muted font-body">No more recommendations.</p>
         </div>
       ) : (
-        <div className="divide-y divide-border-subtle">
-          {recommendations.map((rec, i) => (
-            <JournalRow
-              key={rec.id}
-              rec={rec}
-              index={page * pageSize + i}
-              isExpanded={expandedId === rec.id}
-              onToggle={() => setExpandedId(expandedId === rec.id ? null : rec.id)}
-              onRecordDecision={onRecordDecision}
-              onLogOutcome={onLogOutcome}
-              onUpdateOutcome={onUpdateOutcome}
-              onUndoDecision={onUndoDecision}
-            />
-          ))}
+        <div>
+          {dateGroups.map(([dateKey, recs]) => {
+            const isCollapsed = collapsedGroups.has(dateKey);
+            const dayPnl = recs.reduce((sum, r) => sum + (r.outcome_pnl_dollars ?? 0), 0);
+            const closedCount = recs.filter((r) => r.outcome_exit_price != null).length;
+            const hasPnl = closedCount > 0;
+
+            return (
+              <div key={dateKey}>
+                {/* Sticky date header */}
+                <button
+                  onClick={() => toggleGroupCollapse(dateKey)}
+                  className="w-full sticky top-0 z-10 px-5 py-2 bg-bg-concrete/90 backdrop-blur-sm border-b border-border-subtle flex items-center justify-between hover:bg-bg-steel/40 transition-colors"
+                >
+                  <div className="flex items-center gap-3">
+                    {isCollapsed ? (
+                      <ChevronRight className="w-3 h-3 text-text-muted" />
+                    ) : (
+                      <ChevronDown className="w-3 h-3 text-text-muted" />
+                    )}
+                    <span className="text-xs font-display font-semibold text-text-secondary">
+                      {formatDateHeader(dateKey)}
+                    </span>
+                    <span className="text-[10px] text-text-muted font-display">
+                      {recs.length} trade{recs.length !== 1 ? "s" : ""}
+                    </span>
+                  </div>
+                  {hasPnl && (
+                    <span className={clsx(
+                      "text-xs font-display font-bold tabular-nums",
+                      dayPnl >= 0 ? "text-accent-profit" : "text-accent-loss",
+                    )}>
+                      {dayPnl >= 0 ? "+" : ""}${dayPnl.toFixed(2)}
+                    </span>
+                  )}
+                </button>
+
+                <AnimatePresence initial={false}>
+                  {!isCollapsed && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: "auto", opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.2 }}
+                      className="divide-y divide-border-subtle overflow-hidden"
+                    >
+                      {recs.map((rec, i) => (
+                        <JournalRow
+                          key={rec.id}
+                          rec={rec}
+                          index={i}
+                          isExpanded={expandedId === rec.id}
+                          onToggle={() => setExpandedId(expandedId === rec.id ? null : rec.id)}
+                          onRecordDecision={onRecordDecision}
+                          onLogOutcome={onLogOutcome}
+                          onUpdateOutcome={onUpdateOutcome}
+                          onUndoDecision={onUndoDecision}
+                        />
+                      ))}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            );
+          })}
         </div>
       )}
     </motion.div>
@@ -879,7 +1335,7 @@ function JournalRow({
   const borderColor = {
     pending: "border-l-border-gutter",
     following: "border-l-accent-profit",
-    passed: "border-l-text-muted",
+    passed: "border-l-text-muted/30",
     open: "border-l-accent-signal",
     closed:
       rec.outcome_pnl_dollars != null && rec.outcome_pnl_dollars >= 0
@@ -887,15 +1343,29 @@ function JournalRow({
         : "border-l-accent-loss",
   }[status];
 
+  const rowBg = {
+    pending: "hover:bg-bg-steel/30",
+    following: "bg-accent-profit/2 hover:bg-accent-profit/5",
+    passed: "opacity-50 hover:opacity-70 hover:bg-bg-steel/20",
+    open: "bg-accent-signal/3 hover:bg-accent-signal/6",
+    closed:
+      rec.outcome_pnl_dollars != null && rec.outcome_pnl_dollars >= 0
+        ? "hover:bg-accent-profit/4"
+        : "hover:bg-accent-loss/4",
+  }[status];
+
   return (
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.2, delay: index * 0.02 }}
-      className={clsx("border-l-[3px]", borderColor, status === "passed" && "opacity-60")}
+      className={clsx("border-l-[3px]", borderColor)}
     >
       <div
-        className="px-5 py-3 flex items-center gap-4 cursor-pointer hover:bg-bg-steel/40 transition-colors"
+        className={clsx(
+          "px-5 py-3 flex items-center gap-4 cursor-pointer transition-colors",
+          rowBg,
+        )}
         onClick={onToggle}
       >
         {/* Ticker + Action */}
@@ -1092,10 +1562,7 @@ function ExpandedRow({
           onSubmit={onRecordDecision}
           onQuickFollow={async () => {
             await onRecordDecision(rec.id, { decision: "following", reason: "Quick follow at rec prices" });
-            // After follow is created, log outcome with rec's trade params
-            // fetchAll will show the "following" state with outcome form
           }}
-          onLogOutcome={onLogOutcome}
         />
       )}
 
@@ -1458,12 +1925,10 @@ function DecisionForm({
   rec,
   onSubmit,
   onQuickFollow,
-  onLogOutcome,
 }: {
   rec: RecommendationWithStatus;
   onSubmit: (recId: string, body: DecisionCreate) => Promise<void>;
   onQuickFollow: () => Promise<void>;
-  onLogOutcome: (decisionId: string, body: OutcomeCreate) => Promise<void>;
 }) {
   const recId = rec.id;
   const [showReasonForm, setShowReasonForm] = useState(false);
@@ -1894,6 +2359,33 @@ function InputField({
 // Reflection Panel
 // ---------------------------------------------------------------------------
 
+function parseReflectionSections(prompt: string): { title: string; content: string }[] {
+  const sections: { title: string; content: string }[] = [];
+  const lines = prompt.split("\n");
+  let currentTitle = "";
+  let currentContent: string[] = [];
+
+  for (const line of lines) {
+    const headerMatch = line.match(/^##\s+(.+)$/) || line.match(/^([A-Z][A-Z\s\-]+):?\s*$/);
+    if (headerMatch) {
+      if (currentTitle) {
+        sections.push({ title: currentTitle, content: currentContent.join("\n").trim() });
+      }
+      currentTitle = headerMatch[1].trim().replace(/:$/, "");
+      currentContent = [];
+    } else {
+      currentContent.push(line);
+    }
+  }
+  if (currentTitle) {
+    sections.push({ title: currentTitle, content: currentContent.join("\n").trim() });
+  }
+  if (sections.length === 0 && prompt.trim()) {
+    sections.push({ title: "Analysis", content: prompt.trim() });
+  }
+  return sections;
+}
+
 function ReflectionPanel({
   reflection,
   isGenerating,
@@ -1903,6 +2395,13 @@ function ReflectionPanel({
   isGenerating: boolean;
   outcomeCount: number;
 }) {
+  const [showRawPrompt, setShowRawPrompt] = useState(false);
+
+  const sections = useMemo(() => {
+    if (!reflection?.injection_prompt) return [];
+    return parseReflectionSections(reflection.injection_prompt);
+  }, [reflection]);
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 12 }}
@@ -1912,7 +2411,7 @@ function ReflectionPanel({
     >
       <div className="px-5 py-3.5 border-b border-border-subtle flex items-center gap-2">
         <Brain className="w-4 h-4 text-accent-electric" />
-        <h2 className="text-sm font-display font-semibold">Self-Learning Reflection</h2>
+        <h2 className="text-sm font-display font-semibold">AI Reflection</h2>
       </div>
 
       <div className="p-5">
@@ -1922,30 +2421,78 @@ function ReflectionPanel({
             <span className="text-sm font-body">Analyzing your trade history...</span>
           </div>
         ) : reflection ? (
-          <div className="space-y-4">
-            <div className="text-xs text-text-muted font-body">
-              Generated {new Date(reflection.generated_at).toLocaleString()} ·{" "}
-              {reflection.outcomes_analyzed} trades analyzed
+          <div className="space-y-3">
+            <div className="text-[10px] text-text-muted font-display uppercase tracking-wider">
+              Generated {new Date(reflection.generated_at).toLocaleDateString()} · {reflection.outcomes_analyzed} trades
             </div>
-            <div className="bg-bg-concrete rounded-lg p-4 border border-border-subtle">
-              <h3 className="text-xs font-display font-semibold text-accent-electric mb-2 uppercase tracking-wider">
-                Injection Prompt (sent to GPT Judge)
-              </h3>
-              <pre className="text-xs font-display text-text-secondary whitespace-pre-wrap leading-relaxed">
-                {reflection.injection_prompt}
-              </pre>
-            </div>
+
+            {/* AI Strategic Insight */}
+            {reflection.summary_text && (
+              <div className="bg-accent-electric/6 border border-accent-electric/20 rounded-lg p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <Zap className="w-3.5 h-3.5 text-accent-electric" />
+                  <h3 className="text-[10px] font-display font-semibold text-accent-electric uppercase tracking-wider">
+                    AI Insight
+                  </h3>
+                </div>
+                <p className="text-sm text-text-secondary font-body leading-relaxed">
+                  {reflection.summary_text}
+                </p>
+              </div>
+            )}
+
+            {/* Structured sections from injection prompt */}
+            {sections.length > 0 && (
+              <div className="grid grid-cols-1 gap-2">
+                {sections.slice(0, 4).map((section) => (
+                  <div
+                    key={section.title}
+                    className="bg-bg-concrete rounded-lg p-3 border border-border-subtle"
+                  >
+                    <h4 className="text-[10px] font-display font-semibold text-text-muted uppercase tracking-wider mb-1.5">
+                      {section.title}
+                    </h4>
+                    <p className="text-xs text-text-secondary font-body leading-relaxed whitespace-pre-wrap line-clamp-4">
+                      {section.content}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Collapsible raw prompt */}
             <div>
-              <h3 className="text-xs font-display font-semibold text-text-muted mb-2 uppercase tracking-wider">
-                Summary
-              </h3>
-              <p className="text-sm text-text-secondary font-body whitespace-pre-wrap leading-relaxed">
-                {reflection.summary_text}
-              </p>
+              <button
+                onClick={() => setShowRawPrompt(!showRawPrompt)}
+                className="flex items-center gap-1.5 text-[10px] text-text-muted font-display hover:text-text-secondary transition-colors"
+              >
+                {showRawPrompt ? (
+                  <ChevronUp className="w-3 h-3" />
+                ) : (
+                  <ChevronDown className="w-3 h-3" />
+                )}
+                Raw Injection Prompt
+              </button>
+              <AnimatePresence>
+                {showRawPrompt && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: "auto", opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.2 }}
+                    className="overflow-hidden"
+                  >
+                    <pre className="mt-2 text-[10px] font-display text-text-muted whitespace-pre-wrap leading-relaxed bg-bg-void rounded-lg p-3 border border-border-subtle max-h-[300px] overflow-y-auto">
+                      {reflection.injection_prompt}
+                    </pre>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
           </div>
         ) : (
-          <div className="text-center py-8">
+          <div className="text-center py-8 space-y-2">
+            <Brain className="w-8 h-8 text-accent-electric/30 mx-auto" />
             <p className="text-sm text-text-muted font-body">
               {outcomeCount < 5
                 ? `Need ${5 - outcomeCount} more outcome${5 - outcomeCount === 1 ? "" : "s"} to generate a reflection.`

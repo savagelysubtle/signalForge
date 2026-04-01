@@ -741,3 +741,15 @@ class RecommendationWithStatus(BaseModel):
     outcome_stop_loss: float | None = None
     outcome_take_profit: float | None = None
     outcome_entry_timestamp: str | None = None
+
+
+class TradeHistoryEntry(BaseModel):
+    """Single trade in the time-series history for equity curve and calendar."""
+
+    date: str
+    ticker: str
+    pnl_dollars: float
+    pnl_percent: float | None = None
+    cumulative_pnl: float
+    action: str
+    confidence: float
