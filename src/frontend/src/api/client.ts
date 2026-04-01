@@ -18,6 +18,7 @@ import type {
   BrokerageStatus,
   BrokerageAccount,
   PendingMatch,
+  SyncResultResponse,
 } from "../types";
 
 const BASE_URL = import.meta.env.VITE_API_URL || "";
@@ -123,8 +124,21 @@ export const api = {
     request<OutcomeResponse[]>(`/api/outcomes?limit=${limit}&offset=${offset}`),
 
   // Recommendations (trade journal)
-  listRecommendations: (limit = 50, offset = 0) =>
-    request<RecommendationWithStatus[]>(`/api/recommendations?limit=${limit}&offset=${offset}`),
+  listRecommendations: (
+    limit = 50,
+    offset = 0,
+    filters?: { action?: string[]; confidenceMin?: number; confidenceMax?: number },
+  ) => {
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+    if (filters?.action?.length) {
+      for (const a of filters.action) params.append("action", a);
+    }
+    if (filters?.confidenceMin != null && filters.confidenceMin > 0)
+      params.set("confidence_min", String(filters.confidenceMin));
+    if (filters?.confidenceMax != null && filters.confidenceMax < 1)
+      params.set("confidence_max", String(filters.confidenceMax));
+    return request<RecommendationWithStatus[]>(`/api/recommendations?${params.toString()}`);
+  },
   getRecommendationStatus: (id: string) =>
     request<RecommendationWithStatus>(`/api/recommendations/${id}`),
 
@@ -165,7 +179,12 @@ export const api = {
       body: JSON.stringify(body),
     }),
   syncTrades: (daysBack = 30) =>
-    request<PendingMatch[]>("/api/brokerage/sync", {
+    request<SyncResultResponse>("/api/brokerage/sync", {
+      method: "POST",
+      body: JSON.stringify({ days_back: daysBack }),
+    }),
+  smartSync: (daysBack = 30) =>
+    request<SyncResultResponse>("/api/brokerage/smart-sync", {
       method: "POST",
       body: JSON.stringify({ days_back: daysBack }),
     }),

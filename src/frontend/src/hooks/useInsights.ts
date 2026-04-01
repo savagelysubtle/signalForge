@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { api } from "../api/client";
 import { notifyFeedbackChanged, useFeedbackSync } from "../lib/feedbackSync";
 import type {
@@ -9,6 +9,16 @@ import type {
   OutcomeCreate,
 } from "../types";
 
+const PAGE_SIZE = 50;
+
+export interface JournalFilters {
+  action: string[];
+  confidenceMin: number;
+  confidenceMax: number;
+}
+
+const DEFAULT_FILTERS: JournalFilters = { action: [], confidenceMin: 0, confidenceMax: 1 };
+
 export function useInsights() {
   const [overview, setOverview] = useState<PerformanceOverview | null>(null);
   const [recommendations, setRecommendations] = useState<RecommendationWithStatus[]>([]);
@@ -16,17 +26,37 @@ export function useInsights() {
   const [isLoading, setIsLoading] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [filters, setFilters] = useState<JournalFilters>(DEFAULT_FILTERS);
+  const pageRef = useRef(0);
+  const filtersRef = useRef<JournalFilters>(DEFAULT_FILTERS);
 
-  const fetchAll = useCallback(async () => {
+  const fetchAll = useCallback(async (targetPage?: number, newFilters?: JournalFilters) => {
+    const p = targetPage ?? pageRef.current;
+    const f = newFilters ?? filtersRef.current;
+    pageRef.current = p;
+    filtersRef.current = f;
+    setPage(p);
     setIsLoading(true);
     setError(null);
     try {
+      const apiFilters =
+        f.action.length > 0 || f.confidenceMin > 0 || f.confidenceMax < 1
+          ? {
+              action: f.action.length > 0 ? f.action : undefined,
+              confidenceMin: f.confidenceMin > 0 ? f.confidenceMin : undefined,
+              confidenceMax: f.confidenceMax < 1 ? f.confidenceMax : undefined,
+            }
+          : undefined;
+
       const [ov, recs] = await Promise.all([
         api.getPerformanceOverview(),
-        api.listRecommendations(),
+        api.listRecommendations(PAGE_SIZE, p * PAGE_SIZE, apiFilters),
       ]);
       setOverview(ov);
       setRecommendations(recs);
+      setHasMore(recs.length === PAGE_SIZE);
 
       try {
         const ref = await api.getLatestReflection();
@@ -73,6 +103,21 @@ export function useInsights() {
     [fetchAll],
   );
 
+  const updateOutcome = useCallback(
+    async (outcomeId: string, body: OutcomeCreate) => {
+      setError(null);
+      try {
+        await api.updateOutcome(outcomeId, body);
+        notifyFeedbackChanged();
+        await fetchAll();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Failed to update outcome");
+        throw e;
+      }
+    },
+    [fetchAll],
+  );
+
   const undoDecision = useCallback(
     async (decisionId: string) => {
       setError(null);
@@ -101,6 +146,18 @@ export function useInsights() {
     }
   }, []);
 
+  const nextPage = useCallback(() => fetchAll(pageRef.current + 1), [fetchAll]);
+  const prevPage = useCallback(() => fetchAll(Math.max(0, pageRef.current - 1)), [fetchAll]);
+  const goToPage = useCallback((p: number) => fetchAll(Math.max(0, p)), [fetchAll]);
+
+  const applyFilters = useCallback(
+    (newFilters: JournalFilters) => {
+      setFilters(newFilters);
+      fetchAll(0, newFilters);
+    },
+    [fetchAll],
+  );
+
   return {
     overview,
     recommendations,
@@ -111,7 +168,16 @@ export function useInsights() {
     fetchAll,
     recordDecision,
     logOutcome,
+    updateOutcome,
     undoDecision,
     generateReflection,
+    page,
+    hasMore,
+    pageSize: PAGE_SIZE,
+    nextPage,
+    prevPage,
+    goToPage,
+    filters,
+    applyFilters,
   };
 }

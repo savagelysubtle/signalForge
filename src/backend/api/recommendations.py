@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from database.connection import get_db
 from middleware.auth import CurrentUser
@@ -15,6 +15,7 @@ def _build_status(
     r: dict,
     dec: dict | None,
     out: dict | None,
+    strategy_name: str = "",
 ) -> RecommendationWithStatus:
     """Build a RecommendationWithStatus from raw DB rows."""
     return RecommendationWithStatus(
@@ -30,6 +31,7 @@ def _build_status(
         holding_period=r.get("holding_period") or "",
         judge_reasoning=r.get("judge_reasoning") or "",
         created_at=str(r["created_at"]),
+        strategy_name=strategy_name,
         decision=dec["decision"] if dec else None,
         decision_id=dec["id"] if dec else None,
         decision_reason=dec.get("reason") or "" if dec else "",
@@ -47,6 +49,12 @@ def _build_status(
         outcome_source=out.get("source") or "manual" if out else "manual",
         outcome_commission=out.get("commission") if out else None,
         outcome_net_pnl=out.get("net_pnl") if out else None,
+        outcome_gross_pnl=out.get("gross_pnl") if out else None,
+        outcome_stop_loss=out.get("stop_loss") if out else None,
+        outcome_take_profit=out.get("take_profit") if out else None,
+        outcome_entry_timestamp=str(out["entry_timestamp"])
+        if out and out.get("entry_timestamp")
+        else None,
     )
 
 
@@ -61,28 +69,47 @@ async def list_recommendations(
     user_id: CurrentUser,
     limit: int = 50,
     offset: int = 0,
+    action: list[str] | None = Query(None),
+    confidence_min: float | None = Query(None, ge=0, le=1),
+    confidence_max: float | None = Query(None, ge=0, le=1),
 ) -> list[RecommendationWithStatus]:
     """List user recommendations with joined decision and outcome status.
 
     Returns recommendations ordered by creation date (newest first),
     enriched with the user's follow/pass decision and trade outcome
     for each. Uses 3 batch queries to avoid N+1.
+
+    Args:
+        user_id: Authenticated user ID (injected).
+        limit: Page size.
+        offset: Page offset.
+        action: Filter by action(s) — BUY, SHORT, HOLD. Repeatable query param.
+        confidence_min: Minimum confidence (0.0-1.0 inclusive).
+        confidence_max: Maximum confidence (0.0-1.0 inclusive).
     """
     client = await get_db()
 
+    query = client.table("recommendations").select(_REC_SELECT).eq("user_id", user_id)
+
+    if action:
+        valid = [a.upper() for a in action if a.upper() in ("BUY", "SHORT", "HOLD")]
+        if valid:
+            query = query.in_("action", valid)
+
+    if confidence_min is not None:
+        query = query.gte("confidence", confidence_min)
+    if confidence_max is not None:
+        query = query.lte("confidence", confidence_max)
+
     rec_resp = (
-        await client.table("recommendations")
-        .select(_REC_SELECT)
-        .eq("user_id", user_id)
-        .order("created_at", desc=True)
-        .range(offset, offset + limit - 1)
-        .execute()
+        await query.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
     )
     recs = rec_resp.data
     if not recs:
         return []
 
     rec_ids = [r["id"] for r in recs]
+    run_ids = list({r["run_id"] for r in recs})
 
     dec_resp = (
         await client.table("decisions")
@@ -99,7 +126,7 @@ async def list_recommendations(
         out_resp = (
             await client.table("outcomes")
             .select(
-                "id, recommendation_id, entry_price, exit_price, shares, pnl_dollars, pnl_percent, holding_days, exit_reason, notes, logged_at, source, commission, net_pnl"
+                "id, recommendation_id, entry_price, exit_price, shares, pnl_dollars, pnl_percent, holding_days, exit_reason, notes, logged_at, source, commission, net_pnl, gross_pnl, stop_loss, take_profit, entry_timestamp"
             )
             .eq("user_id", user_id)
             .in_("recommendation_id", rec_ids)
@@ -107,7 +134,41 @@ async def list_recommendations(
         )
         out_map = {o["recommendation_id"]: o for o in out_resp.data}
 
-    return [_build_status(r, dec_map.get(r["id"]), out_map.get(r["id"])) for r in recs]
+    # Resolve strategy names: run_id → strategy_id → strategy name
+    strategy_name_map: dict[str, str] = {}
+    if run_ids:
+        runs_resp = (
+            await client.table("pipeline_runs")
+            .select("id, strategy_id")
+            .in_("id", run_ids)
+            .execute()
+        )
+        strat_ids = list({
+            pr["strategy_id"] for pr in runs_resp.data if pr.get("strategy_id")
+        })
+        strat_name_lookup: dict[str, str] = {}
+        if strat_ids:
+            strats_resp = (
+                await client.table("strategies")
+                .select("id, name")
+                .in_("id", strat_ids)
+                .execute()
+            )
+            strat_name_lookup = {s["id"]: s["name"] for s in strats_resp.data}
+
+        for pr in runs_resp.data:
+            sid = pr.get("strategy_id")
+            strategy_name_map[pr["id"]] = strat_name_lookup.get(sid, "") if sid else ""
+
+    return [
+        _build_status(
+            r,
+            dec_map.get(r["id"]),
+            out_map.get(r["id"]),
+            strategy_name=strategy_name_map.get(r["run_id"], ""),
+        )
+        for r in recs
+    ]
 
 
 @router.get("/{recommendation_id}", response_model=RecommendationWithStatus)
@@ -145,7 +206,7 @@ async def get_recommendation_status(
         out_resp = (
             await client.table("outcomes")
             .select(
-                "id, recommendation_id, entry_price, exit_price, shares, pnl_dollars, pnl_percent, holding_days, exit_reason, notes, logged_at, source, commission, net_pnl"
+                "id, recommendation_id, entry_price, exit_price, shares, pnl_dollars, pnl_percent, holding_days, exit_reason, notes, logged_at, source, commission, net_pnl, gross_pnl, stop_loss, take_profit, entry_timestamp"
             )
             .eq("recommendation_id", recommendation_id)
             .eq("user_id", user_id)
@@ -154,4 +215,24 @@ async def get_recommendation_status(
         )
         out = out_resp.data if out_resp else None
 
-    return _build_status(r, dec, out)
+    # Resolve strategy name
+    strategy_name = ""
+    run_resp = (
+        await client.table("pipeline_runs")
+        .select("strategy_id")
+        .eq("id", r["run_id"])
+        .maybe_single()
+        .execute()
+    )
+    if run_resp and run_resp.data and run_resp.data.get("strategy_id"):
+        strat_resp = (
+            await client.table("strategies")
+            .select("name")
+            .eq("id", run_resp.data["strategy_id"])
+            .maybe_single()
+            .execute()
+        )
+        if strat_resp and strat_resp.data:
+            strategy_name = strat_resp.data["name"]
+
+    return _build_status(r, dec, out, strategy_name=strategy_name)

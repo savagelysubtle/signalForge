@@ -62,7 +62,28 @@ _QT_EXCHANGE_TO_TV: dict[str, str] = {
     "NASDAQ": "NASDAQ",
     "NYSEAM": "AMEX",
     "ARCA": "AMEX",
+    "BATS": "AMEX",
 }
+
+# Alternative Canadian execution venues that route TSX-listed securities
+_CANADIAN_ALT_VENUES: frozenset[str] = frozenset(
+    {
+        "CX2",
+        "CXD",
+        "CX2D",  # Chi-X Canada
+        "PURE",
+        "PURED",  # Pure Trading
+        "OMGA",
+        "OMGAD",  # Omega ATS
+        "LYNX",
+        "LYNXD",  # Lynx ATS
+        "NEO",
+        "NEOD",  # Neo Exchange
+        "BNSX",  # Instinet Canada
+        "AUTO",  # Questrade's smart order router
+        "MX",  # Montreal Exchange
+    }
+)
 
 
 class QuestradeService:
@@ -561,12 +582,12 @@ class QuestradeService:
         """Convert a Questrade symbol to TradingView format.
 
         Tries suffix-based mapping first (e.g. ``ENB.TO`` → ``TSX:ENB``),
-        then falls back to listingExchange lookup, then returns the bare
-        symbol for US equities.
+        then falls back to listingExchange lookup, then checks Canadian
+        alternative venues, then returns the bare symbol for US equities.
 
         Args:
             qt_symbol: Symbol as returned by Questrade (e.g. "ENB.TO", "AAPL").
-            listing_exchange: Optional listingExchange value from Questrade.
+            listing_exchange: Optional listingExchange or execution venue value.
 
         Returns:
             TradingView-formatted ticker string (e.g. "TSX:ENB", "NASDAQ:AAPL").
@@ -577,9 +598,18 @@ class QuestradeService:
                 return f"{prefix}:{bare}"
 
         if listing_exchange:
-            tv_prefix = _QT_EXCHANGE_TO_TV.get(listing_exchange)
+            tv_prefix = _QT_EXCHANGE_TO_TV.get(listing_exchange.upper())
             if tv_prefix:
                 return f"{tv_prefix}:{qt_symbol}"
+
+            if listing_exchange.upper() in _CANADIAN_ALT_VENUES:
+                logger.info(
+                    "Mapped %s via Canadian alt venue %s → TSX:%s",
+                    qt_symbol,
+                    listing_exchange,
+                    qt_symbol,
+                )
+                return f"TSX:{qt_symbol}"
 
         return qt_symbol
 

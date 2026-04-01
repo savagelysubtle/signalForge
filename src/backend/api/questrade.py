@@ -15,12 +15,15 @@ from pydantic import BaseModel
 
 from database.connection import get_db
 from middleware.auth import CurrentUser
+from services.pnl import calculate_holding_days, calculate_pnl
 from services.questrade_service import QuestradeService
 from services.trade_matcher import find_matches
 
 router = APIRouter(prefix="/brokerage", tags=["brokerage"])
 
 _qt_service = QuestradeService()
+
+_EXIT_SIDES: frozenset[str] = frozenset({"Sell", "Cov"})
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +104,14 @@ class PendingMatchResponse(BaseModel):
     rec_action: str = ""
     rec_confidence: float = 0.0
     rec_entry_price: float | None = None
+
+
+class SyncResultResponse(BaseModel):
+    """Structured result from a smart-sync operation."""
+
+    auto_confirmed: list[PendingMatchResponse]
+    pending_review: list[PendingMatchResponse]
+    skipped_reason: str | None = None
 
 
 class ConfirmMatchRequest(BaseModel):
@@ -216,24 +227,72 @@ async def select_account(
     return {"selected": True}
 
 
-@router.post("/sync", response_model=list[PendingMatchResponse])
+SYNC_COOLDOWN_SECONDS = 300
+
+
+@router.post("/sync", response_model=SyncResultResponse)
 async def sync_trades(
     body: BrokerageSyncRequest,
     user_id: CurrentUser,
-) -> list[PendingMatchResponse]:
+) -> SyncResultResponse:
     """Sync recent Questrade executions and match against recommendations."""
+    return await _run_sync(user_id, body.days_back)
+
+
+@router.post("/smart-sync", response_model=SyncResultResponse)
+async def smart_sync(
+    body: BrokerageSyncRequest,
+    user_id: CurrentUser,
+) -> SyncResultResponse:
+    """Auto-sync with debouncing — skips if synced within 5 minutes."""
+    client = await get_db()
+    token_resp = (
+        await client.table("questrade_tokens")
+        .select("last_synced_at")
+        .eq("user_id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    if token_resp and token_resp.data and token_resp.data.get("last_synced_at"):
+        try:
+            last = datetime.fromisoformat(str(token_resp.data["last_synced_at"]))
+            elapsed = (datetime.now(tz=UTC) - last).total_seconds()
+            if elapsed < SYNC_COOLDOWN_SECONDS:
+                return SyncResultResponse(
+                    auto_confirmed=[],
+                    pending_review=[],
+                    skipped_reason=f"Synced {int(elapsed)}s ago — next sync in {int(SYNC_COOLDOWN_SECONDS - elapsed)}s",
+                )
+        except ValueError, TypeError:
+            pass
+
+    return await _run_sync(user_id, body.days_back)
+
+
+async def _run_sync(user_id: str, days_back: int) -> SyncResultResponse:
+    """Execute a full Questrade sync and update last_synced_at."""
     now = datetime.now(tz=UTC)
-    start = now - timedelta(days=body.days_back)
-    start_str = start.isoformat()
-    end_str = now.isoformat()
+    start = now - timedelta(days=days_back)
 
     try:
-        executions = await _qt_service.get_executions(user_id, start_str, end_str)
+        executions = await _qt_service.get_executions(user_id, start.isoformat(), now.isoformat())
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    matches = await find_matches(user_id, executions, _qt_service)
-    return [_match_to_response(m) for m in matches]
+    sync_result = await find_matches(user_id, executions, _qt_service)
+
+    client = await get_db()
+    await (
+        client.table("questrade_tokens")
+        .update({"last_synced_at": now.isoformat()})
+        .eq("user_id", user_id)
+        .execute()
+    )
+
+    return SyncResultResponse(
+        auto_confirmed=[_match_to_response(m) for m in sync_result.auto_confirmed],
+        pending_review=[_match_to_response(m) for m in sync_result.pending],
+    )
 
 
 @router.get("/pending-matches", response_model=list[PendingMatchResponse])
@@ -313,47 +372,99 @@ async def confirm_match(
 
     rec_resp = (
         await client.table("recommendations")
-        .select("ticker, entry_price")
+        .select("ticker, entry_price, action, stop_loss, take_profit")
         .eq("id", rec_id)
         .maybe_single()
         .execute()
     )
-    ticker = rec_resp.data["ticker"] if rec_resp and rec_resp.data else match["ticker"]
+    rec_data = rec_resp.data if rec_resp and rec_resp.data else {}
+    ticker = rec_data.get("ticker") or match["ticker"]
+    rec_action = rec_data.get("action", "")
 
+    is_exit = match["side"] in _EXIT_SIDES
     commission = match.get("total_commission", 0.0)
-    brokerage_fields = {
-        "entry_price": match["avg_price"],
-        "shares": match["total_shares"],
-        "source": "questrade",
-        "brokerage_order_id": match["questrade_order_id"],
-        "commission": commission,
-        "currency": match.get("currency", "CAD"),
-        "entry_timestamp": match.get("executed_at"),
-        "notes": (
-            f"Auto-imported from Questrade order {match['questrade_order_id']}. "
-            f"Commission: ${commission:.2f} {match.get('currency', 'CAD')}."
-        ),
-    }
 
-    if has_existing:
+    if is_exit and has_existing:
         outcome_id = existing_outcome.data["id"]
-        await client.table("outcomes").update(brokerage_fields).eq("id", outcome_id).execute()
-    else:
-        outcome_id = uuid.uuid4().hex
-        await (
-            client.table("outcomes")
-            .insert(
-                {
-                    "id": outcome_id,
-                    "user_id": user_id,
-                    "decision_id": decision_id,
-                    "recommendation_id": rec_id,
-                    "ticker": ticker,
-                    **brokerage_fields,
-                }
-            )
+        entry_row = (
+            await client.table("outcomes")
+            .select("entry_price, shares, entry_timestamp, commission, stop_loss")
+            .eq("id", outcome_id)
+            .single()
             .execute()
         )
+        entry_data = entry_row.data
+        entry_price = entry_data.get("entry_price")
+        entry_shares = entry_data.get("shares") or match["total_shares"]
+        exit_price = match["avg_price"]
+        total_commission = (entry_data.get("commission") or 0.0) + commission
+
+        exit_fields: dict[str, Any] = {
+            "exit_price": exit_price,
+            "exit_timestamp": match.get("executed_at"),
+            "commission": total_commission,
+            "notes": (
+                f"Exit auto-imported from Questrade order {match['questrade_order_id']}. "
+                f"Exit commission: ${commission:.2f} {match.get('currency', 'CAD')}."
+            ),
+        }
+
+        if entry_price is not None and exit_price is not None:
+            result = calculate_pnl(
+                rec_action,
+                entry_price,
+                exit_price,
+                entry_shares,
+                commission=total_commission,
+                stop_loss=entry_data.get("stop_loss"),
+            )
+            exit_fields["pnl_dollars"] = result.gross_pnl
+            exit_fields["pnl_percent"] = result.pnl_percent
+            exit_fields["gross_pnl"] = result.gross_pnl
+            exit_fields["net_pnl"] = result.net_pnl
+
+        exit_fields["holding_days"] = calculate_holding_days(
+            entry_data.get("entry_timestamp"),
+            match.get("executed_at"),
+        )
+
+        await client.table("outcomes").update(exit_fields).eq("id", outcome_id).execute()
+    else:
+        brokerage_fields: dict[str, Any] = {
+            "entry_price": match["avg_price"],
+            "shares": match["total_shares"],
+            "source": "questrade",
+            "brokerage_order_id": match["questrade_order_id"],
+            "commission": commission,
+            "currency": match.get("currency", "CAD"),
+            "entry_timestamp": match.get("executed_at"),
+            "stop_loss": rec_data.get("stop_loss"),
+            "take_profit": rec_data.get("take_profit"),
+            "notes": (
+                f"Auto-imported from Questrade order {match['questrade_order_id']}. "
+                f"Commission: ${commission:.2f} {match.get('currency', 'CAD')}."
+            ),
+        }
+
+        if has_existing:
+            outcome_id = existing_outcome.data["id"]
+            await client.table("outcomes").update(brokerage_fields).eq("id", outcome_id).execute()
+        else:
+            outcome_id = uuid.uuid4().hex
+            await (
+                client.table("outcomes")
+                .insert(
+                    {
+                        "id": outcome_id,
+                        "user_id": user_id,
+                        "decision_id": decision_id,
+                        "recommendation_id": rec_id,
+                        "ticker": ticker,
+                        **brokerage_fields,
+                    }
+                )
+                .execute()
+            )
 
     await (
         client.table("pending_matches")

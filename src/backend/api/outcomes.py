@@ -40,6 +40,8 @@ def _build_outcome_response(o: dict[str, Any]) -> OutcomeResponse:
         net_pnl=o.get("net_pnl"),
         entry_timestamp=str(o["entry_timestamp"]) if o.get("entry_timestamp") else None,
         exit_timestamp=str(o["exit_timestamp"]) if o.get("exit_timestamp") else None,
+        stop_loss=o.get("stop_loss"),
+        take_profit=o.get("take_profit"),
     )
 
 
@@ -118,6 +120,8 @@ async def create_outcome(
         "net_pnl": body.net_pnl,
         "entry_timestamp": body.entry_timestamp,
         "exit_timestamp": body.exit_timestamp,
+        "stop_loss": body.stop_loss,
+        "take_profit": body.take_profit,
     }
     await client.table("outcomes").insert(row).execute()
 
@@ -165,6 +169,8 @@ async def update_outcome(
         "net_pnl": body.net_pnl,
         "entry_timestamp": body.entry_timestamp,
         "exit_timestamp": body.exit_timestamp,
+        "stop_loss": body.stop_loss,
+        "take_profit": body.take_profit,
     }
     await client.table("outcomes").update(updates).eq("id", outcome_id).execute()
 

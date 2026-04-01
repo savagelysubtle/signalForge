@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import clsx from "clsx";
+import { calculatePnl, resolveExitPrice } from "../../lib/pnl";
 import {
   Loader2,
   CheckCircle2,
@@ -207,6 +208,51 @@ export function FeedbackTab({ recommendation }: FeedbackTabProps) {
           </motion.div>
         )}
 
+        {currentStatus === "open" && status && !isEditing && (
+          <motion.div
+            key="open"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            className="space-y-4"
+          >
+            <DecisionBadge decision="following" decidedAt={status.decided_at} />
+            <OpenPositionBadge status={status} onClose={() => setIsEditing(true)} />
+          </motion.div>
+        )}
+
+        {currentStatus === "open" && status && isEditing && (
+          <motion.div
+            key="open-editing"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            className="space-y-4"
+          >
+            <DecisionBadge decision="following" decidedAt={status.decided_at} />
+            <OutcomeSection
+              decisionId={status.decision_id!}
+              outcomeId={status.outcome_id!}
+              action={recommendation.action}
+              isQuestrade={status.outcome_source === "questrade"}
+              initialValues={{
+                entryPrice: status.outcome_entry_price,
+                exitPrice: status.outcome_exit_price,
+                shares: status.outcome_shares,
+                stopLoss: status.outcome_stop_loss,
+                takeProfit: status.outcome_take_profit,
+                pnlDollars: status.outcome_pnl_dollars,
+                pnlPercent: status.outcome_pnl_percent,
+                holdingDays: status.outcome_holding_days,
+                exitReason: status.outcome_exit_reason,
+                notes: status.outcome_notes,
+              }}
+              onComplete={fetchStatus}
+              onCancel={() => setIsEditing(false)}
+            />
+          </motion.div>
+        )}
+
         {currentStatus === "closed" && status && !isEditing && (
           <motion.div
             key="closed"
@@ -238,6 +284,8 @@ export function FeedbackTab({ recommendation }: FeedbackTabProps) {
                 entryPrice: status.outcome_entry_price,
                 exitPrice: status.outcome_exit_price,
                 shares: status.outcome_shares,
+                stopLoss: status.outcome_stop_loss,
+                takeProfit: status.outcome_take_profit,
                 pnlDollars: status.outcome_pnl_dollars,
                 pnlPercent: status.outcome_pnl_percent,
                 holdingDays: status.outcome_holding_days,
@@ -258,11 +306,12 @@ export function FeedbackTab({ recommendation }: FeedbackTabProps) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-type FeedbackStatus = "pending" | "following" | "passed" | "closed";
+type FeedbackStatus = "pending" | "following" | "passed" | "open" | "closed";
 
 function getStatus(status: RecommendationWithStatus | null): FeedbackStatus {
   if (!status) return "pending";
-  if (status.outcome_id) return "closed";
+  if (status.outcome_id && status.outcome_exit_price != null) return "closed";
+  if (status.outcome_id) return "open";
   if (status.decision === "following") return "following";
   if (status.decision === "passing") return "passed";
   return "pending";
@@ -497,6 +546,8 @@ interface OutcomeInitialValues {
   entryPrice: number | null;
   exitPrice: number | null;
   shares: number | null;
+  stopLoss: number | null;
+  takeProfit: number | null;
   pnlDollars: number | null;
   pnlPercent: number | null;
   holdingDays: number | null;
@@ -529,22 +580,22 @@ function OutcomeSection({
   const [entryPrice, setEntryPrice] = useState(numToStr(initialValues?.entryPrice));
   const [exitPrice, setExitPrice] = useState(numToStr(initialValues?.exitPrice));
   const [shares, setShares] = useState(numToStr(initialValues?.shares));
+  const [stopLoss, setStopLoss] = useState(numToStr(initialValues?.stopLoss));
+  const [takeProfit, setTakeProfit] = useState(numToStr(initialValues?.takeProfit));
   const [pnlDollars, setPnlDollars] = useState(numToStr(initialValues?.pnlDollars));
   const [pnlPercent, setPnlPercent] = useState(numToStr(initialValues?.pnlPercent));
   const [holdingDays, setHoldingDays] = useState(numToStr(initialValues?.holdingDays));
 
   useEffect(() => {
     const entry = parseFloat(entryPrice);
-    const exit = parseFloat(exitPrice);
+    const exit = resolveExitPrice(parseFloat(exitPrice), parseFloat(stopLoss));
     const qty = parseFloat(shares);
-    if (!isNaN(entry) && !isNaN(exit) && !isNaN(qty) && entry > 0 && qty > 0) {
-      const sign = action === "SHORT" ? -1 : 1;
-      const dollars = sign * (exit - entry) * qty;
-      const percent = sign * ((exit - entry) / entry) * 100;
-      setPnlDollars(dollars.toFixed(2));
-      setPnlPercent(percent.toFixed(2));
+    if (!isNaN(entry) && exit != null && !isNaN(qty) && entry > 0 && qty > 0) {
+      const result = calculatePnl(action, entry, exit, qty);
+      setPnlDollars(result.grossPnl.toFixed(2));
+      setPnlPercent(result.pnlPercent?.toFixed(2) ?? "");
     }
-  }, [entryPrice, exitPrice, shares, action]);
+  }, [entryPrice, exitPrice, stopLoss, shares, action]);
   const [exitReason, setExitReason] = useState(initialValues?.exitReason || "");
   const [notes, setNotes] = useState(initialValues?.notes || "");
   const [isSaving, setIsSaving] = useState(false);
@@ -558,6 +609,8 @@ function OutcomeSection({
         entry_price: entryPrice ? parseFloat(entryPrice) : null,
         exit_price: exitPrice ? parseFloat(exitPrice) : null,
         shares: shares ? parseInt(shares) : null,
+        stop_loss: stopLoss ? parseFloat(stopLoss) : null,
+        take_profit: takeProfit ? parseFloat(takeProfit) : null,
         pnl_dollars: pnlDollars ? parseFloat(pnlDollars) : null,
         pnl_percent: pnlPercent ? parseFloat(pnlPercent) : null,
         holding_days: holdingDays ? parseInt(holdingDays) : null,
@@ -596,10 +649,12 @@ function OutcomeSection({
 
       {error && <p className="text-xs text-accent-loss font-body">{error}</p>}
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <FormInput label="Entry Price" value={entryPrice} onChange={setEntryPrice} placeholder="0.00" type="number" readOnly={isQuestrade} />
         <FormInput label="Exit Price" value={exitPrice} onChange={setExitPrice} placeholder="0.00" type="number" />
         <FormInput label="Shares" value={shares} onChange={setShares} placeholder="0" type="number" readOnly={isQuestrade} />
+        <FormInput label="Stop Loss" value={stopLoss} onChange={setStopLoss} placeholder="0.00" type="number" />
+        <FormInput label="Take Profit" value={takeProfit} onChange={setTakeProfit} placeholder="0.00" type="number" />
         <FormInput label="P&L ($)" value={pnlDollars} onChange={setPnlDollars} placeholder="0.00" type="number" />
         <FormInput label="P&L (%)" value={pnlPercent} onChange={setPnlPercent} placeholder="0.00" type="number" />
         <FormInput label="Hold (days)" value={holdingDays} onChange={setHoldingDays} placeholder="0" type="number" />
@@ -698,6 +753,61 @@ function FormInput({
             : "bg-bg-void border-border-gutter focus:border-accent-signal",
         )}
       />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Open Position Badge (entry data, no exit yet)
+// ---------------------------------------------------------------------------
+
+function OpenPositionBadge({
+  status,
+  onClose,
+}: {
+  status: RecommendationWithStatus;
+  onClose: () => void;
+}) {
+  const daysHeld = status.outcome_entry_timestamp
+    ? Math.max(0, Math.floor((Date.now() - new Date(status.outcome_entry_timestamp).getTime()) / 86400000))
+    : null;
+
+  return (
+    <div className="bg-bg-concrete rounded-xl border border-accent-signal/20 overflow-hidden">
+      <div className="p-4 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <div className="w-2 h-2 rounded-full bg-accent-signal animate-pulse" />
+          <span className="text-xs font-display font-bold text-accent-signal uppercase tracking-wider">
+            Open Position
+          </span>
+          {status.outcome_source === "questrade" && (
+            <span className="px-1.5 py-0.5 rounded text-[9px] font-display font-bold text-accent-signal bg-accent-signal-dim">
+              Questrade
+            </span>
+          )}
+        </div>
+        <button
+          onClick={onClose}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[10px] font-display font-medium text-accent-alert bg-accent-alert-dim hover:bg-accent-alert/20 transition-colors"
+        >
+          <Target className="w-3 h-3" />
+          Close Position
+        </button>
+      </div>
+      <div className="px-4 pb-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {status.outcome_entry_price != null && (
+          <MiniStat label="Entry" value={`$${status.outcome_entry_price.toFixed(2)}`} />
+        )}
+        {status.outcome_shares != null && (
+          <MiniStat label="Shares" value={String(status.outcome_shares)} />
+        )}
+        {(status.outcome_stop_loss ?? status.stop_loss) != null && (
+          <MiniStat label="Stop Loss" value={`$${(status.outcome_stop_loss ?? status.stop_loss)!.toFixed(2)}`} />
+        )}
+        {daysHeld != null && (
+          <MiniStat label="Days Held" value={`${daysHeld}d`} />
+        )}
+      </div>
     </div>
   );
 }

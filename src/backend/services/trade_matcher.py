@@ -10,16 +10,35 @@ from __future__ import annotations
 import logging
 import uuid
 from collections import defaultdict
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
 from database.connection import get_db
+from services.pnl import calculate_holding_days, calculate_pnl
 from services.questrade_service import QuestradeService
 
 logger = logging.getLogger(__name__)
 
 MATCH_WINDOW_DAYS = 7
 MIN_MATCH_SCORE = 10.0
+AUTO_CONFIRM_THRESHOLD = 18.0
+
+
+@dataclass
+class SyncResult:
+    """Result of a find_matches call, separating auto-confirmed from pending.
+
+    Attributes:
+        auto_confirmed: Matches that were automatically confirmed and created
+            outcomes (score >= ``AUTO_CONFIRM_THRESHOLD``).
+        pending: Matches that need manual review (score between
+            ``MIN_MATCH_SCORE`` and ``AUTO_CONFIRM_THRESHOLD``).
+    """
+
+    auto_confirmed: list[dict[str, Any]] = field(default_factory=list)
+    pending: list[dict[str, Any]] = field(default_factory=list)
+
 
 # Questrade side → SignalForge action for entries
 _ENTRY_SIDES: dict[str, str] = {"Buy": "BUY", "Short": "SHORT"}
@@ -34,7 +53,7 @@ async def find_matches(
     user_id: str,
     executions: list[dict[str, Any]],
     qt_service: QuestradeService,
-) -> list[dict[str, Any]]:
+) -> SyncResult:
     """Match Questrade executions against open SignalForge recommendations.
 
     Steps:
@@ -43,7 +62,8 @@ async def find_matches(
       3. Map Questrade symbols to TradingView format.
       4. Load recommendations the user is following (no outcome yet).
       5. Score each order against each recommendation.
-      6. Persist matches that meet ``MIN_MATCH_SCORE``.
+      6. Auto-confirm high-confidence matches (>= ``AUTO_CONFIRM_THRESHOLD``).
+      7. Persist remaining matches as pending for manual review.
 
     Args:
         user_id: Authenticated user ID.
@@ -51,31 +71,44 @@ async def find_matches(
         qt_service: QuestradeService instance for symbol mapping.
 
     Returns:
-        List of pending match dicts that were created.
+        ``SyncResult`` with auto-confirmed and pending match lists.
     """
     if not executions:
-        return []
+        return SyncResult()
 
     aggregated = _aggregate_orders(executions)
     aggregated = [o for o in aggregated if o["side"] not in _OPTIONS_SIDES]
 
     if not aggregated:
-        return []
+        return SyncResult()
 
     for order in aggregated:
         order["tv_ticker"] = qt_service.map_symbol_to_tradingview(
             order["symbol"], order.get("listing_exchange", "")
         )
+        logger.info(
+            "Mapped Questrade symbol %s (venue=%s) → %s",
+            order["symbol"],
+            order.get("listing_exchange", ""),
+            order["tv_ticker"],
+        )
 
     open_recs = await _load_open_recommendations(user_id)
     if not open_recs:
         logger.info("No open recommendations for user %s — nothing to match", user_id)
-        return []
+        return SyncResult()
+
+    logger.info(
+        "Matching %d orders against %d open recommendations for user %s",
+        len(aggregated),
+        len(open_recs),
+        user_id,
+    )
 
     existing_order_ids = await _load_existing_match_order_ids(user_id)
 
     client = await get_db()
-    created: list[dict[str, Any]] = []
+    result = SyncResult()
 
     for order in aggregated:
         order_id_str = str(order["order_id"])
@@ -94,6 +127,13 @@ async def find_matches(
                 best_reasons = reasons
 
         if best_score < MIN_MATCH_SCORE or best_rec is None:
+            logger.info(
+                "Order %s (%s) — best score %.1f < %.1f threshold, skipping",
+                order_id_str,
+                order["tv_ticker"],
+                best_score,
+                MIN_MATCH_SCORE,
+            )
             continue
 
         match_row: dict[str, Any] = {
@@ -112,16 +152,27 @@ async def find_matches(
             "match_reason": "; ".join(best_reasons),
             "status": "pending",
         }
-        await client.table("pending_matches").insert(match_row).execute()
-        created.append(match_row)
-        logger.info(
-            "Created pending match: order %s → rec %s (score %.1f)",
-            order_id_str,
-            best_rec["id"],
-            best_score,
-        )
 
-    return created
+        if best_score >= AUTO_CONFIRM_THRESHOLD:
+            await _auto_confirm_and_follow(client, user_id, order, best_rec, match_row)
+            result.auto_confirmed.append(match_row)
+            logger.info(
+                "Auto-confirmed match: order %s → rec %s (score %.1f)",
+                order_id_str,
+                best_rec["id"],
+                best_score,
+            )
+        else:
+            await client.table("pending_matches").insert(match_row).execute()
+            result.pending.append(match_row)
+            logger.info(
+                "Created pending match: order %s → rec %s (score %.1f)",
+                order_id_str,
+                best_rec["id"],
+                best_score,
+            )
+
+    return result
 
 
 # ------------------------------------------------------------------
@@ -221,16 +272,19 @@ async def _load_open_recommendations(user_id: str) -> list[dict[str, Any]]:
 
     outcome_resp = (
         await client.table("outcomes")
-        .select("decision_id, exit_price")
+        .select("decision_id, exit_price, entry_timestamp")
         .eq("user_id", user_id)
         .execute()
     )
 
     closed_decision_ids: set[str] = set()
+    entry_ts_map: dict[str, str] = {}
     if outcome_resp and outcome_resp.data:
         for o in outcome_resp.data:
             if o.get("exit_price") is not None:
                 closed_decision_ids.add(o["decision_id"])
+            if o.get("entry_timestamp"):
+                entry_ts_map[o["decision_id"]] = o["entry_timestamp"]
 
     open_decision_map: dict[str, str] = {}
     for d in following:
@@ -251,7 +305,9 @@ async def _load_open_recommendations(user_id: str) -> list[dict[str, Any]]:
         return []
 
     for rec in rec_resp.data:
-        rec["decision_id"] = open_decision_map[rec["id"]]
+        dec_id = open_decision_map[rec["id"]]
+        rec["decision_id"] = dec_id
+        rec["entry_timestamp"] = entry_ts_map.get(dec_id)
 
     return rec_resp.data
 
@@ -278,11 +334,24 @@ async def _load_existing_match_order_ids(user_id: str) -> set[str]:
     return {row["questrade_order_id"] for row in resp.data}
 
 
+def _bare_symbol(ticker: str) -> str:
+    """Extract the bare symbol from a potentially exchange-prefixed ticker.
+
+    Args:
+        ticker: Ticker string, e.g. ``"TSX:IE"`` or ``"IE"``.
+
+    Returns:
+        The bare symbol portion (e.g. ``"IE"``).
+    """
+    return ticker.split(":")[-1].upper()
+
+
 def _score_match(order: dict[str, Any], rec: dict[str, Any]) -> tuple[float, list[str]]:
     """Score how well a Questrade order matches a SignalForge recommendation.
 
     Scoring:
       - Ticker exact match: +10
+      - Ticker bare-symbol match (exchange prefix missing): +9
       - Direction match: +5
       - Time proximity: up to +5 (linear decay over ``MATCH_WINDOW_DAYS``)
 
@@ -296,9 +365,15 @@ def _score_match(order: dict[str, Any], rec: dict[str, Any]) -> tuple[float, lis
     score = 0.0
     reasons: list[str] = []
 
-    if order["tv_ticker"].upper() == rec["ticker"].upper():
+    order_ticker = order["tv_ticker"].upper()
+    rec_ticker = rec["ticker"].upper()
+
+    if order_ticker == rec_ticker:
         score += 10.0
         reasons.append("ticker_match")
+    elif _bare_symbol(order_ticker) == _bare_symbol(rec_ticker):
+        score += 9.0
+        reasons.append(f"ticker_match (bare: {_bare_symbol(order_ticker)})")
 
     side = order["side"]
     rec_action = rec.get("action", "")
@@ -311,9 +386,19 @@ def _score_match(order: dict[str, Any], rec: dict[str, Any]) -> tuple[float, lis
         label = "entry" if is_entry else "exit"
         reasons.append(f"direction_match ({label})")
 
-    days_diff = _days_between(order.get("executed_at", ""), rec.get("created_at", ""))
-    if days_diff is not None and days_diff <= MATCH_WINDOW_DAYS:
-        proximity = 5.0 * max(0.0, 1.0 - days_diff / MATCH_WINDOW_DAYS)
+    # For exits, compare time proximity against the entry timestamp (when position
+    # was opened) rather than the recommendation creation date.  This gives much
+    # better scoring for trades held longer than MATCH_WINDOW_DAYS.
+    if is_exit and rec.get("entry_timestamp"):
+        ref_ts = rec["entry_timestamp"]
+        exit_window = 90
+    else:
+        ref_ts = rec.get("created_at", "")
+        exit_window = MATCH_WINDOW_DAYS
+
+    days_diff = _days_between(order.get("executed_at", ""), ref_ts)
+    if days_diff is not None and days_diff <= exit_window:
+        proximity = 5.0 * max(0.0, 1.0 - days_diff / exit_window)
         score += proximity
         reasons.append(f"time_proximity ({days_diff:.1f}d)")
 
@@ -340,3 +425,145 @@ def _days_between(ts1: str, ts2: str) -> float | None:
         return abs((dt1 - dt2).total_seconds()) / 86400.0
     except (ValueError, TypeError):
         return None
+
+
+async def _auto_confirm_and_follow(
+    client: Any,
+    user_id: str,
+    order: dict[str, Any],
+    rec: dict[str, Any],
+    match_row: dict[str, Any],
+) -> None:
+    """Auto-confirm a high-confidence match, creating decision and outcome.
+
+    For entry orders: creates a "following" decision (if missing) and an outcome
+    with entry data pre-populated from the Questrade execution and SL/TP from
+    the recommendation.
+
+    For exit orders: updates the existing outcome with exit price and PnL.
+
+    The match is recorded as ``auto_confirmed`` in ``pending_matches``.
+
+    Args:
+        client: Supabase client instance.
+        user_id: Authenticated user ID.
+        order: Aggregated Questrade order dict.
+        rec: Matched recommendation dict (from ``_load_open_recommendations``).
+        match_row: The pending match dict to persist.
+    """
+    rec_id = rec["id"]
+    decision_id = rec.get("decision_id")
+    commission = order.get("total_commission", 0.0)
+    is_exit = order["side"] in _EXIT_SIDES
+
+    if not decision_id:
+        decision_id = uuid.uuid4().hex
+        await (
+            client.table("decisions")
+            .insert(
+                {
+                    "id": decision_id,
+                    "user_id": user_id,
+                    "recommendation_id": rec_id,
+                    "decision": "following",
+                    "reason": "Auto-followed from Questrade",
+                    "auto_followed": True,
+                }
+            )
+            .execute()
+        )
+        logger.info("Auto-created 'following' decision for rec %s", rec_id)
+
+    existing_outcome = (
+        await client.table("outcomes")
+        .select("id, entry_price, shares, entry_timestamp, commission, stop_loss")
+        .eq("decision_id", decision_id)
+        .eq("user_id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    has_existing = existing_outcome and existing_outcome.data
+
+    rec_full = (
+        await client.table("recommendations")
+        .select("stop_loss, take_profit, action")
+        .eq("id", rec_id)
+        .maybe_single()
+        .execute()
+    )
+    rec_data = rec_full.data if rec_full and rec_full.data else {}
+    rec_action = rec_data.get("action", "")
+
+    if is_exit and has_existing:
+        entry_data = existing_outcome.data
+        entry_price = entry_data.get("entry_price")
+        entry_shares = entry_data.get("shares") or order["total_shares"]
+        exit_price = order["avg_price"]
+        total_commission = (entry_data.get("commission") or 0.0) + commission
+
+        exit_fields: dict[str, Any] = {
+            "exit_price": exit_price,
+            "exit_timestamp": order.get("executed_at"),
+            "commission": total_commission,
+        }
+
+        if entry_price is not None and exit_price is not None:
+            result = calculate_pnl(
+                rec_action,
+                entry_price,
+                exit_price,
+                entry_shares,
+                commission=total_commission,
+                stop_loss=entry_data.get("stop_loss"),
+            )
+            exit_fields["pnl_dollars"] = result.gross_pnl
+            exit_fields["pnl_percent"] = result.pnl_percent
+            exit_fields["gross_pnl"] = result.gross_pnl
+            exit_fields["net_pnl"] = result.net_pnl
+
+        exit_fields["holding_days"] = calculate_holding_days(
+            entry_data.get("entry_timestamp"),
+            order.get("executed_at"),
+        )
+
+        await client.table("outcomes").update(exit_fields).eq("id", entry_data["id"]).execute()
+    elif not is_exit:
+        outcome_fields: dict[str, Any] = {
+            "entry_price": order["avg_price"],
+            "shares": order["total_shares"],
+            "source": "questrade",
+            "brokerage_order_id": str(order["order_id"]),
+            "commission": commission,
+            "currency": order.get("currency", "CAD"),
+            "entry_timestamp": order.get("executed_at"),
+            "stop_loss": rec_data.get("stop_loss"),
+            "take_profit": rec_data.get("take_profit"),
+            "notes": (
+                f"Auto-imported from Questrade order {order['order_id']}. "
+                f"Commission: ${commission:.2f} {order.get('currency', 'CAD')}."
+            ),
+        }
+
+        if has_existing:
+            await (
+                client.table("outcomes")
+                .update(outcome_fields)
+                .eq("id", existing_outcome.data["id"])
+                .execute()
+            )
+        else:
+            outcome_id = uuid.uuid4().hex
+            outcome_fields.update(
+                {
+                    "id": outcome_id,
+                    "user_id": user_id,
+                    "decision_id": decision_id,
+                    "recommendation_id": rec_id,
+                    "ticker": order["tv_ticker"],
+                }
+            )
+            await client.table("outcomes").insert(outcome_fields).execute()
+
+    match_row["status"] = "confirmed"
+    match_row["auto_confirmed"] = True
+    await client.table("pending_matches").insert(match_row).execute()

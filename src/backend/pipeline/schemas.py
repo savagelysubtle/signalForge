@@ -635,6 +635,8 @@ class OutcomeCreate(BaseModel):
     net_pnl: float | None = None
     entry_timestamp: str | None = None
     exit_timestamp: str | None = None
+    stop_loss: float | None = None
+    take_profit: float | None = None
 
 
 class OutcomeResponse(BaseModel):
@@ -663,6 +665,8 @@ class OutcomeResponse(BaseModel):
     net_pnl: float | None = None
     entry_timestamp: str | None = None
     exit_timestamp: str | None = None
+    stop_loss: float | None = None
+    take_profit: float | None = None
 
 
 class ReflectionResponse(BaseModel):
@@ -715,6 +719,7 @@ class RecommendationWithStatus(BaseModel):
     holding_period: str = ""
     judge_reasoning: str = ""
     created_at: str
+    strategy_name: str = ""
     decision: Literal["following", "passing"] | None = None
     decision_id: str | None = None
     decision_reason: str = ""
@@ -732,3 +737,7 @@ class RecommendationWithStatus(BaseModel):
     outcome_source: str = "manual"
     outcome_commission: float | None = None
     outcome_net_pnl: float | None = None
+    outcome_gross_pnl: float | None = None
+    outcome_stop_loss: float | None = None
+    outcome_take_profit: float | None = None
+    outcome_entry_timestamp: str | None = None

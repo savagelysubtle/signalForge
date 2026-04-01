@@ -364,6 +364,8 @@ export interface OutcomeCreate {
   net_pnl?: number | null;
   entry_timestamp?: string | null;
   exit_timestamp?: string | null;
+  stop_loss?: number | null;
+  take_profit?: number | null;
 }
 
 export interface OutcomeResponse {
@@ -390,6 +392,8 @@ export interface OutcomeResponse {
   net_pnl: number | null;
   entry_timestamp: string | null;
   exit_timestamp: string | null;
+  stop_loss: number | null;
+  take_profit: number | null;
 }
 
 export interface ReflectionResponse {
@@ -442,6 +446,7 @@ export interface RecommendationWithStatus {
   holding_period: string;
   judge_reasoning: string;
   created_at: string;
+  strategy_name: string;
   decision: "following" | "passing" | null;
   decision_id: string | null;
   decision_reason: string;
@@ -459,6 +464,10 @@ export interface RecommendationWithStatus {
   outcome_source: string;
   outcome_commission: number | null;
   outcome_net_pnl: number | null;
+  outcome_gross_pnl: number | null;
+  outcome_stop_loss: number | null;
+  outcome_take_profit: number | null;
+  outcome_entry_timestamp: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -517,10 +526,17 @@ export interface PendingMatch {
   match_score: number;
   match_reason: string;
   status: string;
+  auto_confirmed?: boolean;
   rec_ticker: string;
   rec_action: string;
   rec_confidence: number;
   rec_entry_price: number | null;
+}
+
+export interface SyncResultResponse {
+  auto_confirmed: PendingMatch[];
+  pending_review: PendingMatch[];
+  skipped_reason: string | null;
 }
 
 // ---------------------------------------------------------------------------

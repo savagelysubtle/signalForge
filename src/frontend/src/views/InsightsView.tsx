@@ -17,14 +17,20 @@ import {
   Clock,
   ChevronDown,
   ChevronUp,
+  ChevronLeft,
+  ChevronRight,
   Send,
   X,
   RefreshCw,
   Link2,
+  Pencil,
+  SlidersHorizontal,
 } from "lucide-react";
 import { useInsights } from "../hooks/useInsights";
+import type { JournalFilters } from "../hooks/useInsights";
 import { api } from "../api/client";
 import { notifyFeedbackChanged } from "../lib/feedbackSync";
+import { calculatePnl, resolveExitPrice } from "../lib/pnl";
 import type {
   PerformanceOverview,
   RecommendationWithStatus,
@@ -44,8 +50,16 @@ export function InsightsView() {
     fetchAll,
     recordDecision,
     logOutcome,
+    updateOutcome,
     undoDecision,
     generateReflection,
+    page,
+    hasMore,
+    pageSize,
+    nextPage,
+    prevPage,
+    filters,
+    applyFilters,
   } = useInsights();
 
   const [brokerageConnected, setBrokerageConnected] = useState(false);
@@ -53,6 +67,7 @@ export function InsightsView() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [showPendingBanner, setShowPendingBanner] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [autoConfirmToast, setAutoConfirmToast] = useState<string | null>(null);
 
   useEffect(() => {
     fetchAll();
@@ -62,27 +77,58 @@ export function InsightsView() {
     (async () => {
       try {
         const status = await api.getBrokerageStatus();
-        setBrokerageConnected(status.connected && !!status.account_id);
-        if (status.connected && status.account_id) {
+        const connected = status.connected && !!status.account_id;
+        setBrokerageConnected(connected);
+
+        if (connected) {
+          // Auto-sync silently on mount via smart-sync (debounced, max once per 5 min)
           try {
-            const matches = await api.getPendingMatches();
-            setPendingMatches(matches);
-            if (matches.length > 0) setShowPendingBanner(true);
+            const syncResult = await api.smartSync();
+            if (syncResult.auto_confirmed.length > 0) {
+              const count = syncResult.auto_confirmed.length;
+              setAutoConfirmToast(
+                `${count} trade${count !== 1 ? "s" : ""} auto-linked from Questrade`,
+              );
+              setTimeout(() => setAutoConfirmToast(null), 5000);
+              notifyFeedbackChanged();
+              fetchAll();
+            }
+            // Load existing pending matches + any new ones from sync
+            const allPending = await api.getPendingMatches();
+            setPendingMatches(allPending);
+            if (allPending.length > 0) setShowPendingBanner(true);
           } catch {
-            // No pending matches endpoint available or empty
+            // Sync unavailable — just load pending matches
+            try {
+              const matches = await api.getPendingMatches();
+              setPendingMatches(matches);
+              if (matches.length > 0) setShowPendingBanner(true);
+            } catch {
+              /* no pending matches */
+            }
           }
         }
       } catch {
         setBrokerageConnected(false);
       }
     })();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSync = async () => {
     setIsSyncing(true);
     setSyncError(null);
+    setAutoConfirmToast(null);
     try {
-      await api.syncTrades();
+      const syncResult = await api.syncTrades();
+      if (syncResult.auto_confirmed.length > 0) {
+        const count = syncResult.auto_confirmed.length;
+        setAutoConfirmToast(
+          `${count} trade${count !== 1 ? "s" : ""} auto-linked from Questrade`,
+        );
+        setTimeout(() => setAutoConfirmToast(null), 5000);
+        notifyFeedbackChanged();
+        fetchAll();
+      }
       const allPending = await api.getPendingMatches();
       setPendingMatches(allPending);
       if (allPending.length > 0) setShowPendingBanner(true);
@@ -196,6 +242,23 @@ export function InsightsView() {
       )}
 
       <AnimatePresence>
+        {autoConfirmToast && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.3 }}
+            className="bg-accent-profit-dim border border-accent-profit/30 rounded-lg px-4 py-3 flex items-center gap-2"
+          >
+            <CheckCircle2 className="w-4 h-4 text-accent-profit shrink-0" />
+            <span className="text-accent-profit text-sm font-display font-medium">
+              {autoConfirmToast}
+            </span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
         {showPendingBanner && pendingMatches.length > 0 && (
           <PendingMatchesBanner
             matches={pendingMatches}
@@ -212,7 +275,15 @@ export function InsightsView() {
         recommendations={recommendations}
         onRecordDecision={recordDecision}
         onLogOutcome={logOutcome}
+        onUpdateOutcome={updateOutcome}
         onUndoDecision={undoDecision}
+        page={page}
+        hasMore={hasMore}
+        pageSize={pageSize}
+        onNextPage={nextPage}
+        onPrevPage={prevPage}
+        filters={filters}
+        onApplyFilters={applyFilters}
       />
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
@@ -318,8 +389,10 @@ function MatchRow({
   onConfirm: (id: string) => void;
   onReject: (id: string) => void;
 }) {
-  const sideColor =
-    match.side === "Buy"
+  const isExit = match.side === "Sell" || match.side === "Cov";
+  const sideColor = isExit
+    ? "bg-accent-alert-dim text-accent-alert"
+    : match.side === "Buy"
       ? "bg-accent-profit-dim text-accent-profit"
       : "bg-accent-loss-dim text-accent-loss";
 
@@ -343,6 +416,16 @@ function MatchRow({
           <span className="text-sm font-display font-bold text-text-primary">{match.ticker}</span>
           <span className={clsx("px-1.5 py-0.5 rounded text-[10px] font-display font-bold", sideColor)}>
             {match.side}
+          </span>
+          <span
+            className={clsx(
+              "px-1.5 py-0.5 rounded text-[9px] font-display font-bold uppercase tracking-wider",
+              isExit
+                ? "bg-accent-electric-dim text-accent-electric"
+                : "bg-accent-signal-dim text-accent-signal",
+            )}
+          >
+            {isExit ? "Exit" : "Entry"}
           </span>
         </div>
         <div className="flex items-center gap-3 text-xs font-display text-text-muted tabular-nums">
@@ -380,8 +463,13 @@ function MatchRow({
       <div className="flex items-center gap-1.5 ml-2 shrink-0">
         <button
           onClick={() => onConfirm(match.id)}
-          className="p-2 rounded-lg bg-accent-profit-dim text-accent-profit hover:bg-accent-profit/20 transition-colors"
-          title="Confirm match"
+          className={clsx(
+            "p-2 rounded-lg transition-colors",
+            isExit
+              ? "bg-accent-electric-dim text-accent-electric hover:bg-accent-electric/20"
+              : "bg-accent-profit-dim text-accent-profit hover:bg-accent-profit/20",
+          )}
+          title={isExit ? "Confirm exit — updates PnL" : "Confirm entry"}
         >
           <CheckCircle2 className="w-4 h-4" />
         </button>
@@ -509,14 +597,66 @@ function RecommendationJournal({
   recommendations,
   onRecordDecision,
   onLogOutcome,
+  onUpdateOutcome,
   onUndoDecision,
+  page,
+  hasMore,
+  pageSize,
+  onNextPage,
+  onPrevPage,
+  filters,
+  onApplyFilters,
 }: {
   recommendations: RecommendationWithStatus[];
   onRecordDecision: (recId: string, body: DecisionCreate) => Promise<void>;
   onLogOutcome: (decisionId: string, body: OutcomeCreate) => Promise<void>;
+  onUpdateOutcome: (outcomeId: string, body: OutcomeCreate) => Promise<void>;
   onUndoDecision: (decisionId: string) => Promise<void>;
+  page: number;
+  hasMore: boolean;
+  pageSize: number;
+  onNextPage: () => void;
+  onPrevPage: () => void;
+  filters: JournalFilters;
+  onApplyFilters: (f: JournalFilters) => void;
 }) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [showFilters, setShowFilters] = useState(false);
+
+  const CONFIDENCE_STOPS = [0, 25, 50, 75, 100];
+
+  const confidenceMinPct = Math.round(filters.confidenceMin * 100);
+  const confidenceMaxPct = Math.round(filters.confidenceMax * 100);
+  const hasActiveFilters =
+    filters.action.length > 0 || filters.confidenceMin > 0 || filters.confidenceMax < 1;
+  const activeFilterCount =
+    filters.action.length + (filters.confidenceMin > 0 || filters.confidenceMax < 1 ? 1 : 0);
+
+  const toggleAction = (action: "BUY" | "SHORT" | "HOLD") => {
+    const current = new Set(filters.action);
+    if (current.has(action)) current.delete(action);
+    else current.add(action);
+    onApplyFilters({ ...filters, action: [...current] });
+  };
+
+  const setConfidenceMin = (pct: number) => {
+    const val = pct / 100;
+    const maxVal = val > filters.confidenceMax ? val : filters.confidenceMax;
+    onApplyFilters({ ...filters, confidenceMin: val, confidenceMax: maxVal });
+  };
+
+  const setConfidenceMax = (pct: number) => {
+    const val = pct / 100;
+    const minVal = val < filters.confidenceMin ? val : filters.confidenceMin;
+    onApplyFilters({ ...filters, confidenceMax: val, confidenceMin: minVal });
+  };
+
+  const clearFilters = () => {
+    onApplyFilters({ action: [], confidenceMin: 0, confidenceMax: 1 });
+  };
+
+  const rangeStart = page * pageSize + 1;
+  const rangeEnd = page * pageSize + recommendations.length;
 
   return (
     <motion.div
@@ -530,19 +670,159 @@ function RecommendationJournal({
           <BarChart3 className="w-4 h-4 text-accent-signal" />
           <h2 className="text-sm font-display font-semibold">Trade Journal</h2>
         </div>
-        <span className="text-xs text-text-muted font-display">
-          {recommendations.length} recommendation{recommendations.length !== 1 ? "s" : ""}
-        </span>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowFilters(!showFilters)}
+            className={clsx(
+              "flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-display transition-all duration-200",
+              hasActiveFilters
+                ? "bg-accent-signal/15 text-accent-signal border border-accent-signal/30"
+                : "text-text-muted hover:text-text-secondary hover:bg-bg-steel/50 border border-transparent",
+            )}
+            aria-label="Toggle filters"
+          >
+            <SlidersHorizontal className="w-3 h-3" />
+            <span>Filters</span>
+            {hasActiveFilters && (
+              <span className="ml-0.5 w-4 h-4 rounded-full bg-accent-signal text-[10px] text-bg-void font-bold flex items-center justify-center">
+                {activeFilterCount}
+              </span>
+            )}
+          </button>
+          <span className="text-xs text-text-muted font-display">
+            {recommendations.length > 0
+              ? `${rangeStart}–${rangeEnd}`
+              : "0 recommendations"}
+          </span>
+          {(page > 0 || hasMore) && (
+            <div className="flex items-center gap-1">
+              <button
+                onClick={onPrevPage}
+                disabled={page === 0}
+                className="p-1 rounded hover:bg-bg-surface disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                aria-label="Previous page"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" />
+              </button>
+              <span className="text-xs text-text-muted font-mono min-w-[3ch] text-center">
+                {page + 1}
+              </span>
+              <button
+                onClick={onNextPage}
+                disabled={!hasMore}
+                className="p-1 rounded hover:bg-bg-surface disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                aria-label="Next page"
+              >
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
-      {recommendations.length === 0 ? (
+      {/* Filter bar */}
+      <AnimatePresence>
+        {showFilters && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden border-b border-border-subtle"
+          >
+            <div className="px-5 py-3 flex flex-wrap items-center gap-x-6 gap-y-3 bg-bg-concrete/50">
+              {/* Action filter */}
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-text-muted font-display uppercase tracking-wider">
+                  Action
+                </span>
+                <div className="flex items-center gap-1">
+                  {(["BUY", "SHORT", "HOLD"] as const).map((action) => {
+                    const active = filters.action.includes(action);
+                    return (
+                      <button
+                        key={action}
+                        onClick={() => toggleAction(action)}
+                        className={clsx(
+                          "px-2.5 py-1 rounded text-[11px] font-display font-semibold tracking-wide transition-all duration-150",
+                          active && action === "BUY" &&
+                            "bg-accent-profit/20 text-accent-profit border border-accent-profit/40",
+                          active && action === "SHORT" &&
+                            "bg-accent-loss/20 text-accent-loss border border-accent-loss/40",
+                          active && action === "HOLD" &&
+                            "bg-accent-alert/20 text-accent-alert border border-accent-alert/40",
+                          !active &&
+                            "bg-bg-steel/30 text-text-muted border border-transparent hover:bg-bg-steel/60 hover:text-text-secondary",
+                        )}
+                      >
+                        {action}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Confidence range */}
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-text-muted font-display uppercase tracking-wider">
+                  Confidence
+                </span>
+                <div className="flex items-center gap-1">
+                  <select
+                    value={confidenceMinPct}
+                    onChange={(e) => setConfidenceMin(Number(e.target.value))}
+                    className="bg-bg-concrete border border-border-gutter rounded px-2 py-1 text-xs font-display text-text-primary focus:outline-none focus:border-accent-signal/50 appearance-none cursor-pointer"
+                  >
+                    {CONFIDENCE_STOPS.map((s) => (
+                      <option key={s} value={s}>
+                        {s}%
+                      </option>
+                    ))}
+                  </select>
+                  <span className="text-text-muted text-[11px]">–</span>
+                  <select
+                    value={confidenceMaxPct}
+                    onChange={(e) => setConfidenceMax(Number(e.target.value))}
+                    className="bg-bg-concrete border border-border-gutter rounded px-2 py-1 text-xs font-display text-text-primary focus:outline-none focus:border-accent-signal/50 appearance-none cursor-pointer"
+                  >
+                    {CONFIDENCE_STOPS.map((s) => (
+                      <option key={s} value={s}>
+                        {s}%
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Clear */}
+              {hasActiveFilters && (
+                <button
+                  onClick={clearFilters}
+                  className="ml-auto flex items-center gap-1 text-[11px] text-text-muted hover:text-accent-loss font-display transition-colors"
+                >
+                  <X className="w-3 h-3" />
+                  Clear
+                </button>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {recommendations.length === 0 && page === 0 ? (
         <div className="p-8 text-center">
           <div className="w-12 h-12 rounded-xl bg-accent-signal-dim flex items-center justify-center mx-auto mb-3">
             <BarChart3 className="w-6 h-6 text-accent-signal" />
           </div>
           <p className="text-sm text-text-muted font-body">
-            No recommendations yet. Run a pipeline analysis to get started.
+            {hasActiveFilters
+              ? "No recommendations match the current filters."
+              : "No recommendations yet. Run a pipeline analysis to get started."}
           </p>
+        </div>
+      ) : recommendations.length === 0 && page > 0 ? (
+        <div className="p-8 text-center">
+          <p className="text-sm text-text-muted font-body">No more recommendations.</p>
         </div>
       ) : (
         <div className="divide-y divide-border-subtle">
@@ -550,11 +830,12 @@ function RecommendationJournal({
             <JournalRow
               key={rec.id}
               rec={rec}
-              index={i}
+              index={page * pageSize + i}
               isExpanded={expandedId === rec.id}
               onToggle={() => setExpandedId(expandedId === rec.id ? null : rec.id)}
               onRecordDecision={onRecordDecision}
               onLogOutcome={onLogOutcome}
+              onUpdateOutcome={onUpdateOutcome}
               onUndoDecision={onUndoDecision}
             />
           ))}
@@ -564,10 +845,11 @@ function RecommendationJournal({
   );
 }
 
-type RowStatus = "pending" | "following" | "passed" | "closed";
+type RowStatus = "pending" | "following" | "passed" | "open" | "closed";
 
 function getRowStatus(rec: RecommendationWithStatus): RowStatus {
-  if (rec.outcome_id) return "closed";
+  if (rec.outcome_id && rec.outcome_exit_price != null) return "closed";
+  if (rec.outcome_id) return "open";
   if (rec.decision === "following") return "following";
   if (rec.decision === "passing") return "passed";
   return "pending";
@@ -580,6 +862,7 @@ function JournalRow({
   onToggle,
   onRecordDecision,
   onLogOutcome,
+  onUpdateOutcome,
   onUndoDecision,
 }: {
   rec: RecommendationWithStatus;
@@ -588,6 +871,7 @@ function JournalRow({
   onToggle: () => void;
   onRecordDecision: (recId: string, body: DecisionCreate) => Promise<void>;
   onLogOutcome: (decisionId: string, body: OutcomeCreate) => Promise<void>;
+  onUpdateOutcome: (outcomeId: string, body: OutcomeCreate) => Promise<void>;
   onUndoDecision: (decisionId: string) => Promise<void>;
 }) {
   const status = getRowStatus(rec);
@@ -596,6 +880,7 @@ function JournalRow({
     pending: "border-l-border-gutter",
     following: "border-l-accent-profit",
     passed: "border-l-text-muted",
+    open: "border-l-accent-signal",
     closed:
       rec.outcome_pnl_dollars != null && rec.outcome_pnl_dollars >= 0
         ? "border-l-accent-profit"
@@ -651,6 +936,13 @@ function JournalRow({
           </span>
         </div>
 
+        {/* Strategy */}
+        {rec.strategy_name && (
+          <span className="hidden lg:block text-[10px] font-display text-text-muted truncate max-w-[120px]" title={rec.strategy_name}>
+            {rec.strategy_name}
+          </span>
+        )}
+
         {/* Status badge */}
         <div className="flex-1 flex justify-end sm:justify-start">
           <StatusBadge status={status} rec={rec} />
@@ -683,6 +975,7 @@ function JournalRow({
               status={status}
               onRecordDecision={onRecordDecision}
               onLogOutcome={onLogOutcome}
+              onUpdateOutcome={onUpdateOutcome}
               onUndoDecision={onUndoDecision}
             />
           </motion.div>
@@ -718,6 +1011,12 @@ function StatusBadge({
           Passed
         </span>
       );
+    case "open":
+      return (
+        <span className="px-2 py-0.5 rounded text-[10px] font-display font-semibold bg-accent-signal-dim text-accent-signal">
+          Open
+        </span>
+      );
     case "closed": {
       const pnl = rec.outcome_pnl_dollars ?? 0;
       const isWin = pnl > 0;
@@ -744,15 +1043,18 @@ function ExpandedRow({
   status,
   onRecordDecision,
   onLogOutcome,
+  onUpdateOutcome,
   onUndoDecision,
 }: {
   rec: RecommendationWithStatus;
   status: RowStatus;
   onRecordDecision: (recId: string, body: DecisionCreate) => Promise<void>;
   onLogOutcome: (decisionId: string, body: OutcomeCreate) => Promise<void>;
+  onUpdateOutcome: (outcomeId: string, body: OutcomeCreate) => Promise<void>;
   onUndoDecision: (decisionId: string) => Promise<void>;
 }) {
   const [isUndoing, setIsUndoing] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
 
   const handleUndo = async () => {
     if (!rec.decision_id) return;
@@ -764,13 +1066,17 @@ function ExpandedRow({
     }
   };
 
+  const actualEntry = rec.outcome_entry_price ?? rec.entry_price;
+  const actualStop = rec.outcome_stop_loss ?? rec.stop_loss;
+  const actualTarget = rec.outcome_take_profit ?? rec.take_profit;
+
   return (
     <div className="px-5 pb-4 pt-1 bg-bg-concrete/50 border-t border-border-subtle">
       {/* Trade params summary */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
-        <TradeParam label="Entry" value={rec.entry_price != null ? `$${rec.entry_price.toFixed(2)}` : "—"} />
-        <TradeParam label="Stop" value={rec.stop_loss != null ? `$${rec.stop_loss.toFixed(2)}` : "—"} />
-        <TradeParam label="Target" value={rec.take_profit != null ? `$${rec.take_profit.toFixed(2)}` : "—"} />
+        <TradeParam label="Entry" value={actualEntry != null ? `$${actualEntry.toFixed(2)}` : "—"} />
+        <TradeParam label="Stop" value={actualStop != null ? `$${actualStop.toFixed(2)}` : "—"} />
+        <TradeParam label="Target" value={actualTarget != null ? `$${actualTarget.toFixed(2)}` : "—"} />
         <TradeParam label="R:R" value={rec.risk_reward_ratio != null ? `${rec.risk_reward_ratio.toFixed(1)}` : "—"} />
       </div>
 
@@ -780,7 +1086,18 @@ function ExpandedRow({
         </p>
       )}
 
-      {status === "pending" && <DecisionForm recId={rec.id} onSubmit={onRecordDecision} />}
+      {status === "pending" && (
+        <DecisionForm
+          rec={rec}
+          onSubmit={onRecordDecision}
+          onQuickFollow={async () => {
+            await onRecordDecision(rec.id, { decision: "following", reason: "Quick follow at rec prices" });
+            // After follow is created, log outcome with rec's trade params
+            // fetchAll will show the "following" state with outcome form
+          }}
+          onLogOutcome={onLogOutcome}
+        />
+      )}
 
       {status === "following" && rec.decision_id && (
         <div className="space-y-3">
@@ -803,53 +1120,34 @@ function ExpandedRow({
         </div>
       )}
 
-      {status === "closed" && (
-        <div className="bg-bg-concrete rounded-lg px-3 py-2 border border-border-subtle">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] text-text-muted font-display uppercase tracking-wider">
-                Trade Result
-              </span>
-              {rec.outcome_source === "questrade" && (
-                <span className="px-1.5 py-0.5 rounded text-[9px] font-display font-bold text-accent-signal bg-accent-signal-dim">
-                  Questrade
-                </span>
-              )}
-            </div>
-            <span
-              className={clsx(
-                "text-sm font-display font-bold",
-                (rec.outcome_pnl_dollars ?? 0) >= 0 ? "text-accent-profit" : "text-accent-loss",
-              )}
-            >
-              {(rec.outcome_pnl_dollars ?? 0) >= 0 ? "+" : ""}$
-              {(rec.outcome_pnl_dollars ?? 0).toLocaleString(undefined, {
-                minimumFractionDigits: 2,
-              })}
-              {rec.outcome_pnl_percent != null && (
-                <span className="text-xs ml-1 opacity-70">
-                  ({rec.outcome_pnl_percent >= 0 ? "+" : ""}
-                  {rec.outcome_pnl_percent.toFixed(2)}%)
-                </span>
-              )}
-            </span>
-          </div>
-          {rec.outcome_commission != null && rec.outcome_commission > 0 && (
-            <p className="text-xs text-text-muted font-display mt-1 tabular-nums">
-              Commission: -${rec.outcome_commission.toFixed(2)}
-              {rec.outcome_net_pnl != null && (
-                <span className="ml-2">
-                  Net: {rec.outcome_net_pnl >= 0 ? "+" : ""}${rec.outcome_net_pnl.toFixed(2)}
-                </span>
-              )}
-            </p>
-          )}
-          {rec.outcome_exit_reason && (
-            <p className="text-xs text-text-muted font-body mt-1">
-              Exit: {rec.outcome_exit_reason}
-            </p>
-          )}
-        </div>
+      {status === "open" && !isEditing && (
+        <OpenPositionCard rec={rec} onEdit={() => setIsEditing(true)} />
+      )}
+
+      {status === "open" && isEditing && rec.outcome_id && (
+        <EditOutcomeForm
+          rec={rec}
+          onSubmit={async (body) => {
+            await onUpdateOutcome(rec.outcome_id!, body);
+            setIsEditing(false);
+          }}
+          onCancel={() => setIsEditing(false)}
+        />
+      )}
+
+      {status === "closed" && !isEditing && (
+        <ClosedTradeCard rec={rec} onEdit={() => setIsEditing(true)} />
+      )}
+
+      {status === "closed" && isEditing && rec.outcome_id && (
+        <EditOutcomeForm
+          rec={rec}
+          onSubmit={async (body) => {
+            await onUpdateOutcome(rec.outcome_id!, body);
+            setIsEditing(false);
+          }}
+          onCancel={() => setIsEditing(false)}
+        />
       )}
     </div>
   );
@@ -888,6 +1186,262 @@ function TradeParam({ label, value }: { label: string; value: string }) {
 }
 
 // ---------------------------------------------------------------------------
+// Open Position Card
+// ---------------------------------------------------------------------------
+
+function OpenPositionCard({
+  rec,
+  onEdit,
+}: {
+  rec: RecommendationWithStatus;
+  onEdit: () => void;
+}) {
+  const daysHeld = rec.outcome_entry_timestamp
+    ? Math.max(
+        0,
+        Math.floor(
+          (Date.now() - new Date(rec.outcome_entry_timestamp).getTime()) / 86400000,
+        ),
+      )
+    : null;
+
+  return (
+    <div className="bg-bg-concrete rounded-lg p-3 border border-accent-signal/20 space-y-2">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-text-muted font-display uppercase tracking-wider">
+            Open Position
+          </span>
+          {rec.outcome_source === "questrade" && (
+            <span className="px-1.5 py-0.5 rounded text-[9px] font-display font-bold text-accent-signal bg-accent-signal-dim">
+              Questrade
+            </span>
+          )}
+          {rec.outcome_source === "manual" && (
+            <span className="px-1.5 py-0.5 rounded text-[9px] font-display font-bold text-text-muted bg-bg-steel">
+              Manual
+            </span>
+          )}
+        </div>
+        <button
+          onClick={onEdit}
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-display font-medium text-accent-alert bg-accent-alert-dim hover:bg-accent-alert/20 transition-colors"
+        >
+          <Target className="w-3 h-3" />
+          Close Position
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+        {rec.outcome_entry_price != null && (
+          <div>
+            <span className="text-[9px] text-text-muted font-display uppercase tracking-wider block">
+              Entry
+            </span>
+            <span className="text-sm font-display font-bold text-text-primary tabular-nums">
+              ${rec.outcome_entry_price.toFixed(2)}
+            </span>
+          </div>
+        )}
+        {rec.outcome_shares != null && (
+          <div>
+            <span className="text-[9px] text-text-muted font-display uppercase tracking-wider block">
+              Shares
+            </span>
+            <span className="text-sm font-display font-bold text-text-primary tabular-nums">
+              {rec.outcome_shares}
+            </span>
+          </div>
+        )}
+        {(rec.outcome_stop_loss ?? rec.stop_loss) != null && (
+          <div>
+            <span className="text-[9px] text-text-muted font-display uppercase tracking-wider block">
+              Stop Loss
+            </span>
+            <span className="text-sm font-display font-bold text-accent-loss tabular-nums">
+              ${(rec.outcome_stop_loss ?? rec.stop_loss)!.toFixed(2)}
+            </span>
+          </div>
+        )}
+        {(rec.outcome_take_profit ?? rec.take_profit) != null && (
+          <div>
+            <span className="text-[9px] text-text-muted font-display uppercase tracking-wider block">
+              Take Profit
+            </span>
+            <span className="text-sm font-display font-bold text-accent-profit tabular-nums">
+              ${(rec.outcome_take_profit ?? rec.take_profit)!.toFixed(2)}
+            </span>
+          </div>
+        )}
+        {daysHeld != null && (
+          <div>
+            <span className="text-[9px] text-text-muted font-display uppercase tracking-wider block">
+              Days Held
+            </span>
+            <span className="text-sm font-display font-bold text-text-primary tabular-nums">
+              {daysHeld}d
+            </span>
+          </div>
+        )}
+      </div>
+
+      {rec.outcome_commission != null && rec.outcome_commission > 0 && (
+        <div className="text-[10px] text-text-muted font-display tabular-nums">
+          Commission: -${rec.outcome_commission.toFixed(2)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Closed Trade Card
+// ---------------------------------------------------------------------------
+
+function ClosedTradeCard({
+  rec,
+  onEdit,
+}: {
+  rec: RecommendationWithStatus;
+  onEdit: () => void;
+}) {
+  const pnl = rec.outcome_pnl_dollars ?? 0;
+  const isWin = pnl > 0;
+  const pnlColor = isWin ? "text-accent-profit" : "text-accent-loss";
+
+  const entryPrice = rec.outcome_entry_price;
+  const exitPrice = rec.outcome_exit_price;
+  const sl = rec.outcome_stop_loss ?? rec.stop_loss;
+
+  let rMultiple: number | null = null;
+  if (entryPrice != null && exitPrice != null && sl != null) {
+    const riskPerShare = Math.abs(entryPrice - sl);
+    if (riskPerShare > 0) {
+      const sign = rec.action === "SHORT" ? -1 : 1;
+      rMultiple =
+        Math.round((sign * (exitPrice - entryPrice) / riskPerShare) * 100) / 100;
+    }
+  }
+
+  return (
+    <div className="bg-bg-concrete rounded-lg p-3 border border-border-subtle space-y-2">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-text-muted font-display uppercase tracking-wider">
+            Trade Result
+          </span>
+          {rec.outcome_source === "questrade" && (
+            <span className="px-1.5 py-0.5 rounded text-[9px] font-display font-bold text-accent-signal bg-accent-signal-dim">
+              Questrade
+            </span>
+          )}
+          {rec.outcome_source === "manual" && (
+            <span className="px-1.5 py-0.5 rounded text-[9px] font-display font-bold text-text-muted bg-bg-steel">
+              Manual
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <span className={clsx("text-base font-display font-bold", pnlColor)}>
+            {isWin ? "+" : ""}${pnl.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+          </span>
+          {rec.outcome_pnl_percent != null && (
+            <span className={clsx("text-xs font-display", pnlColor, "opacity-70")}>
+              ({rec.outcome_pnl_percent >= 0 ? "+" : ""}
+              {rec.outcome_pnl_percent.toFixed(2)}%)
+            </span>
+          )}
+          <button
+            onClick={onEdit}
+            className="p-1.5 rounded-md text-text-muted hover:text-accent-signal hover:bg-accent-signal-dim transition-colors"
+            title="Edit outcome"
+          >
+            <Pencil className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+        {entryPrice != null && (
+          <div>
+            <span className="text-[9px] text-text-muted font-display uppercase tracking-wider block">
+              Entry
+            </span>
+            <span className="text-xs font-display text-text-secondary tabular-nums">
+              ${entryPrice.toFixed(2)}
+            </span>
+          </div>
+        )}
+        {exitPrice != null && (
+          <div>
+            <span className="text-[9px] text-text-muted font-display uppercase tracking-wider block">
+              Exit
+            </span>
+            <span className="text-xs font-display text-text-secondary tabular-nums">
+              ${exitPrice.toFixed(2)}
+              {entryPrice != null && (
+                <span className={clsx("ml-1", pnlColor)}>
+                  {exitPrice >= entryPrice ? "↑" : "↓"}
+                </span>
+              )}
+            </span>
+          </div>
+        )}
+        {rec.outcome_shares != null && (
+          <div>
+            <span className="text-[9px] text-text-muted font-display uppercase tracking-wider block">
+              Shares
+            </span>
+            <span className="text-xs font-display text-text-secondary tabular-nums">
+              {rec.outcome_shares}
+            </span>
+          </div>
+        )}
+        {rec.outcome_holding_days != null && (
+          <div>
+            <span className="text-[9px] text-text-muted font-display uppercase tracking-wider block">
+              Held
+            </span>
+            <span className="text-xs font-display text-text-secondary tabular-nums">
+              {rec.outcome_holding_days}d
+            </span>
+          </div>
+        )}
+        {rMultiple != null && (
+          <div>
+            <span className="text-[9px] text-text-muted font-display uppercase tracking-wider block">
+              R-Multiple
+            </span>
+            <span className={clsx("text-xs font-display font-bold tabular-nums", rMultiple >= 0 ? "text-accent-profit" : "text-accent-loss")}>
+              {rMultiple >= 0 ? "+" : ""}{rMultiple.toFixed(2)}R
+            </span>
+          </div>
+        )}
+      </div>
+
+      {(rec.outcome_commission != null && rec.outcome_commission > 0) && (
+        <div className="flex items-center gap-4 text-[10px] text-text-muted font-display tabular-nums">
+          <span>Comm: -${rec.outcome_commission.toFixed(2)}</span>
+          {rec.outcome_net_pnl != null && (
+            <span>
+              Net: <span className={rec.outcome_net_pnl >= 0 ? "text-accent-profit" : "text-accent-loss"}>
+                {rec.outcome_net_pnl >= 0 ? "+" : ""}${rec.outcome_net_pnl.toFixed(2)}
+              </span>
+            </span>
+          )}
+        </div>
+      )}
+
+      {rec.outcome_exit_reason && (
+        <div className="text-[10px] text-text-muted font-display">
+          Exit: <span className="text-text-secondary">{rec.outcome_exit_reason.replace(/_/g, " ")}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Decision Form (Follow / Pass)
 // ---------------------------------------------------------------------------
 
@@ -901,12 +1455,17 @@ const REASON_CATEGORIES = [
 ];
 
 function DecisionForm({
-  recId,
+  rec,
   onSubmit,
+  onQuickFollow,
+  onLogOutcome,
 }: {
-  recId: string;
+  rec: RecommendationWithStatus;
   onSubmit: (recId: string, body: DecisionCreate) => Promise<void>;
+  onQuickFollow: () => Promise<void>;
+  onLogOutcome: (decisionId: string, body: OutcomeCreate) => Promise<void>;
 }) {
+  const recId = rec.id;
   const [showReasonForm, setShowReasonForm] = useState(false);
   const [pendingDecision, setPendingDecision] = useState<"following" | "passing" | null>(null);
   const [reason, setReason] = useState("");
@@ -924,6 +1483,15 @@ function DecisionForm({
     } else {
       setPendingDecision("passing");
       setShowReasonForm(true);
+    }
+  };
+
+  const handleQuickFollow = async () => {
+    setIsSaving(true);
+    try {
+      await onQuickFollow();
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -994,8 +1562,10 @@ function DecisionForm({
     );
   }
 
+  const hasRecPrices = rec.entry_price != null;
+
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center gap-2">
       <button
         onClick={() => handleQuickDecision("following")}
         disabled={isSaving}
@@ -1008,6 +1578,17 @@ function DecisionForm({
         )}
         Follow Trade
       </button>
+      {hasRecPrices && (
+        <button
+          onClick={handleQuickFollow}
+          disabled={isSaving}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-display font-medium bg-accent-signal-dim text-accent-signal hover:bg-accent-signal/20 transition-colors"
+          title={`Follow at $${rec.entry_price?.toFixed(2)} with rec SL/TP`}
+        >
+          <ArrowUpRight className="w-3 h-3" />
+          Quick Follow
+        </button>
+      )}
       <button
         onClick={() => handleQuickDecision("passing")}
         disabled={isSaving}
@@ -1036,22 +1617,22 @@ function OutcomeForm({
   const [entryPrice, setEntryPrice] = useState("");
   const [exitPrice, setExitPrice] = useState("");
   const [shares, setShares] = useState("");
+  const [stopLoss, setStopLoss] = useState("");
+  const [takeProfit, setTakeProfit] = useState("");
   const [pnlDollars, setPnlDollars] = useState("");
   const [pnlPercent, setPnlPercent] = useState("");
   const [holdingDays, setHoldingDays] = useState("");
 
   useEffect(() => {
     const entry = parseFloat(entryPrice);
-    const exit = parseFloat(exitPrice);
+    const exit = resolveExitPrice(parseFloat(exitPrice), parseFloat(stopLoss));
     const qty = parseFloat(shares);
-    if (!isNaN(entry) && !isNaN(exit) && !isNaN(qty) && entry > 0 && qty > 0) {
-      const sign = action === "SHORT" ? -1 : 1;
-      const dollars = sign * (exit - entry) * qty;
-      const percent = sign * ((exit - entry) / entry) * 100;
-      setPnlDollars(dollars.toFixed(2));
-      setPnlPercent(percent.toFixed(2));
+    if (!isNaN(entry) && exit != null && !isNaN(qty) && entry > 0 && qty > 0) {
+      const result = calculatePnl(action, entry, exit, qty);
+      setPnlDollars(result.grossPnl.toFixed(2));
+      setPnlPercent(result.pnlPercent?.toFixed(2) ?? "");
     }
-  }, [entryPrice, exitPrice, shares, action]);
+  }, [entryPrice, exitPrice, stopLoss, shares, action]);
   const [exitReason, setExitReason] = useState("");
   const [notes, setNotes] = useState("");
   const [isSaving, setIsSaving] = useState(false);
@@ -1065,6 +1646,8 @@ function OutcomeForm({
         entry_price: entryPrice ? parseFloat(entryPrice) : null,
         exit_price: exitPrice ? parseFloat(exitPrice) : null,
         shares: shares ? parseInt(shares) : null,
+        stop_loss: stopLoss ? parseFloat(stopLoss) : null,
+        take_profit: takeProfit ? parseFloat(takeProfit) : null,
         pnl_dollars: pnlDollars ? parseFloat(pnlDollars) : null,
         pnl_percent: pnlPercent ? parseFloat(pnlPercent) : null,
         holding_days: holdingDays ? parseInt(holdingDays) : null,
@@ -1082,10 +1665,12 @@ function OutcomeForm({
         Log Trade Outcome
       </span>
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         <InputField label="Entry Price" value={entryPrice} onChange={setEntryPrice} placeholder="0.00" type="number" />
         <InputField label="Exit Price" value={exitPrice} onChange={setExitPrice} placeholder="0.00" type="number" />
         <InputField label="Shares" value={shares} onChange={setShares} placeholder="0" type="number" />
+        <InputField label="Stop Loss" value={stopLoss} onChange={setStopLoss} placeholder="0.00" type="number" />
+        <InputField label="Take Profit" value={takeProfit} onChange={setTakeProfit} placeholder="0.00" type="number" />
         <InputField label="P&L ($)" value={pnlDollars} onChange={setPnlDollars} placeholder="0.00" type="number" />
         <InputField label="P&L (%)" value={pnlPercent} onChange={setPnlPercent} placeholder="0.00" type="number" />
         <InputField label="Hold (days)" value={holdingDays} onChange={setHoldingDays} placeholder="0" type="number" />
@@ -1133,6 +1718,145 @@ function OutcomeForm({
         )}
         Save Outcome
       </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Edit Outcome Form (pre-filled for modifying existing outcomes)
+// ---------------------------------------------------------------------------
+
+function EditOutcomeForm({
+  rec,
+  onSubmit,
+  onCancel,
+}: {
+  rec: RecommendationWithStatus;
+  onSubmit: (body: OutcomeCreate) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [entryPrice, setEntryPrice] = useState(rec.outcome_entry_price?.toString() ?? "");
+  const [exitPrice, setExitPrice] = useState(rec.outcome_exit_price?.toString() ?? "");
+  const [shares, setShares] = useState(rec.outcome_shares?.toString() ?? "");
+  const [stopLoss, setStopLoss] = useState(rec.outcome_stop_loss?.toString() ?? "");
+  const [takeProfit, setTakeProfit] = useState(rec.outcome_take_profit?.toString() ?? "");
+  const [pnlDollars, setPnlDollars] = useState(rec.outcome_pnl_dollars?.toString() ?? "");
+  const [pnlPercent, setPnlPercent] = useState(rec.outcome_pnl_percent?.toString() ?? "");
+  const [holdingDays, setHoldingDays] = useState(rec.outcome_holding_days?.toString() ?? "");
+  const [exitReason, setExitReason] = useState(rec.outcome_exit_reason ?? "");
+  const [notes, setNotes] = useState(rec.outcome_notes ?? "");
+  const [isSaving, setIsSaving] = useState(false);
+
+  const EXIT_REASONS = ["hit_target", "hit_stop", "manual_exit", "time_exit"];
+
+  useEffect(() => {
+    const entry = parseFloat(entryPrice);
+    const exit = resolveExitPrice(parseFloat(exitPrice), parseFloat(stopLoss));
+    const qty = parseFloat(shares);
+    if (!isNaN(entry) && exit != null && !isNaN(qty) && entry > 0 && qty > 0) {
+      const result = calculatePnl(rec.action, entry, exit, qty);
+      setPnlDollars(result.grossPnl.toFixed(2));
+      setPnlPercent(result.pnlPercent?.toFixed(2) ?? "");
+    }
+  }, [entryPrice, exitPrice, stopLoss, shares, rec.action]);
+
+  const handleSubmit = async () => {
+    setIsSaving(true);
+    try {
+      await onSubmit({
+        entry_price: entryPrice ? parseFloat(entryPrice) : null,
+        exit_price: exitPrice ? parseFloat(exitPrice) : null,
+        shares: shares ? parseInt(shares) : null,
+        stop_loss: stopLoss ? parseFloat(stopLoss) : null,
+        take_profit: takeProfit ? parseFloat(takeProfit) : null,
+        pnl_dollars: pnlDollars ? parseFloat(pnlDollars) : null,
+        pnl_percent: pnlPercent ? parseFloat(pnlPercent) : null,
+        holding_days: holdingDays ? parseInt(holdingDays) : null,
+        exit_reason: exitReason || undefined,
+        notes: notes || undefined,
+        source: rec.outcome_source,
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <div className="bg-bg-concrete rounded-lg p-3 border border-accent-signal/30 space-y-3">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-display font-semibold text-accent-signal">
+          Edit Trade Outcome
+        </span>
+        <button
+          onClick={onCancel}
+          className="text-text-muted hover:text-text-secondary transition-colors"
+        >
+          <X className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <InputField label="Entry Price" value={entryPrice} onChange={setEntryPrice} placeholder="0.00" type="number" />
+        <InputField label="Exit Price" value={exitPrice} onChange={setExitPrice} placeholder="0.00" type="number" />
+        <InputField label="Shares" value={shares} onChange={setShares} placeholder="0" type="number" />
+        <InputField label="Stop Loss" value={stopLoss} onChange={setStopLoss} placeholder="0.00" type="number" />
+        <InputField label="Take Profit" value={takeProfit} onChange={setTakeProfit} placeholder="0.00" type="number" />
+        <InputField label="P&L ($)" value={pnlDollars} onChange={setPnlDollars} placeholder="0.00" type="number" />
+        <InputField label="P&L (%)" value={pnlPercent} onChange={setPnlPercent} placeholder="0.00" type="number" />
+        <InputField label="Hold (days)" value={holdingDays} onChange={setHoldingDays} placeholder="0" type="number" />
+      </div>
+
+      <div>
+        <span className="text-[10px] text-text-muted font-display uppercase tracking-wider block mb-1.5">
+          Exit Reason
+        </span>
+        <div className="flex flex-wrap gap-1.5">
+          {EXIT_REASONS.map((er) => (
+            <button
+              key={er}
+              onClick={() => setExitReason(er === exitReason ? "" : er)}
+              className={clsx(
+                "px-2 py-1 rounded text-[10px] font-display transition-colors",
+                er === exitReason
+                  ? "bg-accent-signal text-white"
+                  : "bg-bg-steel text-text-muted hover:text-text-secondary",
+              )}
+            >
+              {er.replace(/_/g, " ")}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <textarea
+        value={notes}
+        onChange={(e) => setNotes(e.target.value)}
+        placeholder="Notes on this trade..."
+        rows={2}
+        className="w-full bg-bg-void border border-border-gutter rounded-md px-3 py-2 text-xs font-body text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-signal resize-none"
+      />
+
+      <div className="flex items-center gap-2">
+        <button
+          onClick={handleSubmit}
+          disabled={isSaving}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-display font-medium bg-accent-signal-dim text-accent-signal hover:bg-accent-signal/20 transition-colors"
+        >
+          {isSaving ? (
+            <Loader2 className="w-3 h-3 animate-spin" />
+          ) : (
+            <Send className="w-3 h-3" />
+          )}
+          Save Changes
+        </button>
+        <button
+          onClick={onCancel}
+          disabled={isSaving}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-display font-medium text-text-muted hover:text-text-secondary transition-colors"
+        >
+          Cancel
+        </button>
+      </div>
     </div>
   );
 }
