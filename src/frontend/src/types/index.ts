@@ -133,6 +133,18 @@ export interface TrackAgreement {
   conflicts: string[];
 }
 
+export interface ConfidenceBreakdown {
+  track_agreement: number; // 0.00–0.30
+  technical_strength: number; // 0.00–0.20
+  trend_alignment: number; // 0.00–0.20
+  historical_pattern: number; // 0.00–0.20
+  regime_fit: number; // 0.00–0.10
+  total: number; // 0.0–1.0
+  penalties_applied: string[];
+}
+
+export type SignalStrength = "strong" | "moderate" | "weak" | "no_edge";
+
 // ---------------------------------------------------------------------------
 // GPT Debate Stage (Phase 4 — define now, render later)
 // ---------------------------------------------------------------------------
@@ -166,6 +178,9 @@ export interface Recommendation {
   risk_approved: boolean;
   track_agreement: TrackAgreement | null;
   confidence_adjustment: string;
+  confidence_breakdown: ConfidenceBreakdown | null;
+  signal_strength: SignalStrength | null;
+  raw_gpt_confidence: number | null;
 }
 
 // ---------------------------------------------------------------------------

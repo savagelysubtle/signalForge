@@ -24,7 +24,14 @@ from supabase import AsyncClient
 from database.connection import get_db
 from pipeline.prompts.claude_chart import get_prompt_hash as claude_hash
 from pipeline.prompts.gemini_sentiment import get_prompt_hash as gemini_hash
-from pipeline.prompts.gpt_debate import get_bear_hash, get_bull_hash, get_judge_hash
+from pipeline.prompts.gpt_debate import (
+    get_bear_hash,
+    get_bear_hash_v2,
+    get_bull_hash,
+    get_bull_hash_v2,
+    get_judge_hash,
+    get_judge_hash_v2,
+)
 from pipeline.prompts.perplexity_analysis import get_prompt_hash as analysis_hash
 from pipeline.prompts.perplexity_discovery import get_prompt_hash as discovery_hash
 from pipeline.prompts.regime_classifier import format_regime_header
@@ -44,7 +51,7 @@ from pipeline.schemas import (
 )
 from pipeline.stages.claude import run_chart_analysis, run_chart_analysis_v2
 from pipeline.stages.gemini import run_sentiment
-from pipeline.stages.gpt import run_debate
+from pipeline.stages.gpt import run_debate, run_debate_v2
 from pipeline.stages.numerical_ta import run_numerical_ta
 from pipeline.stages.perplexity import (
     run_analysis,
@@ -1071,7 +1078,7 @@ async def _run_pipeline_v2(
         },
     )
 
-    # ── Stage 4: GPT Synthesis (convergence point) ───────────────────────
+    # ── Stage 4: GPT Synthesis (convergence point — track-aware v2) ──────
     sector_consensus = _aggregate_sector_sentiment(sentiments, screening)
     if ticker_symbols:
         try:
@@ -1083,7 +1090,7 @@ async def _run_pipeline_v2(
                 logger.warning("v2: Live quote fetch failed: %s", exc)
 
             recommendations, gpt_metadata_list = await asyncio.wait_for(
-                run_debate(
+                run_debate_v2(
                     ticker_symbols,
                     screening,
                     charts,
@@ -1091,6 +1098,8 @@ async def _run_pipeline_v2(
                     config,
                     reflection_context,
                     run_id,
+                    ta_snapshots=ta_snapshots or None,
+                    risk_assessments=risk_assessments or None,
                     fmp_context=fmp_map or None,
                     regime_context=regime_context,
                     sector_consensus=sector_consensus,
@@ -1112,6 +1121,18 @@ async def _run_pipeline_v2(
     if result.recommendations:
         result.recommendations = validate_risks(
             result.recommendations, config, charts, fmp_context=fmp_map or None
+        )
+
+    # Confidence calibration (Phase 7)
+    if result.recommendations:
+        from services.confidence_calibration import calibrate_recommendations
+
+        result.recommendations = calibrate_recommendations(
+            result.recommendations,
+            ta_snapshots=ta_snapshots or None,
+            config=config,
+            regime_context=regime_context,
+            risk_assessments=risk_assessments or None,
         )
 
     # Annotated charts
@@ -1180,9 +1201,9 @@ async def _finalize_v2(
         "perplexity": discovery_hash(),
         "gemini": gemini_hash(),
         "claude": claude_v2_hash(),
-        "gpt_bull": get_bull_hash(),
-        "gpt_bear": get_bear_hash(),
-        "gpt_judge": get_judge_hash(),
+        "gpt_bull": get_bull_hash_v2(),
+        "gpt_bear": get_bear_hash_v2(),
+        "gpt_judge": get_judge_hash_v2(),
         "pipeline_version": "v2",
     }
 

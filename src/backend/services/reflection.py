@@ -19,7 +19,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from database.connection import get_db
-from pipeline.schemas import ReflectionResponse
+from pipeline.schemas import ReflectionResponse, StructuredOutcomeAnalysis
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +154,147 @@ async def _fetch_stage_context(
     return context
 
 
+def classify_failure_mode(
+    outcome: dict,
+    rec: dict,
+    stage_ctx: dict,
+) -> str:
+    """Deterministically classify why a losing trade failed.
+
+    Uses the recommendation's signal data, outcome results, and stage
+    context to assign a failure mode category. Only meaningful for
+    losses — wins and breakevens return "unknown".
+
+    Args:
+        outcome: Outcome record from the database.
+        rec: Recommendation record (action, confidence, etc.).
+        stage_ctx: Stage context dict with patterns, biases, sector, and
+            optional v2 fields (track_agreement, ema_cross_age, adx, etc.).
+
+    Returns:
+        A failure mode string literal.
+    """
+    pnl = outcome.get("pnl_dollars") or 0.0
+    if pnl >= 0:
+        return "unknown"
+
+    action = rec.get("action", "")
+    structured = outcome.get("structured_analysis") or {}
+
+    track_agreement_score = structured.get("track_agreement_score", 1.0)
+    if track_agreement_score < 0.5:
+        return "low_agreement_taken"
+
+    ema_cross_age = structured.get("ema_cross_age_at_signal", -1)
+    if ema_cross_age > 5:
+        return "late_entry"
+
+    rsi_at_signal = structured.get("rsi_at_signal", 50.0)
+    if action == "BUY" and rsi_at_signal > 70:
+        return "false_breakout"
+    if action == "SHORT" and rsi_at_signal < 30:
+        return "false_breakout"
+
+    adx_at_signal = structured.get("adx_at_signal", 25.0)
+    momentum_at_signal = structured.get("momentum_score_at_signal", 0.0)
+    momentum_at_outcome = structured.get("momentum_score_at_outcome", 0.0)
+
+    if abs(momentum_at_signal) > 0.3 and (momentum_at_signal * momentum_at_outcome) < 0:
+        return "sentiment_reversal"
+
+    if adx_at_signal < 15:
+        return "correct_direction_bad_timing"
+
+    holding_days = outcome.get("holding_days") or 0
+    pnl_pct = outcome.get("pnl_percent") or 0.0
+    if holding_days > 0 and abs(pnl_pct) < 2.0:
+        return "correct_direction_bad_timing"
+
+    if action == "BUY" and pnl < 0:
+        return "wrong_direction"
+    if action == "SHORT" and pnl < 0:
+        return "wrong_direction"
+
+    return "unknown"
+
+
+def build_structured_outcome_analysis(
+    outcome: dict,
+    rec: dict,
+    stage_ctx: dict,
+    outcome_stage_ctx: dict | None = None,
+) -> StructuredOutcomeAnalysis:
+    """Build a rich StructuredOutcomeAnalysis from outcome and context data.
+
+    Captures the state of analysis tracks and numerical TA at signal time
+    vs outcome time for pattern learning.
+
+    Args:
+        outcome: Outcome record from the database.
+        rec: Recommendation record (includes action, confidence, run_id).
+        stage_ctx: Stage context at signal time (patterns, biases, etc.).
+        outcome_stage_ctx: Optional stage context at outcome time (for
+            comparing RSI/momentum at entry vs exit).
+
+    Returns:
+        Populated StructuredOutcomeAnalysis instance.
+    """
+    pnl = outcome.get("pnl_dollars") or 0.0
+    pnl_pct = outcome.get("pnl_percent") or 0.0
+
+    if pnl > 0:
+        actual_outcome = "win"
+    elif pnl < 0:
+        actual_outcome = "loss"
+    else:
+        actual_outcome = "breakeven"
+
+    action = rec.get("action", "")
+    signal_direction = "long" if action == "BUY" else "short" if action == "SHORT" else "neutral"
+
+    structured = outcome.get("structured_analysis") or {}
+    track_agreement = rec.get("track_agreement") or {}
+
+    agreement_score = 0.0
+    if isinstance(track_agreement, dict):
+        agreement_score = track_agreement.get("agreement_score", 0.0)
+
+    tracks_agreed: list[str] = []
+    tracks_disagreed: list[str] = []
+    if isinstance(track_agreement, dict):
+        for track_name in ("perplexity", "gemini", "claude"):
+            direction = track_agreement.get(f"{track_name}_direction", "neutral")
+            if (signal_direction == "long" and direction == "bullish") or (signal_direction == "short" and direction == "bearish"):
+                tracks_agreed.append(track_name)
+            elif direction == "neutral":
+                pass
+            else:
+                tracks_disagreed.append(track_name)
+
+    failure_mode = classify_failure_mode(outcome, rec, stage_ctx)
+
+    return StructuredOutcomeAnalysis(
+        ticker=rec.get("ticker", outcome.get("ticker", "")),
+        signal_direction=signal_direction,
+        actual_outcome=actual_outcome,
+        pnl_pct=pnl_pct,
+        track_agreement_score=agreement_score,
+        tracks_that_agreed_with_outcome=tracks_agreed,
+        tracks_that_disagreed_with_outcome=tracks_disagreed,
+        ema_cross_age_at_signal=structured.get("ema_cross_age_at_signal", -1),
+        rsi_at_signal=structured.get("rsi_at_signal", 50.0),
+        rsi_at_outcome=structured.get("rsi_at_outcome", 50.0),
+        adx_at_signal=structured.get("adx_at_signal", 0.0),
+        momentum_score_at_signal=structured.get("momentum_score_at_signal", 0.0),
+        momentum_score_at_outcome=structured.get("momentum_score_at_outcome", 0.0),
+        failure_mode=failure_mode,
+        lesson=structured.get("lesson", ""),
+        slippage_pct=outcome.get("slippage_pct"),
+        time_to_execution_minutes=outcome.get("time_to_execution_minutes"),
+        trader_followed_signal=structured.get("trader_followed_signal"),
+    )
+
+
 async def generate_reflection(user_id: str) -> ReflectionResponse:
     """Generate a reflection from the user's trade history.
 
@@ -210,6 +351,37 @@ async def generate_reflection(user_id: str) -> ReflectionResponse:
     reflection_id = uuid.uuid4().hex
     now = datetime.now(tz=UTC).isoformat()
 
+    # Phase 6: Build pattern_statistics from v2 analytics
+    pattern_statistics = {
+        "track_agreement_stats": metrics.get("track_agreement_stats", {}),
+        "ema_cross_age_stats": metrics.get("ema_cross_age_stats", {}),
+        "failure_mode_stats": metrics.get("failure_mode_stats", []),
+        "slippage_stats": metrics.get("slippage_stats", {}),
+    }
+
+    # Phase 6: Backfill failure_mode on outcomes that don't have one
+    for o in outcomes:
+        if o.get("failure_mode"):
+            continue
+        pnl = o.get("pnl_dollars") or 0.0
+        if pnl >= 0:
+            continue
+        rec = rec_map.get(o.get("recommendation_id", ""), {})
+        run_id_o = rec.get("run_id", "")
+        ticker_o = rec.get("ticker", o.get("ticker", ""))
+        ctx = stage_context.get((run_id_o, ticker_o), {})
+        fm = classify_failure_mode(o, rec, ctx)
+        if fm != "unknown":
+            try:
+                await (
+                    client.table("outcomes")
+                    .update({"failure_mode": fm})
+                    .eq("id", o["id"])
+                    .execute()
+                )
+            except Exception:
+                logger.debug("Failed to backfill failure_mode for outcome %s", o.get("id"))
+
     row = {
         "id": reflection_id,
         "user_id": user_id,
@@ -222,6 +394,7 @@ async def generate_reflection(user_id: str) -> ReflectionResponse:
         "summary_text": summary_text,
         "injection_prompt": injection_prompt,
         "metrics": json.dumps(metrics),
+        "pattern_statistics": json.dumps(pattern_statistics),
     }
     await client.table("reflections").insert(row).execute()
 
@@ -450,6 +623,114 @@ def _compute_metrics(
     recent_streak.sort(key=lambda x: x.get("logged_at", ""), reverse=True)
     recent_streak = recent_streak[:5]
 
+    # ── Phase 6 v2 analytics ──────────────────────────────────────────────
+
+    # Track agreement win rates (from outcomes with structured_analysis)
+    agreement_buckets: dict[str, dict[str, int]] = {
+        "3_of_3": {"wins": 0, "losses": 0},
+        "2_of_3": {"wins": 0, "losses": 0},
+        "disagree": {"wins": 0, "losses": 0},
+    }
+
+    # EMA cross age buckets
+    ema_age_buckets: dict[str, dict[str, int]] = {
+        "fresh": {"wins": 0, "losses": 0},
+        "recent": {"wins": 0, "losses": 0},
+        "stale": {"wins": 0, "losses": 0},
+    }
+
+    # Failure mode frequency
+    failure_mode_counts: dict[str, int] = {}
+
+    # Slippage tracking
+    slippage_values: list[float] = []
+
+    for o in outcomes:
+        is_win = (o.get("pnl_dollars") or 0.0) > 0
+        structured = o.get("structured_analysis")
+        if not isinstance(structured, dict):
+            if isinstance(structured, str):
+                try:
+                    structured = json.loads(structured)
+                except json.JSONDecodeError, TypeError:
+                    structured = None
+            else:
+                structured = None
+
+        if structured:
+            agreement_score = structured.get("track_agreement_score", -1.0)
+            if agreement_score >= 0:
+                if agreement_score >= 0.9:
+                    bucket = "3_of_3"
+                elif agreement_score >= 0.4:
+                    bucket = "2_of_3"
+                else:
+                    bucket = "disagree"
+
+                if is_win:
+                    agreement_buckets[bucket]["wins"] += 1
+                else:
+                    agreement_buckets[bucket]["losses"] += 1
+
+            ema_age = structured.get("ema_cross_age_at_signal", -1)
+            if ema_age >= 0:
+                if ema_age <= 2:
+                    age_bucket = "fresh"
+                elif ema_age <= 5:
+                    age_bucket = "recent"
+                else:
+                    age_bucket = "stale"
+
+                if is_win:
+                    ema_age_buckets[age_bucket]["wins"] += 1
+                else:
+                    ema_age_buckets[age_bucket]["losses"] += 1
+
+        fm = o.get("failure_mode")
+        if fm and fm != "unknown":
+            failure_mode_counts[fm] = failure_mode_counts.get(fm, 0) + 1
+
+        slip = o.get("slippage_pct")
+        if slip is not None:
+            slippage_values.append(slip)
+
+    # Finalize agreement stats
+    track_agreement_stats: dict[str, dict] = {}
+    for label, bucket_data in agreement_buckets.items():
+        total = bucket_data["wins"] + bucket_data["losses"]
+        if total > 0:
+            track_agreement_stats[label] = {
+                "wins": bucket_data["wins"],
+                "losses": bucket_data["losses"],
+                "total": total,
+                "win_rate": round((bucket_data["wins"] / total) * 100, 1),
+            }
+
+    # Finalize EMA cross age stats
+    ema_cross_age_stats: dict[str, dict] = {}
+    for label, bucket_data in ema_age_buckets.items():
+        total = bucket_data["wins"] + bucket_data["losses"]
+        if total > 0:
+            ema_cross_age_stats[label] = {
+                "wins": bucket_data["wins"],
+                "losses": bucket_data["losses"],
+                "total": total,
+                "win_rate": round((bucket_data["wins"] / total) * 100, 1),
+            }
+
+    # Sort failure modes by frequency
+    sorted_failure_modes = sorted(failure_mode_counts.items(), key=lambda x: -x[1])
+
+    # Slippage summary
+    slippage_stats: dict[str, float] = {}
+    if slippage_values:
+        slippage_stats = {
+            "avg_pct": round(sum(slippage_values) / len(slippage_values), 3),
+            "max_pct": round(max(slippage_values), 3),
+            "min_pct": round(min(slippage_values), 3),
+            "count": len(slippage_values),
+        }
+
     return {
         "wins": wins,
         "losses": losses,
@@ -470,6 +751,10 @@ def _compute_metrics(
         "short_sector_stats": short_sector_stats,
         "alignment_stats": alignment_stats,
         "recent_streak": recent_streak,
+        "track_agreement_stats": track_agreement_stats,
+        "ema_cross_age_stats": ema_cross_age_stats,
+        "failure_mode_stats": sorted_failure_modes,
+        "slippage_stats": slippage_stats,
     }
 
 
@@ -639,6 +924,58 @@ def _format_long_term_memory(metrics: dict, total_trades: int) -> list[str]:
                     f"  {label.capitalize()} ({threshold}): "
                     f"{bucket['win_rate']}% actual win rate ({bucket['count']} trades)"
                 )
+
+    # Phase 6: Track agreement win rates
+    ta_stats = metrics.get("track_agreement_stats", {})
+    if ta_stats:
+        lines.append("SIGNAL ACCURACY BY TRACK AGREEMENT:")
+        labels = {
+            "3_of_3": "3/3 agree",
+            "2_of_3": "2/3 agree",
+            "disagree": "Full disagree",
+        }
+        for key in ("3_of_3", "2_of_3", "disagree"):
+            if key in ta_stats:
+                s = ta_stats[key]
+                lines.append(
+                    f"  {labels[key]}: {s['win_rate']:.0f}% win rate ({s['total']} trades)"
+                )
+
+    # Phase 6: EMA cross age win rates
+    ema_stats = metrics.get("ema_cross_age_stats", {})
+    if ema_stats:
+        lines.append("SIGNAL ACCURACY BY EMA CROSS AGE:")
+        labels = {
+            "fresh": "Cross within last 2 candles",
+            "recent": "Cross 3-5 candles ago",
+            "stale": "Cross 6+ candles ago",
+        }
+        for key in ("fresh", "recent", "stale"):
+            if key in ema_stats:
+                s = ema_stats[key]
+                lines.append(
+                    f"  {labels[key]}: {s['win_rate']:.0f}% win rate ({s['total']} trades)"
+                )
+
+    # Phase 6: Failure mode frequency (losses only)
+    fm_stats = metrics.get("failure_mode_stats", [])
+    if fm_stats:
+        total_failures = sum(count for _, count in fm_stats)
+        lines.append("MOST COMMON FAILURE MODES:")
+        for i, (mode, count) in enumerate(fm_stats[:3]):
+            pct = round((count / total_failures) * 100) if total_failures > 0 else 0
+            label = mode.replace("_", " ").title()
+            rank = ["Most common", "Second most common", "Third"][i] if i < 3 else f"#{i + 1}"
+            lines.append(f"  {rank}: {label} ({pct}% of losses, {count} trades)")
+
+    # Phase 6: Slippage stats
+    slip_stats = metrics.get("slippage_stats", {})
+    if slip_stats:
+        lines.append(
+            f"EXECUTION SLIPPAGE: avg {slip_stats['avg_pct']:+.3f}%, "
+            f"range [{slip_stats['min_pct']:+.3f}%, {slip_stats['max_pct']:+.3f}%] "
+            f"({int(slip_stats['count'])} trades)"
+        )
 
     return lines
 

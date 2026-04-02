@@ -49,6 +49,40 @@ class TrackAgreement(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Confidence Calibration (v2 pipeline — Phase 7)
+# ---------------------------------------------------------------------------
+
+
+class ConfidenceBreakdown(BaseModel):
+    """Structured confidence decomposition into weighted sub-components.
+
+    Each component contributes a portion of the total 0.0-1.0 score:
+      track_agreement:    0.00-0.30  (agreement across Perplexity/Gemini/Claude)
+      technical_strength: 0.00-0.20  (momentum score + ADX)
+      trend_alignment:    0.00-0.20  (multi-timeframe agreement)
+      historical_pattern: 0.00-0.20  (similar trade outcome history)
+      regime_fit:         0.00-0.10  (strategy-regime compatibility)
+    """
+
+    track_agreement: float = Field(default=0.0, ge=0.0, le=0.3)
+    technical_strength: float = Field(default=0.0, ge=0.0, le=0.2)
+    trend_alignment: float = Field(default=0.0, ge=0.0, le=0.2)
+    historical_pattern: float = Field(default=0.0, ge=0.0, le=0.2)
+    regime_fit: float = Field(default=0.0, ge=0.0, le=0.1)
+    total: float = Field(default=0.0, ge=0.0, le=1.0)
+    penalties_applied: list[str] = Field(default_factory=list)
+
+
+class SignalStrength(StrEnum):
+    """Position-sizing hint derived from calibrated confidence."""
+
+    STRONG = "strong"  # confidence >= 0.7, full position
+    MODERATE = "moderate"  # confidence 0.5-0.7, half position
+    WEAK = "weak"  # confidence 0.3-0.5, quarter position / WATCH
+    NO_EDGE = "no_edge"  # confidence < 0.3, NO_TRADE
+
+
+# ---------------------------------------------------------------------------
 # Regime Classifier (Stage 0.5)
 # ---------------------------------------------------------------------------
 
@@ -379,6 +413,14 @@ class Recommendation(BaseModel):
     risk_approved: bool = True
     track_agreement: TrackAgreement | None = None
     confidence_adjustment: str = ""
+    confidence_breakdown: ConfidenceBreakdown | None = None
+    signal_strength: SignalStrength | None = None
+    raw_gpt_confidence: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Original GPT confidence before calibration adjustments",
+    )
 
 
 class DebateCaseList(BaseModel):
@@ -739,6 +781,10 @@ class OutcomeCreate(BaseModel):
     exit_timestamp: str | None = None
     stop_loss: float | None = None
     take_profit: float | None = None
+    slippage_pct: float | None = None
+    time_to_execution_minutes: float | None = None
+    failure_mode: str | None = None
+    structured_analysis: dict | None = None
 
 
 class OutcomeResponse(BaseModel):
@@ -769,6 +815,10 @@ class OutcomeResponse(BaseModel):
     exit_timestamp: str | None = None
     stop_loss: float | None = None
     take_profit: float | None = None
+    slippage_pct: float | None = None
+    time_to_execution_minutes: float | None = None
+    failure_mode: str | None = None
+    structured_analysis: dict | None = None
 
 
 class ReflectionResponse(BaseModel):
@@ -855,6 +905,68 @@ class TradeHistoryEntry(BaseModel):
     cumulative_pnl: float
     action: str
     confidence: float
+
+
+# ---------------------------------------------------------------------------
+# Structured Outcome Analysis (Phase 6 — Feedback Loop Enhancement)
+# ---------------------------------------------------------------------------
+
+_FAILURE_MODE = Literal[
+    "late_entry",
+    "false_breakout",
+    "sentiment_reversal",
+    "regime_change",
+    "correct_direction_bad_timing",
+    "wrong_direction",
+    "low_agreement_taken",
+    "unknown",
+]
+
+
+class StructuredOutcomeAnalysis(BaseModel):
+    """Rich post-trade analysis extending OutcomeResponse with v2 analytics.
+
+    Captures the state of independent analysis tracks and numerical TA
+    indicators at signal time vs outcome time, enabling targeted pattern
+    learning and failure-mode classification.
+    """
+
+    ticker: str
+    signal_direction: str = ""
+    actual_outcome: Literal["win", "loss", "breakeven"] = "breakeven"
+    pnl_pct: float = 0.0
+
+    track_agreement_score: float = Field(
+        default=0.0, ge=0.0, le=1.0, description="Agreement score at signal time"
+    )
+    tracks_that_agreed_with_outcome: list[str] = Field(default_factory=list)
+    tracks_that_disagreed_with_outcome: list[str] = Field(default_factory=list)
+
+    ema_cross_age_at_signal: int = Field(
+        default=-1, description="Candles since last EMA cross at signal time (-1 = unknown)"
+    )
+    rsi_at_signal: float = Field(default=50.0, description="RSI at signal time")
+    rsi_at_outcome: float = Field(default=50.0, description="RSI at outcome time")
+    adx_at_signal: float = Field(default=0.0, description="ADX at signal time")
+    momentum_score_at_signal: float = Field(
+        default=0.0, description="Composite momentum score at signal time"
+    )
+    momentum_score_at_outcome: float = Field(
+        default=0.0, description="Composite momentum score at outcome time"
+    )
+
+    failure_mode: _FAILURE_MODE = "unknown"
+    lesson: str = ""
+
+    slippage_pct: float | None = Field(
+        default=None, description="(fill_price - signal_price) / signal_price * 100"
+    )
+    time_to_execution_minutes: float | None = Field(
+        default=None, description="Minutes from signal generation to trade execution"
+    )
+    trader_followed_signal: bool | None = Field(
+        default=None, description="Whether the trader followed the signal exactly"
+    )
 
 
 # ---------------------------------------------------------------------------

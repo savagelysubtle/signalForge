@@ -372,7 +372,7 @@ async def confirm_match(
 
     rec_resp = (
         await client.table("recommendations")
-        .select("ticker, entry_price, action, stop_loss, take_profit")
+        .select("ticker, entry_price, action, stop_loss, take_profit, created_at")
         .eq("id", rec_id)
         .maybe_single()
         .execute()
@@ -445,6 +445,23 @@ async def confirm_match(
                 f"Commission: ${commission:.2f} {match.get('currency', 'CAD')}."
             ),
         }
+
+        # Phase 6: Slippage — signal price vs actual fill
+        signal_price = rec_data.get("entry_price")
+        fill_price = match["avg_price"]
+        if signal_price and fill_price and signal_price > 0:
+            slippage = ((fill_price - signal_price) / signal_price) * 100
+            brokerage_fields["slippage_pct"] = round(slippage, 4)
+
+        # Phase 6: Time-to-execution — signal creation to trade fill
+        signal_created = rec_data.get("created_at")
+        executed_at = match.get("executed_at")
+        if signal_created and executed_at:
+            from services.trade_matcher import _compute_execution_lag_minutes
+
+            tte = _compute_execution_lag_minutes(signal_created, executed_at)
+            if tte is not None:
+                brokerage_fields["time_to_execution_minutes"] = round(tte, 1)
 
         if has_existing:
             outcome_id = existing_outcome.data["id"]

@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import type { Recommendation, DebateCase, TrackAgreement } from '../../types';
+import type { Recommendation, DebateCase, TrackAgreement, ConfidenceBreakdown, SignalStrength } from '../../types';
 import { motion, AnimatePresence } from 'motion/react';
-import { ShieldAlert, ChevronDown, ChevronUp, Ban, Eye } from 'lucide-react';
+import { ShieldAlert, ChevronDown, ChevronUp, Ban, Eye, Gauge } from 'lucide-react';
 import clsx from 'clsx';
 
 interface SynthesisTabProps {
@@ -77,6 +77,93 @@ function TrackAgreementPanel({ agreement }: { agreement: TrackAgreement }) {
               <li key={i} className="flex items-start gap-2 text-xs text-accent-alert">
                 <span className="mt-1 w-1.5 h-1.5 rounded-full shrink-0 bg-accent-alert" />
                 {c}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const SIGNAL_STRENGTH_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
+  strong:   { label: 'STRONG',   color: 'text-accent-profit',   bg: 'bg-accent-profit/15' },
+  moderate: { label: 'MODERATE', color: 'text-accent-alert',    bg: 'bg-accent-alert/15' },
+  weak:     { label: 'WEAK',     color: 'text-accent-loss',     bg: 'bg-accent-loss/15' },
+  no_edge:  { label: 'NO EDGE',  color: 'text-text-muted',      bg: 'bg-text-muted/15' },
+};
+
+const BREAKDOWN_COMPONENTS: { key: keyof ConfidenceBreakdown; label: string; max: number }[] = [
+  { key: 'track_agreement',    label: 'Track Agreement',    max: 0.30 },
+  { key: 'technical_strength', label: 'Technical Strength', max: 0.20 },
+  { key: 'trend_alignment',    label: 'Trend Alignment',    max: 0.20 },
+  { key: 'historical_pattern', label: 'Historical Pattern', max: 0.20 },
+  { key: 'regime_fit',         label: 'Regime Fit',         max: 0.10 },
+];
+
+function ConfidenceBreakdownPanel({ breakdown, rawConfidence, signalStrength }: {
+  breakdown: ConfidenceBreakdown;
+  rawConfidence: number | null;
+  signalStrength: SignalStrength | null;
+}) {
+  const strengthCfg = signalStrength ? SIGNAL_STRENGTH_CONFIG[signalStrength] : null;
+
+  return (
+    <div className="bg-bg-concrete rounded-lg border border-border-gutter p-6 mb-6">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <Gauge className="w-4 h-4 text-accent-signal" />
+          <h3 className="text-sm font-semibold text-text-secondary font-body">Confidence Breakdown</h3>
+        </div>
+        {strengthCfg && (
+          <span className={clsx('text-xs font-display font-semibold px-2.5 py-1 rounded', strengthCfg.bg, strengthCfg.color)}>
+            {strengthCfg.label}
+          </span>
+        )}
+      </div>
+
+      {rawConfidence != null && (
+        <div className="flex items-center gap-2 mb-4 text-xs text-text-muted font-body">
+          <span>GPT raw: {Math.round(rawConfidence * 100)}%</span>
+          <span className="text-text-muted/50">→</span>
+          <span className="text-text-primary font-semibold">Calibrated: {Math.round(breakdown.total * 100)}%</span>
+        </div>
+      )}
+
+      <div className="space-y-3 mb-4">
+        {BREAKDOWN_COMPONENTS.map(({ key, label, max }) => {
+          const value = breakdown[key] as number;
+          const fillPct = max > 0 ? Math.min((value / max) * 100, 100) : 0;
+          return (
+            <div key={key}>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs text-text-muted font-body">{label}</span>
+                <span className="text-xs font-display font-semibold text-text-secondary tabular-nums">
+                  {value.toFixed(2)} / {max.toFixed(2)}
+                </span>
+              </div>
+              <div className="h-1.5 bg-bg-void rounded-full overflow-hidden">
+                <div
+                  className={clsx(
+                    'h-full rounded-full transition-all',
+                    fillPct >= 70 ? 'bg-accent-profit' : fillPct >= 40 ? 'bg-accent-alert' : 'bg-accent-loss',
+                  )}
+                  style={{ width: `${fillPct}%` }}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {breakdown.penalties_applied.length > 0 && (
+        <div>
+          <h4 className="text-xs font-semibold text-accent-alert mb-1.5 font-body">Penalties Applied</h4>
+          <ul className="space-y-1">
+            {breakdown.penalties_applied.map((p, i) => (
+              <li key={i} className="flex items-start gap-2 text-xs text-accent-alert">
+                <span className="mt-1 w-1.5 h-1.5 rounded-full shrink-0 bg-accent-alert" />
+                {p}
               </li>
             ))}
           </ul>
@@ -244,6 +331,15 @@ export function SynthesisTab({ recommendation }: SynthesisTabProps) {
       {/* Track Agreement */}
       {recommendation.track_agreement && (
         <TrackAgreementPanel agreement={recommendation.track_agreement} />
+      )}
+
+      {/* Confidence Breakdown (Phase 7) */}
+      {recommendation.confidence_breakdown && (
+        <ConfidenceBreakdownPanel
+          breakdown={recommendation.confidence_breakdown}
+          rawConfidence={recommendation.raw_gpt_confidence ?? null}
+          signalStrength={recommendation.signal_strength ?? null}
+        />
       )}
 
       {/* Confidence Adjustment */}

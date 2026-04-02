@@ -346,6 +346,35 @@ def _bare_symbol(ticker: str) -> str:
     return ticker.split(":")[-1].upper()
 
 
+def _compute_execution_lag_minutes(
+    signal_created: str,
+    executed_at: str,
+) -> float | None:
+    """Compute minutes between signal creation and trade execution.
+
+    Args:
+        signal_created: ISO timestamp of the recommendation creation.
+        executed_at: ISO timestamp of the trade execution.
+
+    Returns:
+        Minutes elapsed, or None if parsing fails.
+    """
+    try:
+        # Handle both timezone-aware and naive ISO strings
+        created_dt = datetime.fromisoformat(signal_created.replace("Z", "+00:00"))
+        executed_dt = datetime.fromisoformat(executed_at.replace("Z", "+00:00"))
+
+        if created_dt.tzinfo is None:
+            created_dt = created_dt.replace(tzinfo=UTC)
+        if executed_dt.tzinfo is None:
+            executed_dt = executed_dt.replace(tzinfo=UTC)
+
+        delta = executed_dt - created_dt
+        return delta.total_seconds() / 60.0
+    except ValueError, TypeError:
+        return None
+
+
 def _score_match(order: dict[str, Any], rec: dict[str, Any]) -> tuple[float, list[str]]:
     """Score how well a Questrade order matches a SignalForge recommendation.
 
@@ -423,7 +452,7 @@ def _days_between(ts1: str, ts2: str) -> float | None:
         if dt2.tzinfo is None:
             dt2 = dt2.replace(tzinfo=UTC)
         return abs((dt1 - dt2).total_seconds()) / 86400.0
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return None
 
 
@@ -543,6 +572,21 @@ async def _auto_confirm_and_follow(
                 f"Commission: ${commission:.2f} {order.get('currency', 'CAD')}."
             ),
         }
+
+        # Phase 6: Slippage — signal price vs actual fill
+        signal_price = rec.get("entry_price")
+        fill_price = order["avg_price"]
+        if signal_price and fill_price and signal_price > 0:
+            slippage = ((fill_price - signal_price) / signal_price) * 100
+            outcome_fields["slippage_pct"] = round(slippage, 4)
+
+        # Phase 6: Time-to-execution — signal creation to trade fill
+        signal_created = rec.get("created_at")
+        executed_at = order.get("executed_at")
+        if signal_created and executed_at:
+            tte = _compute_execution_lag_minutes(signal_created, executed_at)
+            if tte is not None:
+                outcome_fields["time_to_execution_minutes"] = round(tte, 1)
 
         if has_existing:
             await (
