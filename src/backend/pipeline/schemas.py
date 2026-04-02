@@ -421,6 +421,10 @@ class Recommendation(BaseModel):
         le=1.0,
         description="Original GPT confidence before calibration adjustments",
     )
+    # Signal freshness — set by the orchestrator at recommendation-save time
+    signal_generated_at: str | None = None  # ISO 8601 UTC timestamp when GPT emitted this signal
+    price_at_signal: float | None = None  # Live market price at the moment GPT ran
+    entry_valid_window: str | None = None  # GPT-estimated window e.g. "2 hours", "1-2 trading days"
 
 
 class DebateCaseList(BaseModel):

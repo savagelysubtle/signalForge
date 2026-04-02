@@ -634,10 +634,20 @@ async def run_pipeline(
     )
     sector_consensus = _aggregate_sector_sentiment(result.sentiment_analyses, screening)
 
+    # Re-fetch quotes immediately before GPT so entry prices are anchored to
+    # the freshest available price, not the price captured before Claude ran.
+    if ticker_symbols:
+        try:
+            live_quotes = await fetch_quotes(ticker_symbols)
+            logger.info("Re-fetched %d live quotes before GPT stage", len(live_quotes))
+        except Exception as exc:
+            logger.warning("Pre-GPT live quote refresh failed (using prior quotes): %s", exc)
+
     logger.info("Stage 4 GPT: ticker_symbols=%s", ticker_symbols)
     if ticker_symbols:
         try:
             reflection_context = await load_reflection_context(user_id)
+            gpt_signal_time = datetime.now(tz=UTC)
             recommendations, gpt_metadata_list = await asyncio.wait_for(
                 run_debate(
                     ticker_symbols,
@@ -654,6 +664,12 @@ async def run_pipeline(
                 ),
                 timeout=STAGE_TIMEOUTS["gpt"],
             )
+            # Stamp freshness metadata onto each recommendation
+            signal_ts = gpt_signal_time.isoformat()
+            for rec in recommendations:
+                rec.signal_generated_at = signal_ts
+                if live_quotes and rec.ticker in live_quotes:
+                    rec.price_at_signal = live_quotes[rec.ticker].price
             result.recommendations = recommendations
             for gm in gpt_metadata_list:
                 await _save_stage_output(run_id, gm)
@@ -1083,12 +1099,16 @@ async def _run_pipeline_v2(
     if ticker_symbols:
         try:
             reflection_context = await load_reflection_context(user_id)
-            live_quotes: dict = {}
+            # Fetch quotes immediately before GPT so entry prices anchor to the
+            # freshest available price (Gemini+Claude may have taken several minutes).
+            live_quotes_v2: dict = {}
             try:
-                live_quotes = await fetch_quotes(ticker_symbols)
+                live_quotes_v2 = await fetch_quotes(ticker_symbols)
+                logger.info("v2: Fetched %d live quotes before GPT stage", len(live_quotes_v2))
             except Exception as exc:
                 logger.warning("v2: Live quote fetch failed: %s", exc)
 
+            gpt_signal_time_v2 = datetime.now(tz=UTC)
             recommendations, gpt_metadata_list = await asyncio.wait_for(
                 run_debate_v2(
                     ticker_symbols,
@@ -1103,10 +1123,16 @@ async def _run_pipeline_v2(
                     fmp_context=fmp_map or None,
                     regime_context=regime_context,
                     sector_consensus=sector_consensus,
-                    live_quotes=live_quotes or None,
+                    live_quotes=live_quotes_v2 or None,
                 ),
                 timeout=STAGE_TIMEOUTS["gpt"],
             )
+            # Stamp freshness metadata onto each recommendation
+            signal_ts_v2 = gpt_signal_time_v2.isoformat()
+            for rec in recommendations:
+                rec.signal_generated_at = signal_ts_v2
+                if live_quotes_v2 and rec.ticker in live_quotes_v2:
+                    rec.price_at_signal = live_quotes_v2[rec.ticker].price
             result.recommendations = recommendations
             for gm in gpt_metadata_list:
                 await _save_stage_output(run_id, gm)
@@ -1340,6 +1366,9 @@ async def _save_recommendations(
             "judge_reasoning": rec.judge_reasoning,
             "key_factors": json.dumps(rec.key_factors),
             "warnings": json.dumps(rec.warnings) if rec.warnings else None,
+            "signal_generated_at": rec.signal_generated_at,
+            "price_at_signal": rec.price_at_signal,
+            "entry_valid_window": rec.entry_valid_window,
         }
         for rec in recommendations
     ]

@@ -181,6 +181,10 @@ export interface Recommendation {
   confidence_breakdown: ConfidenceBreakdown | null;
   signal_strength: SignalStrength | null;
   raw_gpt_confidence: number | null;
+  // Signal freshness — set by the orchestrator at recommendation-save time
+  signal_generated_at: string | null; // ISO 8601 UTC
+  price_at_signal: number | null;
+  entry_valid_window: string | null; // e.g. "1-2 hours", "1-2 trading days"
 }
 
 // ---------------------------------------------------------------------------

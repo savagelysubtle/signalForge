@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import type { Recommendation, DebateCase, TrackAgreement, ConfidenceBreakdown, SignalStrength } from '../../types';
 import { motion, AnimatePresence } from 'motion/react';
-import { ShieldAlert, ChevronDown, ChevronUp, Ban, Eye, Gauge } from 'lucide-react';
+import { ShieldAlert, ChevronDown, ChevronUp, Ban, Eye, Gauge, Clock, AlertTriangle } from 'lucide-react';
 import clsx from 'clsx';
 
 interface SynthesisTabProps {
@@ -181,6 +181,7 @@ function TradeParams({ rec }: { rec: Recommendation }) {
     { label: 'R/R Ratio', value: rec.risk_reward_ratio != null ? rec.risk_reward_ratio.toFixed(1) : null },
     { label: 'Position', value: rec.position_size_pct > 0 ? `${rec.position_size_pct.toFixed(1)}%` : null },
     { label: 'Hold', value: rec.holding_period || null },
+    { label: 'Entry Window', value: rec.entry_valid_window && rec.entry_valid_window !== 'N/A' ? rec.entry_valid_window : null },
   ].filter(p => p.value != null);
 
   if (params.length === 0) return null;
@@ -263,6 +264,83 @@ function DebateCaseSection({ debateCase, title }: { debateCase: DebateCase; titl
   );
 }
 
+function useSignalAge(signalGeneratedAt: string | null): { label: string; minutes: number } {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, []);
+  if (!signalGeneratedAt) return { label: 'Unknown age', minutes: -1 };
+  const minutes = Math.floor((now - new Date(signalGeneratedAt).getTime()) / 60_000);
+  if (minutes < 1) return { label: 'Just now', minutes: 0 };
+  if (minutes < 60) return { label: `${minutes}m ago`, minutes };
+  const hours = Math.floor(minutes / 60);
+  const rem = minutes % 60;
+  return { label: rem > 0 ? `${hours}h ${rem}m ago` : `${hours}h ago`, minutes };
+}
+
+function SignalFreshnessBar({ rec }: { rec: Recommendation }) {
+  const isActionable = rec.action === 'BUY' || rec.action === 'SHORT';
+  const { label: ageLabel, minutes } = useSignalAge(rec.signal_generated_at);
+
+  // Only show for actionable signals with freshness data
+  if (!isActionable || (!rec.signal_generated_at && !rec.entry_valid_window)) return null;
+
+  const isStale = minutes >= 120;
+  const isWarning = minutes >= 45 && minutes < 120;
+
+  const barColor = isStale
+    ? 'border-accent-loss/40 bg-accent-loss/8'
+    : isWarning
+      ? 'border-accent-alert/40 bg-accent-alert/8'
+      : 'border-accent-profit/40 bg-accent-profit/8';
+
+  const iconColor = isStale ? 'text-accent-loss' : isWarning ? 'text-accent-alert' : 'text-accent-profit';
+  const labelColor = isStale ? 'text-accent-loss' : isWarning ? 'text-accent-alert' : 'text-accent-profit';
+
+  return (
+    <div className={clsx('rounded-lg border p-4 mb-6 flex flex-wrap items-center gap-x-6 gap-y-2', barColor)}>
+      <div className="flex items-center gap-2 min-w-0">
+        {isStale ? (
+          <AlertTriangle className={clsx('w-4 h-4 shrink-0', iconColor)} />
+        ) : (
+          <Clock className={clsx('w-4 h-4 shrink-0', iconColor)} />
+        )}
+        <div>
+          <div className="text-xs text-text-muted font-body">Signal age</div>
+          <div className={clsx('text-sm font-display font-semibold tabular-nums', labelColor)}>
+            {ageLabel}
+          </div>
+        </div>
+      </div>
+
+      {rec.price_at_signal != null && (
+        <div className="min-w-0">
+          <div className="text-xs text-text-muted font-body">Price at signal</div>
+          <div className="text-sm font-display font-semibold tabular-nums text-text-primary">
+            ${rec.price_at_signal.toFixed(2)}
+          </div>
+        </div>
+      )}
+
+      {rec.entry_valid_window && rec.entry_valid_window !== 'N/A' && (
+        <div className="min-w-0">
+          <div className="text-xs text-text-muted font-body">Valid window</div>
+          <div className="text-sm font-display font-semibold text-text-primary">
+            {rec.entry_valid_window}
+          </div>
+        </div>
+      )}
+
+      {isStale && (
+        <div className="w-full text-xs text-accent-loss font-body mt-1">
+          Entry conditions may have changed — verify current price before acting.
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function SynthesisTab({ recommendation }: SynthesisTabProps) {
   const [reasoningExpanded, setReasoningExpanded] = useState(false);
 
@@ -303,6 +381,9 @@ export function SynthesisTab({ recommendation }: SynthesisTabProps) {
           />
         </div>
       </div>
+
+      {/* Signal Freshness */}
+      <SignalFreshnessBar rec={recommendation} />
 
       {/* NO_TRADE / WATCH callout */}
       {(recommendation.action === 'NO_TRADE' || recommendation.action === 'WATCH') && (

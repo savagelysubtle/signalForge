@@ -26,11 +26,11 @@ if TYPE_CHECKING:
 
 BULL_PROMPT_VERSION = "v3"
 BEAR_PROMPT_VERSION = "v3"
-JUDGE_PROMPT_VERSION = "v9"
+JUDGE_PROMPT_VERSION = "v10"
 
 BULL_PROMPT_VERSION_V2 = "v4"
 BEAR_PROMPT_VERSION_V2 = "v4"
-JUDGE_PROMPT_VERSION_V2 = "v10"
+JUDGE_PROMPT_VERSION_V2 = "v11"
 
 _BIAS_SCORE: dict[str, int] = {
     "strongly_bullish": 2,
@@ -157,10 +157,20 @@ Return a JSON object with this exact structure:
         "agreement_score": <float from 0.0 to 1.0>,
         "conflicts": ["<conflict description 1>", ...]
       },
-      "confidence_adjustment": "<why confidence was raised or lowered>"
+      "confidence_adjustment": "<why confidence was raised or lowered>",
+      "entry_valid_window": "<how long this entry signal remains actionable, e.g. '1-2 hours', '1 trading day', '2-3 trading days'>"
     }
   ]
 }
+
+entry_valid_window guidance:
+- This tells the user how long after receiving this signal the entry price is still valid.
+- Scalp / intraday setups (15m, 1H charts): "1-2 hours" or "rest of session"
+- Swing setups (4H, D charts): "1-2 trading days"
+- Position / trend setups (D, W charts): "3-5 trading days"
+- If price is extended and a pullback entry is required: "valid on pullback to $X — no time limit but may not trigger"
+- For HOLD / WATCH / NO_TRADE: "N/A"
+- Be specific. The user needs to know whether to act now or set an alert.
 
 Decision framework:
 - BUY: Bull case significantly outweighs bear case, with favorable risk/reward
@@ -390,10 +400,20 @@ Return a JSON object with this exact structure:
         "agreement_score": <float from 0.0 to 1.0>,
         "conflicts": ["<conflict description 1>", ...]
       },
-      "confidence_adjustment": "<why confidence was raised or lowered>"
+      "confidence_adjustment": "<why confidence was raised or lowered>",
+      "entry_valid_window": "<how long this entry signal remains actionable, e.g. '1-2 hours', '1 trading day', '2-3 trading days'>"
     }
   ]
 }
+
+entry_valid_window guidance:
+- This tells the user how long after receiving this signal the entry price is still valid.
+- Scalp / intraday setups (15m, 1H charts): "1-2 hours" or "rest of session"
+- Swing setups (4H, D charts): "1-2 trading days"
+- Position / trend setups (D, W charts): "3-5 trading days"
+- If price is extended and a pullback entry is required: "valid on pullback to $X — no time limit but may not trigger"
+- For HOLD / WATCH / NO_TRADE: "N/A"
+- Be specific. The user needs to know whether to act now or set an alert.
 
 VERDICT REQUIREMENTS — your verdict MUST explicitly state:
 1. Which track(s) you weighted most heavily and WHY, citing specific data points

@@ -345,6 +345,9 @@ async def _load_recommendations(
                 judge_reasoning=r["judge_reasoning"] or "",
                 key_factors=json.loads(r["key_factors"]) if r["key_factors"] else [],
                 warnings=json.loads(r["warnings"]) if r["warnings"] else [],
+                signal_generated_at=r.get("signal_generated_at"),
+                price_at_signal=r.get("price_at_signal"),
+                entry_valid_window=r.get("entry_valid_window"),
             )
         )
     return recs
