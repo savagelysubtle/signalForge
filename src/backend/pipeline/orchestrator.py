@@ -981,10 +981,18 @@ async def _run_pipeline_v2(
         )
         logger.warning("v2: Numerical TA stage failed: %s", exc)
 
+    # ── Live Quotes — fetch once for Claude, GPT re-fetches its own later ─
+    claude_live_quotes: dict = {}
+    try:
+        claude_live_quotes = await fetch_quotes(ticker_symbols)
+        logger.info("v2: Fetched %d live quotes for Claude", len(claude_live_quotes))
+    except Exception as exc:
+        logger.warning("v2: Live quote fetch for Claude failed (non-critical): %s", exc)
+
     # ── Three Independent Parallel Tracks ────────────────────────────────
     # Track A: Perplexity results already collected above (screening)
     # Track B: Gemini (independent — NO Perplexity data injected)
-    # Track C: Claude (numerical TA + chart confirmation — NO sentiment)
+    # Track C: Claude (numerical TA + chart + live quotes — NO sentiment)
 
     async def _track_b_gemini() -> tuple[list[SentimentAnalysis], list[dict]]:
         """Track B: Independent sentiment via Gemini (no Perplexity data)."""
@@ -998,7 +1006,7 @@ async def _run_pipeline_v2(
         )
 
     async def _track_c_claude() -> tuple[list[ChartAnalysis], list[dict]]:
-        """Track C: Technical analysis with numerical TA (no sentiment)."""
+        """Track C: Technical analysis with numerical TA + live quotes (no sentiment)."""
         return await run_chart_analysis_v2(
             ticker_symbols,
             config,
@@ -1006,6 +1014,7 @@ async def _run_pipeline_v2(
             run_id,
             user_id,
             regime_context=regime_context,
+            live_quotes=claude_live_quotes or None,
         )
 
     gemini_result: tuple[list[SentimentAnalysis], list[dict]] = ([], [])
