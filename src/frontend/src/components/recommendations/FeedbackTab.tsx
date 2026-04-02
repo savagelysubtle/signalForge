@@ -22,6 +22,7 @@ import { notifyFeedbackChanged, useFeedbackSync } from "../../lib/feedbackSync";
 import type {
   Recommendation,
   RecommendationWithStatus,
+  RecommendationAction,
   DecisionCreate,
   OutcomeCreate,
 } from "../../types";
@@ -570,7 +571,7 @@ function OutcomeSection({
 }: {
   decisionId: string;
   outcomeId?: string;
-  action: "BUY" | "SHORT" | "HOLD";
+  action: RecommendationAction;
   isQuestrade?: boolean;
   initialValues?: OutcomeInitialValues;
   onComplete: () => void;

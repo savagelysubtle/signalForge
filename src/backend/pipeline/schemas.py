@@ -7,11 +7,46 @@ downstream. If it's not a validated model, it's a bug.
 from __future__ import annotations
 
 from datetime import datetime
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from utils.ticker import normalize_ticker
+
+# ---------------------------------------------------------------------------
+# Recommendation Action Enum
+# ---------------------------------------------------------------------------
+
+
+class RecommendationAction(StrEnum):
+    """Valid recommendation actions for the pipeline judge."""
+
+    BUY = "BUY"
+    SHORT = "SHORT"
+    HOLD = "HOLD"
+    NO_TRADE = "NO_TRADE"
+    WATCH = "WATCH"
+
+
+# ---------------------------------------------------------------------------
+# Track Agreement (v2 pipeline — independent track alignment)
+# ---------------------------------------------------------------------------
+
+_DIRECTION = Literal["bullish", "bearish", "neutral"]
+
+
+class TrackAgreement(BaseModel):
+    """How the three independent analysis tracks aligned."""
+
+    perplexity_direction: _DIRECTION = "neutral"
+    gemini_direction: _DIRECTION = "neutral"
+    claude_direction: _DIRECTION = "neutral"
+    agreement_score: float = Field(
+        ge=0.0, le=1.0, default=0.0, description="0.0 = full disagreement, 1.0 = unanimous"
+    )
+    conflicts: list[str] = Field(default_factory=list)
+
 
 # ---------------------------------------------------------------------------
 # Regime Classifier (Stage 0.5)
@@ -119,8 +154,14 @@ class IndicatorReading(BaseModel):
     notes: str = ""
 
 
-class ChartAnalysis(BaseModel):
-    """Complete output from Claude Vision chart analysis."""
+class TechnicalAssessment(BaseModel):
+    """Claude's technical analysis output — unified v1/v2 model.
+
+    Backward-compatible with v1 ``ChartAnalysis`` data.  When deserializing
+    old v1 records, string confidence values ("high"/"medium"/"low") are
+    auto-converted to floats via the ``_normalize_confidence`` validator.
+    New v2 fields default to ``None``/empty so old data deserializes cleanly.
+    """
 
     ticker: str
     timeframe: str
@@ -130,18 +171,49 @@ class ChartAnalysis(BaseModel):
     def _clean_ticker(cls, v: str) -> str:
         return normalize_ticker(v) if isinstance(v, str) else v
 
+    # --- Shared fields (both v1 and v2) ---
     current_price: float | None = None
-    trend_direction: Literal["bullish", "bearish", "neutral", "transitioning"]
-    trend_strength: Literal["strong", "moderate", "weak"]
+    trend_direction: Literal["bullish", "bearish", "neutral", "transitioning"] = "neutral"
     key_levels: list[TechnicalLevel] = Field(default_factory=list)
     patterns_detected: list[str] = Field(default_factory=list)
     indicator_readings: list[IndicatorReading] = Field(default_factory=list)
     volume_analysis: str = ""
-    overall_bias: Literal["strongly_bullish", "bullish", "neutral", "bearish", "strongly_bearish"]
-    confidence: Literal["high", "medium", "low"]
-    summary: str
+    overall_bias: str = "neutral"
+    summary: str = ""
     chart_image_path: str = ""
     annotated_chart_path: str = ""
+
+    # --- Confidence (float in v2, auto-converted from string for v1) ---
+    confidence: float = Field(ge=0.0, le=1.0, default=0.5)
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def _normalize_confidence(cls, v: object) -> float:
+        """Accept v1 string literals and convert to float."""
+        if isinstance(v, str):
+            return {"high": 0.85, "medium": 0.6, "low": 0.35}.get(v, 0.5)
+        if isinstance(v, (int, float)):
+            return float(v)
+        return 0.5
+
+    # --- v1-only fields (preserved for backward compat, defaults for v2) ---
+    trend_strength: str = "moderate"
+
+    # --- v2-only fields (new in Phase 4) ---
+    ema_assessment: str = ""
+    momentum_assessment: str = ""
+    volume_assessment: str = ""
+    trend_assessment: str = ""
+    chart_confirms_data: bool = True
+    chart_discrepancies: list[str] = Field(default_factory=list)
+    nearest_support: float | None = None
+    nearest_resistance: float | None = None
+    suggested_stop_zone: str = ""
+    timeframe_alignment_note: str = ""
+
+
+# Backward compat: old imports and v1 pipeline code keep working
+ChartAnalysis = TechnicalAssessment
 
 
 # ---------------------------------------------------------------------------
@@ -284,7 +356,7 @@ class Recommendation(BaseModel):
 
     id: str = ""
     ticker: str
-    action: Literal["BUY", "SHORT", "HOLD"]
+    action: RecommendationAction
 
     @field_validator("ticker", mode="before")
     @classmethod
@@ -305,6 +377,8 @@ class Recommendation(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     risk_violations: list[str] = Field(default_factory=list)
     risk_approved: bool = True
+    track_agreement: TrackAgreement | None = None
+    confidence_adjustment: str = ""
 
 
 class DebateCaseList(BaseModel):
@@ -586,6 +660,34 @@ class StrategyConfig(BaseModel):
     recommended: bool = False
     strategy_type: str = "swing"
 
+    # Pipeline version (v1 = legacy sequential, v2 = parallel independent tracks)
+    pipeline_version: Literal["v1", "v2"] = "v1"
+
+
+# ---------------------------------------------------------------------------
+# Risk Assessment (Pipeline v2 post-filter)
+# ---------------------------------------------------------------------------
+
+
+class RiskAssessment(BaseModel):
+    """Per-ticker risk assessment from the post-filter stage.
+
+    In v2 pipeline, the risk screener runs AFTER all three parallel tracks
+    complete. Instead of removing tickers, it enriches GPT's input with
+    risk flags so GPT can factor risk into NO_TRADE/WATCH decisions.
+    """
+
+    ticker: str
+    risk_flags: list[str] = Field(default_factory=list)
+    risk_approved: bool = True
+    risk_score: float = Field(default=1.0, ge=0.0, le=1.0)
+    reason: str = ""
+
+    @field_validator("ticker", mode="before")
+    @classmethod
+    def _clean_ticker(cls, v: str) -> str:
+        return normalize_ticker(v) if isinstance(v, str) else v
+
 
 # ---------------------------------------------------------------------------
 # Feedback Loop (Phase 5)
@@ -710,7 +812,7 @@ class RecommendationWithStatus(BaseModel):
     id: str
     run_id: str
     ticker: str
-    action: Literal["BUY", "SHORT", "HOLD"]
+    action: RecommendationAction
     confidence: float
     entry_price: float | None = None
     stop_loss: float | None = None

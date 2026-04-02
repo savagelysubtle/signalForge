@@ -53,17 +53,30 @@ export interface ChartAnalysis {
   timeframe: string;
   current_price: number | null;
   trend_direction: "bullish" | "bearish" | "neutral" | "transitioning";
-  trend_strength: "strong" | "moderate" | "weak";
+  trend_strength: string;
   key_levels: TechnicalLevel[];
   patterns_detected: string[];
   indicator_readings: IndicatorReading[];
   volume_analysis: string;
-  overall_bias: "strongly_bullish" | "bullish" | "neutral" | "bearish" | "strongly_bearish";
-  confidence: "high" | "medium" | "low";
+  overall_bias: string;
+  confidence: number | string; // float in v2, "high"/"medium"/"low" in v1
   summary: string;
   chart_image_path: string;
   annotated_chart_path: string;
+  // v2 fields (TechnicalAssessment)
+  ema_assessment?: string;
+  momentum_assessment?: string;
+  volume_assessment?: string;
+  trend_assessment?: string;
+  chart_confirms_data?: boolean;
+  chart_discrepancies?: string[];
+  nearest_support?: number | null;
+  nearest_resistance?: number | null;
+  suggested_stop_zone?: string;
+  timeframe_alignment_note?: string;
 }
+
+export type TechnicalAssessment = ChartAnalysis;
 
 // ---------------------------------------------------------------------------
 // Gemini Sentiment Stage (Phase 2)
@@ -107,6 +120,20 @@ export interface SentimentAnalysis {
 }
 
 // ---------------------------------------------------------------------------
+// Recommendation Action + Track Agreement
+// ---------------------------------------------------------------------------
+
+export type RecommendationAction = "BUY" | "SHORT" | "HOLD" | "NO_TRADE" | "WATCH";
+
+export interface TrackAgreement {
+  perplexity_direction: "bullish" | "bearish" | "neutral";
+  gemini_direction: "bullish" | "bearish" | "neutral";
+  claude_direction: "bullish" | "bearish" | "neutral";
+  agreement_score: number; // 0.0 (full disagreement) to 1.0 (unanimous)
+  conflicts: string[];
+}
+
+// ---------------------------------------------------------------------------
 // GPT Debate Stage (Phase 4 — define now, render later)
 // ---------------------------------------------------------------------------
 
@@ -122,7 +149,7 @@ export interface DebateCase {
 export interface Recommendation {
   id: string;
   ticker: string;
-  action: "BUY" | "SHORT" | "HOLD";
+  action: RecommendationAction;
   confidence: number; // 0.0 to 1.0
   entry_price: number | null;
   stop_loss: number | null;
@@ -137,6 +164,8 @@ export interface Recommendation {
   warnings: string[];
   risk_violations: string[];
   risk_approved: boolean;
+  track_agreement: TrackAgreement | null;
+  confidence_adjustment: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -447,7 +476,7 @@ export interface RecommendationWithStatus {
   id: string;
   run_id: string;
   ticker: string;
-  action: "BUY" | "SHORT" | "HOLD";
+  action: RecommendationAction;
   confidence: number;
   entry_price: number | null;
   stop_loss: number | null;

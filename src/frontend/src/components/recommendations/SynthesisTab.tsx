@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import type { Recommendation, DebateCase } from '../../types';
+import type { Recommendation, DebateCase, TrackAgreement } from '../../types';
 import { motion, AnimatePresence } from 'motion/react';
-import { ShieldAlert, ChevronDown, ChevronUp } from 'lucide-react';
+import { ShieldAlert, ChevronDown, ChevronUp, Ban, Eye } from 'lucide-react';
 import clsx from 'clsx';
 
 interface SynthesisTabProps {
@@ -9,15 +9,81 @@ interface SynthesisTabProps {
 }
 
 const ACTION_CONFIG: Record<string, { text: string; color: string; bg: string; border: string }> = {
-  BUY: { text: 'BUY', color: 'text-accent-profit', bg: 'bg-accent-profit/25', border: 'border border-accent-profit/40' },
-  SHORT: { text: 'SHORT', color: 'text-accent-loss', bg: 'bg-accent-loss/25', border: 'border border-accent-loss/40' },
-  HOLD: { text: 'HOLD', color: 'text-accent-alert', bg: 'bg-accent-alert/25', border: 'border border-accent-alert/40' },
+  BUY:      { text: 'BUY',      color: 'text-accent-profit',   bg: 'bg-accent-profit/25',   border: 'border border-accent-profit/40'   },
+  SHORT:    { text: 'SHORT',    color: 'text-accent-loss',     bg: 'bg-accent-loss/25',     border: 'border border-accent-loss/40'     },
+  HOLD:     { text: 'HOLD',     color: 'text-accent-alert',    bg: 'bg-accent-alert/25',    border: 'border border-accent-alert/40'    },
+  NO_TRADE: { text: 'NO TRADE', color: 'text-text-muted',      bg: 'bg-text-muted/25',      border: 'border border-text-muted/40'      },
+  WATCH:    { text: 'WATCH',    color: 'text-accent-electric', bg: 'bg-accent-electric/25', border: 'border border-accent-electric/40' },
 };
 
 function confidenceBarColor(action: string): string {
   if (action === 'BUY') return 'bg-accent-profit';
   if (action === 'SHORT') return 'bg-accent-loss';
+  if (action === 'NO_TRADE') return 'bg-text-muted';
+  if (action === 'WATCH') return 'bg-accent-electric';
   return 'bg-accent-alert';
+}
+
+const DIRECTION_COLOR: Record<string, string> = {
+  bullish: 'text-accent-profit',
+  bearish: 'text-accent-loss',
+  neutral: 'text-text-muted',
+};
+
+function agreementColor(score: number): string {
+  if (score >= 0.9) return 'text-accent-profit';
+  if (score >= 0.5) return 'text-accent-alert';
+  return 'text-accent-loss';
+}
+
+function TrackAgreementPanel({ agreement }: { agreement: TrackAgreement }) {
+  const tracks = [
+    { label: 'Perplexity', direction: agreement.perplexity_direction },
+    { label: 'Gemini', direction: agreement.gemini_direction },
+    { label: 'Claude', direction: agreement.claude_direction },
+  ];
+  const scorePct = Math.round(agreement.agreement_score * 100);
+
+  return (
+    <div className="bg-bg-concrete rounded-lg border border-border-gutter p-6 mb-6">
+      <h3 className="text-sm font-semibold text-text-secondary mb-3 font-body">Track Agreement</h3>
+      <div className="grid grid-cols-3 gap-3 mb-4">
+        {tracks.map(t => (
+          <div key={t.label} className="bg-bg-void rounded-lg p-3 border border-border-gutter text-center">
+            <div className="text-xs text-text-muted mb-1 font-body">{t.label}</div>
+            <div className={clsx('text-sm font-display font-semibold capitalize', DIRECTION_COLOR[t.direction] ?? 'text-text-muted')}>
+              {t.direction}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center gap-3 mb-3">
+        <span className="text-xs text-text-muted font-body">Agreement</span>
+        <div className="flex-1 h-2 bg-bg-void rounded-full overflow-hidden">
+          <div
+            className={clsx('h-full rounded-full transition-all', scorePct >= 80 ? 'bg-accent-profit' : scorePct >= 50 ? 'bg-accent-alert' : 'bg-accent-loss')}
+            style={{ width: `${scorePct}%` }}
+          />
+        </div>
+        <span className={clsx('text-sm font-display font-semibold tabular-nums', agreementColor(agreement.agreement_score))}>
+          {scorePct}%
+        </span>
+      </div>
+      {agreement.conflicts.length > 0 && (
+        <div>
+          <h4 className="text-xs font-semibold text-accent-alert mb-1.5 font-body">Conflicts</h4>
+          <ul className="space-y-1">
+            {agreement.conflicts.map((c, i) => (
+              <li key={i} className="flex items-start gap-2 text-xs text-accent-alert">
+                <span className="mt-1 w-1.5 h-1.5 rounded-full shrink-0 bg-accent-alert" />
+                {c}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function TradeParams({ rec }: { rec: Recommendation }) {
@@ -150,6 +216,43 @@ export function SynthesisTab({ recommendation }: SynthesisTabProps) {
           />
         </div>
       </div>
+
+      {/* NO_TRADE / WATCH callout */}
+      {(recommendation.action === 'NO_TRADE' || recommendation.action === 'WATCH') && (
+        <div className={clsx(
+          'mb-6 rounded-lg border p-4 flex items-start gap-3',
+          recommendation.action === 'NO_TRADE'
+            ? 'bg-text-muted/10 border-text-muted/30'
+            : 'bg-accent-electric/10 border-accent-electric/30',
+        )}>
+          {recommendation.action === 'NO_TRADE' ? (
+            <Ban className="w-5 h-5 text-text-muted shrink-0 mt-0.5" />
+          ) : (
+            <Eye className="w-5 h-5 text-accent-electric shrink-0 mt-0.5" />
+          )}
+          <div>
+            <h3 className={clsx('text-sm font-display font-semibold mb-1', recommendation.action === 'NO_TRADE' ? 'text-text-muted' : 'text-accent-electric')}>
+              {recommendation.action === 'NO_TRADE' ? 'No Trade — Insufficient Conviction' : 'Watchlist — Monitor for Entry'}
+            </h3>
+            {recommendation.confidence_adjustment && (
+              <p className="text-xs text-text-secondary">{recommendation.confidence_adjustment}</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Track Agreement */}
+      {recommendation.track_agreement && (
+        <TrackAgreementPanel agreement={recommendation.track_agreement} />
+      )}
+
+      {/* Confidence Adjustment */}
+      {recommendation.confidence_adjustment && recommendation.action !== 'NO_TRADE' && recommendation.action !== 'WATCH' && (
+        <div className="bg-bg-concrete rounded-lg border border-border-gutter p-4 mb-6">
+          <h3 className="text-xs font-semibold text-text-muted mb-1 font-body">Confidence Adjustment</h3>
+          <p className="text-sm text-text-secondary">{recommendation.confidence_adjustment}</p>
+        </div>
+      )}
 
       {/* Risk Violations */}
       {recommendation.risk_violations && recommendation.risk_violations.length > 0 && (

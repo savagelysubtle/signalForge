@@ -41,6 +41,14 @@ const CONFIDENCE_STYLES: Record<string, { text: string; color: string; bg: strin
   low: { text: 'Low', color: 'text-accent-loss', bg: 'bg-accent-loss/10' },
 };
 
+function resolveConfidence(raw: number | string): { text: string; color: string; bg: string } {
+  if (typeof raw === 'string') return CONFIDENCE_STYLES[raw] ?? CONFIDENCE_STYLES.medium;
+  const pct = Math.round(raw * 100);
+  if (raw >= 0.7) return { text: `${pct}%`, color: 'text-accent-profit', bg: 'bg-accent-profit/10' };
+  if (raw >= 0.5) return { text: `${pct}%`, color: 'text-accent-alert', bg: 'bg-accent-alert/10' };
+  return { text: `${pct}%`, color: 'text-accent-loss', bg: 'bg-accent-loss/10' };
+}
+
 const STRENGTH_BADGE: Record<string, string> = {
   strong: 'bg-accent-signal/15 text-accent-signal',
   moderate: 'bg-bg-concrete text-text-secondary',
@@ -140,8 +148,9 @@ function ExpandableChartImage({ src, alt }: { src: string; alt: string }) {
 
 function AnalysisDetails({ analysis }: { analysis: ChartAnalysis }) {
   const bias = BIAS_CONFIG[analysis.overall_bias] ?? BIAS_CONFIG.neutral;
-  const confidence = CONFIDENCE_STYLES[analysis.confidence] ?? CONFIDENCE_STYLES.medium;
+  const confidence = resolveConfidence(analysis.confidence);
   const trendColor = TREND_COLORS[analysis.trend_direction] ?? 'text-text-primary';
+  const hasV2Fields = !!(analysis.ema_assessment || analysis.momentum_assessment || analysis.trend_assessment);
 
   return (
     <div className="space-y-4">
@@ -153,8 +162,8 @@ function AnalysisDetails({ analysis }: { analysis: ChartAnalysis }) {
             <div className={clsx('text-lg font-display font-bold capitalize', trendColor)}>
               {analysis.trend_direction}
             </div>
-            <span className={clsx('text-xs px-2 py-0.5 rounded mt-1 inline-block', STRENGTH_BADGE[analysis.trend_strength])}>
-              {analysis.trend_strength} trend
+            <span className={clsx('text-xs px-2 py-0.5 rounded mt-1 inline-block', STRENGTH_BADGE[analysis.trend_strength] ?? 'bg-bg-concrete text-text-secondary')}>
+              {analysis.trend_strength}
             </span>
           </div>
           <div>
@@ -174,11 +183,96 @@ function AnalysisDetails({ analysis }: { analysis: ChartAnalysis }) {
         </div>
       </div>
 
+      {/* Chart Data Confirmation (v2) */}
+      {analysis.chart_confirms_data === false && (
+        <div className="bg-accent-loss/10 border border-accent-loss/30 rounded-lg p-4">
+          <h3 className="text-sm font-semibold text-accent-loss mb-1 font-body flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4" />
+            Chart Discrepancy
+          </h3>
+          <p className="text-xs text-accent-loss/80 mb-2">
+            The chart image does not confirm the numerical data.
+          </p>
+          {analysis.chart_discrepancies && analysis.chart_discrepancies.length > 0 && (
+            <ul className="space-y-1">
+              {analysis.chart_discrepancies.map((d, i) => (
+                <li key={i} className="flex items-start gap-2 text-xs text-accent-loss">
+                  <span className="mt-1 w-1.5 h-1.5 rounded-full shrink-0 bg-accent-loss" />
+                  {d}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {/* v2 Assessment Cards */}
+      {hasV2Fields && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {analysis.ema_assessment && (
+            <div className="bg-bg-void rounded-lg p-3 border border-border-gutter">
+              <div className="text-xs text-text-muted mb-1 font-body">EMA Assessment</div>
+              <div className="text-sm text-text-primary">{analysis.ema_assessment}</div>
+            </div>
+          )}
+          {analysis.momentum_assessment && (
+            <div className="bg-bg-void rounded-lg p-3 border border-border-gutter">
+              <div className="text-xs text-text-muted mb-1 font-body">Momentum</div>
+              <div className="text-sm text-text-primary">{analysis.momentum_assessment}</div>
+            </div>
+          )}
+          {(analysis.volume_assessment || analysis.volume_analysis) && (
+            <div className="bg-bg-void rounded-lg p-3 border border-border-gutter">
+              <div className="text-xs text-text-muted mb-1 font-body">Volume</div>
+              <div className="text-sm text-text-primary">{analysis.volume_assessment || analysis.volume_analysis}</div>
+            </div>
+          )}
+          {analysis.trend_assessment && (
+            <div className="bg-bg-void rounded-lg p-3 border border-border-gutter">
+              <div className="text-xs text-text-muted mb-1 font-body">Trend Strength</div>
+              <div className="text-sm text-text-primary">{analysis.trend_assessment}</div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Nearest Support / Resistance (v2) */}
+      {(analysis.nearest_support != null || analysis.nearest_resistance != null) && (
+        <div className="grid grid-cols-2 gap-3">
+          {analysis.nearest_support != null && (
+            <div className="bg-accent-profit/5 border border-accent-profit/20 rounded-lg p-3 text-center">
+              <div className="text-xs text-text-muted mb-1 font-body">Nearest Support</div>
+              <div className="text-lg font-display font-bold text-accent-profit tabular-nums">
+                ${analysis.nearest_support.toFixed(2)}
+              </div>
+            </div>
+          )}
+          {analysis.nearest_resistance != null && (
+            <div className="bg-accent-loss/5 border border-accent-loss/20 rounded-lg p-3 text-center">
+              <div className="text-xs text-text-muted mb-1 font-body">Nearest Resistance</div>
+              <div className="text-lg font-display font-bold text-accent-loss tabular-nums">
+                ${analysis.nearest_resistance.toFixed(2)}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Suggested Stop Zone (v2) */}
+      {analysis.suggested_stop_zone && (
+        <div className="bg-bg-void rounded-lg p-3 border border-border-gutter">
+          <div className="text-xs text-text-muted mb-1 font-body">Suggested Stop Zone</div>
+          <div className="text-sm text-text-primary font-display">{analysis.suggested_stop_zone}</div>
+        </div>
+      )}
+
       {/* Summary */}
-      <div>
-        <h3 className="text-sm font-semibold text-text-secondary mb-2 font-body">Analysis Summary</h3>
-        <p className="text-sm text-text-primary leading-relaxed">{analysis.summary}</p>
-      </div>
+      {analysis.summary && (
+        <div>
+          <h3 className="text-sm font-semibold text-text-secondary mb-2 font-body">Analysis Summary</h3>
+          <p className="text-sm text-text-primary leading-relaxed">{analysis.summary}</p>
+        </div>
+      )}
 
       {/* Key Levels */}
       {analysis.key_levels.length > 0 && (
@@ -238,11 +332,19 @@ function AnalysisDetails({ analysis }: { analysis: ChartAnalysis }) {
         </div>
       )}
 
-      {/* Volume Analysis */}
-      {analysis.volume_analysis && (
+      {/* Volume Analysis (v1 legacy — shown only when no v2 volume_assessment) */}
+      {analysis.volume_analysis && !hasV2Fields && (
         <div>
           <h3 className="text-sm font-semibold text-text-secondary mb-2 font-body">Volume Analysis</h3>
           <p className="text-sm text-text-primary leading-relaxed">{analysis.volume_analysis}</p>
+        </div>
+      )}
+
+      {/* Timeframe Alignment Note (v2) */}
+      {analysis.timeframe_alignment_note && (
+        <div className="bg-bg-void rounded-lg p-3 border border-border-gutter">
+          <div className="text-xs text-text-muted mb-1 font-body">Timeframe Alignment</div>
+          <div className="text-sm text-text-primary">{analysis.timeframe_alignment_note}</div>
         </div>
       )}
     </div>

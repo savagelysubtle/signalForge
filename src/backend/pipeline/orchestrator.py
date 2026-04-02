@@ -33,6 +33,7 @@ from pipeline.schemas import (
     ChartAnalysis,
     ChartError,
     FmpScreenerConfig,
+    MultiTimeframeTechnical,
     PipelineResult,
     Recommendation,
     RegimeOutput,
@@ -41,9 +42,10 @@ from pipeline.schemas import (
     SentimentAnalysis,
     StrategyConfig,
 )
-from pipeline.stages.claude import run_chart_analysis
+from pipeline.stages.claude import run_chart_analysis, run_chart_analysis_v2
 from pipeline.stages.gemini import run_sentiment
 from pipeline.stages.gpt import run_debate
+from pipeline.stages.numerical_ta import run_numerical_ta
 from pipeline.stages.perplexity import (
     run_analysis,
     run_bull_bear_discovery,
@@ -51,6 +53,7 @@ from pipeline.stages.perplexity import (
     run_prompted_discovery,
 )
 from pipeline.stages.regime import classify_regime
+from pipeline.stages.risk_post_filter import pre_filter_tickers, risk_post_filter
 from pipeline.stages.risk_screener import screen_risks
 from pipeline.stages.risk_validator import validate_risks
 from services.chart_image import fetch_annotated_chart
@@ -187,6 +190,21 @@ async def run_pipeline(
                 "Created synthetic strategy from screener overrides: %s",
                 screener_overrides.model_dump(exclude_none=True),
             )
+
+    # Pipeline v2 dispatch: if strategy has pipeline_version="v2", use parallel tracks
+    if config and config.pipeline_version == "v2":
+        return await _run_pipeline_v2(
+            run_id=run_id,
+            config=config,
+            mode=mode,
+            manual_tickers=manual_tickers,
+            user_prompt=user_prompt,
+            user_id=user_id,
+            result=result,
+            start=start,
+        )
+
+    # --- v1 pipeline (existing code, untouched below this line) ---
 
     # Stage 0: FMP Pre-Screening (if strategy has fmp_screener config)
     fmp_candidates: list[FmpEnrichedStock] | None = None
@@ -736,6 +754,443 @@ async def run_pipeline(
 
     has_data = (
         screening or result.sentiment_analyses or result.chart_analyses or result.recommendations
+    )
+    status = "completed" if has_data else ("partial" if result.stage_errors else "failed")
+    await (
+        client.table("pipeline_runs")
+        .update(
+            {
+                "status": status,
+                "completed_at": datetime.now(tz=UTC).isoformat(),
+                "duration_seconds": result.total_duration_seconds,
+                "prompt_versions": json.dumps(result.prompt_versions),
+                "stage_errors": json.dumps(result.stage_errors) if result.stage_errors else None,
+            }
+        )
+        .eq("id", run_id)
+        .execute()
+    )
+
+    return result
+
+
+async def _run_pipeline_v2(
+    *,
+    run_id: str,
+    config: StrategyConfig,
+    mode: Literal["discovery", "analysis", "combined", "prompt"],
+    manual_tickers: list[str] | None,
+    user_prompt: str | None,
+    user_id: str,
+    result: PipelineResult,
+    start: float,
+) -> PipelineResult:
+    """Execute the v2 parallel-track pipeline.
+
+    Three independent analysis tracks (Perplexity, Gemini, Claude) run
+    concurrently after shared FMP + Regime + Numerical TA stages. GPT is
+    the first and only convergence point.
+
+    This function is called from ``run_pipeline()`` when the strategy has
+    ``pipeline_version="v2"``. The v1 code path is untouched.
+
+    Args:
+        run_id: Pipeline run UUID.
+        config: Strategy configuration (guaranteed non-None with v2).
+        mode: Pipeline mode (discovery/analysis/combined/prompt).
+        manual_tickers: Optional manual ticker list.
+        user_prompt: Optional free-form prompt.
+        user_id: User UUID.
+        result: Pre-initialized PipelineResult.
+        start: ``time.perf_counter()`` value from pipeline start.
+
+    Returns:
+        Completed PipelineResult.
+    """
+    client = await get_db()
+
+    # ── Stage 0: FMP Pre-Screening (shared with v1) ─────────────────────
+    fmp_candidates: list[FmpEnrichedStock] | None = None
+    fmp_enabled = (
+        config.fmp_screener is not None and config.fmp_screener.enabled and mode != "analysis"
+    )
+
+    if fmp_enabled and config.fmp_screener:
+        fmp_key = get_api_key("fmp")
+        if fmp_key:
+            try:
+                fmp_start = time.perf_counter()
+                fmp_candidates = await asyncio.wait_for(
+                    screen_and_enrich(config.fmp_screener),
+                    timeout=STAGE_TIMEOUTS["fmp"],
+                )
+                fmp_elapsed_ms = int((time.perf_counter() - fmp_start) * 1000)
+                logger.info("v2: FMP pre-screened %d candidates", len(fmp_candidates))
+                await _save_stage_output(
+                    run_id,
+                    {
+                        "stage": "fmp",
+                        "status": "success",
+                        "model": "fmp-api",
+                        "duration_ms": fmp_elapsed_ms,
+                        "raw_response": json.dumps(
+                            [c.model_dump(mode="json") for c in fmp_candidates]
+                        ),
+                    },
+                )
+            except Exception as exc:
+                logger.warning("v2: FMP screening failed, continuing without: %s", exc)
+                result.stage_errors.append(
+                    {"stage": "fmp", "error": str(exc), "type": type(exc).__name__}
+                )
+
+    fmp_map: dict[str, FmpEnrichedStock] = {}
+    if fmp_candidates:
+        fmp_map = {s.symbol: s for s in fmp_candidates}
+
+    # ── Stage 0.5: Regime Classification (shared with v1) ────────────────
+    regime: RegimeOutput | None = None
+    fmp_key = get_api_key("fmp")
+    if fmp_key:
+        try:
+            sector_perf, (vix_value, vix_label) = await asyncio.gather(
+                fetch_sector_performance(),
+                fetch_vix_quote(),
+            )
+            sector_data = [sp.model_dump() for sp in sector_perf] if sector_perf else None
+        except Exception as exc:
+            logger.warning("v2: FMP regime ground truth fetch failed: %s", exc)
+            sector_data = None
+            vix_value = None
+            vix_label = None
+    else:
+        sector_data = None
+        vix_value = None
+        vix_label = None
+
+    try:
+        regime, regime_metadata = await asyncio.wait_for(
+            classify_regime(
+                run_id, sector_data=sector_data, vix_value=vix_value, vix_label=vix_label
+            ),
+            timeout=STAGE_TIMEOUTS.get("regime", 30),
+        )
+        if regime_metadata:
+            await _save_stage_output(run_id, regime_metadata)
+    except Exception as exc:
+        result.stage_errors.append(
+            {"stage": "regime", "error": str(exc), "type": type(exc).__name__}
+        )
+        logger.warning("v2: Regime classifier failed: %s", exc)
+
+    regime_context = format_regime_header(regime) if regime else ""
+
+    # Re-score FMP with regime-adjusted weights
+    if regime and fmp_candidates and config.fmp_screener:
+        adjusted_config = apply_regime_weight_adjustments(config.fmp_screener, regime.regime_type)
+        fmp_candidates = compute_composite_scores(fmp_candidates, adjusted_config)
+        fmp_candidates.sort(key=lambda s: s.composite_score or 0, reverse=True)
+        fmp_map = {s.symbol: s for s in fmp_candidates}
+
+    # ── Stage 1: Perplexity (get ticker list — same as v1) ───────────────
+    screening: ScreeningResult | None = None
+    try:
+
+        async def _run_perplexity_stage() -> tuple:
+            if mode == "prompt":
+                return await run_prompted_discovery(
+                    user_prompt or "", config, fmp_candidates=fmp_candidates
+                )
+            if mode == "discovery":
+                if config.enable_debate:
+                    return await run_bull_bear_discovery(config, fmp_candidates=fmp_candidates)
+                return await run_discovery(config, fmp_candidates=fmp_candidates)
+            if mode == "analysis":
+                return await run_analysis(manual_tickers or [], config)
+            if mode == "combined":
+                discovery_result, _disc_meta = await run_discovery(
+                    config, fmp_candidates=fmp_candidates
+                )
+                all_tickers = list(manual_tickers or [])
+                if discovery_result:
+                    all_tickers.extend(t.ticker for t in discovery_result.tickers)
+                all_tickers = list(dict.fromkeys(all_tickers))
+                _screening, _meta = await run_analysis(all_tickers, config)
+                if not _screening and discovery_result:
+                    _screening = discovery_result
+                return _screening, _meta
+            return None, {}
+
+        screening, stage_metadata = await asyncio.wait_for(
+            _run_perplexity_stage(),
+            timeout=STAGE_TIMEOUTS["perplexity"],
+        )
+    except Exception as exc:
+        result.stage_errors.append(
+            {"stage": "perplexity", "error": str(exc), "type": type(exc).__name__}
+        )
+        logger.exception("v2: Perplexity stage failed")
+
+    if screening:
+        for td in screening.tickers:
+            td.ticker = normalize_ticker(td.ticker)
+        seen: set[str] = set()
+        unique_tickers = []
+        for td in screening.tickers:
+            if td.ticker not in seen:
+                seen.add(td.ticker)
+                unique_tickers.append(td)
+        screening.tickers = unique_tickers
+        result.screening = screening
+
+    await _save_stage_output(run_id, stage_metadata if screening else {})
+
+    # Build ticker list for parallel tracks
+    ticker_symbols = (
+        [t.ticker for t in screening.tickers]
+        if screening and screening.tickers
+        else list(manual_tickers or [])
+    )
+
+    if not ticker_symbols:
+        return await _finalize_v2(run_id, result, start, client, regime_context)
+
+    # ── Lightweight pre-filter (no LLM) ──────────────────────────────────
+    ticker_symbols = pre_filter_tickers(ticker_symbols, fmp_map, config)
+    result.chart_indicators = config.chart_indicators
+
+    # ── Numerical TA (Phase 1) — before parallel tracks ──────────────────
+    ta_snapshots: list[MultiTimeframeTechnical] = []
+    try:
+        ta_snapshots, ta_metadata = await asyncio.wait_for(
+            run_numerical_ta(ticker_symbols, config),
+            timeout=STAGE_TIMEOUTS.get("numerical_ta", 90.0),
+        )
+        for tm in ta_metadata:
+            await _save_stage_output(run_id, tm)
+    except Exception as exc:
+        result.stage_errors.append(
+            {"stage": "numerical_ta", "error": str(exc), "type": type(exc).__name__}
+        )
+        logger.warning("v2: Numerical TA stage failed: %s", exc)
+
+    # ── Three Independent Parallel Tracks ────────────────────────────────
+    # Track A: Perplexity results already collected above (screening)
+    # Track B: Gemini (independent — NO Perplexity data injected)
+    # Track C: Claude (numerical TA + chart confirmation — NO sentiment)
+
+    async def _track_b_gemini() -> tuple[list[SentimentAnalysis], list[dict]]:
+        """Track B: Independent sentiment via Gemini (no Perplexity data)."""
+        return await run_sentiment(
+            ticker_symbols,
+            config,
+            ticker_news=None,
+            fmp_context=None,
+            ticker_highlights=None,
+            regime_context=regime_context,
+        )
+
+    async def _track_c_claude() -> tuple[list[ChartAnalysis], list[dict]]:
+        """Track C: Technical analysis with numerical TA (no sentiment)."""
+        return await run_chart_analysis_v2(
+            ticker_symbols,
+            config,
+            ta_snapshots,
+            run_id,
+            user_id,
+            regime_context=regime_context,
+        )
+
+    gemini_result: tuple[list[SentimentAnalysis], list[dict]] = ([], [])
+    claude_result: tuple[list[ChartAnalysis], list[dict]] = ([], [])
+
+    try:
+        gemini_result, claude_result = await asyncio.gather(
+            asyncio.wait_for(_track_b_gemini(), timeout=STAGE_TIMEOUTS["gemini"]),
+            asyncio.wait_for(_track_c_claude(), timeout=STAGE_TIMEOUTS["claude"]),
+        )
+    except Exception as exc:
+        logger.error("v2: Parallel track gather failed: %s", exc)
+        result.stage_errors.append(
+            {"stage": "parallel_tracks", "error": str(exc), "type": type(exc).__name__}
+        )
+
+        # Try to salvage individual track results
+        if not gemini_result[0]:
+            try:
+                gemini_result = await asyncio.wait_for(
+                    _track_b_gemini(), timeout=STAGE_TIMEOUTS["gemini"]
+                )
+            except Exception as g_exc:
+                logger.error("v2: Gemini fallback also failed: %s", g_exc)
+
+        if not claude_result[0]:
+            try:
+                claude_result = await asyncio.wait_for(
+                    _track_c_claude(), timeout=STAGE_TIMEOUTS["claude"]
+                )
+            except Exception as c_exc:
+                logger.error("v2: Claude fallback also failed: %s", c_exc)
+
+    sentiments, gemini_metadata_list = gemini_result
+    charts, claude_metadata_list = claude_result
+
+    result.sentiment_analyses = sentiments
+    result.chart_analyses = charts
+
+    for gm in gemini_metadata_list:
+        await _save_stage_output(run_id, gm)
+    for cm in claude_metadata_list:
+        await _save_stage_output(run_id, cm)
+        if cm.get("status") not in ("success", None):
+            result.chart_errors.append(
+                ChartError(
+                    ticker=cm.get("ticker", "unknown"),
+                    status=cm.get("status", "unknown"),
+                    error=cm.get("error", ""),
+                )
+            )
+
+    # ── Risk Post-Filter (enriches, doesn't remove) ──────────────────────
+    risk_assessments = risk_post_filter(
+        ticker_symbols,
+        sentiments,
+        charts,
+        ta_snapshots,
+        config,
+        fmp_map=fmp_map or None,
+    )
+    await _save_stage_output(
+        run_id,
+        {
+            "stage": "risk_post_filter",
+            "status": "success",
+            "model": "deterministic",
+            "duration_ms": 0,
+            "raw_response": json.dumps([r.model_dump() for r in risk_assessments]),
+        },
+    )
+
+    # ── Stage 4: GPT Synthesis (convergence point) ───────────────────────
+    sector_consensus = _aggregate_sector_sentiment(sentiments, screening)
+    if ticker_symbols:
+        try:
+            reflection_context = await load_reflection_context(user_id)
+            live_quotes: dict = {}
+            try:
+                live_quotes = await fetch_quotes(ticker_symbols)
+            except Exception as exc:
+                logger.warning("v2: Live quote fetch failed: %s", exc)
+
+            recommendations, gpt_metadata_list = await asyncio.wait_for(
+                run_debate(
+                    ticker_symbols,
+                    screening,
+                    charts,
+                    sentiments,
+                    config,
+                    reflection_context,
+                    run_id,
+                    fmp_context=fmp_map or None,
+                    regime_context=regime_context,
+                    sector_consensus=sector_consensus,
+                    live_quotes=live_quotes or None,
+                ),
+                timeout=STAGE_TIMEOUTS["gpt"],
+            )
+            result.recommendations = recommendations
+            for gm in gpt_metadata_list:
+                await _save_stage_output(run_id, gm)
+            await _save_recommendations(run_id, recommendations, user_id)
+        except Exception as exc:
+            result.stage_errors.append(
+                {"stage": "gpt", "error": str(exc), "type": type(exc).__name__}
+            )
+            logger.exception("v2: GPT stage failed")
+
+    # Risk validation
+    if result.recommendations:
+        result.recommendations = validate_risks(
+            result.recommendations, config, charts, fmp_context=fmp_map or None
+        )
+
+    # Annotated charts
+    if result.chart_analyses:
+        rec_map = {r.ticker: r for r in result.recommendations}
+
+        async def _annotate(ca_index: int) -> None:
+            ca = result.chart_analyses[ca_index]
+            rec = rec_map.get(ca.ticker)
+            try:
+                url = await fetch_annotated_chart(
+                    ticker=ca.ticker,
+                    timeframe=ca.timeframe,
+                    key_levels=ca.key_levels,
+                    run_id=run_id,
+                    user_id=user_id,
+                    entry_price=rec.entry_price if rec else None,
+                    stop_loss=rec.stop_loss if rec else None,
+                    take_profit=rec.take_profit if rec else None,
+                )
+                result.chart_analyses[ca_index].annotated_chart_path = url
+            except Exception as exc:
+                logger.warning("v2: Annotated chart failed for %s: %s", ca.ticker, exc)
+
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(
+                    *(_annotate(i) for i in range(len(result.chart_analyses))),
+                    return_exceptions=True,
+                ),
+                timeout=STAGE_TIMEOUTS["annotate"],
+            )
+        except TimeoutError:
+            logger.error("v2: Annotate stage timed out")
+
+        await _update_annotated_paths(client, run_id, result.chart_analyses)
+
+    return await _finalize_v2(run_id, result, start, client, regime_context)
+
+
+async def _finalize_v2(
+    run_id: str,
+    result: PipelineResult,
+    start: float,
+    client: Any,
+    regime_context: str,
+) -> PipelineResult:
+    """Finalize a v2 pipeline run: timing, prompt versions, DB update.
+
+    Args:
+        run_id: Pipeline run UUID.
+        result: The PipelineResult being built.
+        start: perf_counter value from pipeline start.
+        client: Supabase client.
+        regime_context: Unused, kept for signature consistency.
+
+    Returns:
+        Completed PipelineResult.
+    """
+    from pipeline.prompts.claude_chart import get_prompt_hash_v2 as claude_v2_hash
+
+    elapsed = time.perf_counter() - start
+    result.total_duration_seconds = round(elapsed, 2)
+    result.prompt_versions = {
+        "regime": regime_hash(),
+        "perplexity": discovery_hash(),
+        "gemini": gemini_hash(),
+        "claude": claude_v2_hash(),
+        "gpt_bull": get_bull_hash(),
+        "gpt_bear": get_bear_hash(),
+        "gpt_judge": get_judge_hash(),
+        "pipeline_version": "v2",
+    }
+
+    has_data = (
+        result.screening
+        or result.sentiment_analyses
+        or result.chart_analyses
+        or result.recommendations
     )
     status = "completed" if has_data else ("partial" if result.stage_errors else "failed")
     await (

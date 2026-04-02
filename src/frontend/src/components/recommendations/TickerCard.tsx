@@ -4,9 +4,11 @@ import clsx from 'clsx';
 import { AlertTriangle } from 'lucide-react';
 
 const ACTION_PILL: Record<string, { text: string; bg: string; border: string; text_color: string }> = {
-  BUY:   { text: 'BUY',   bg: 'bg-accent-profit/20',  border: 'border-accent-profit/35',  text_color: 'text-accent-profit'  },
-  SHORT: { text: 'SHORT', bg: 'bg-accent-loss/20',    border: 'border-accent-loss/35',    text_color: 'text-accent-loss'    },
-  HOLD:  { text: 'HOLD',  bg: 'bg-accent-alert/20',   border: 'border-accent-alert/35',   text_color: 'text-accent-alert'   },
+  BUY:      { text: 'BUY',      bg: 'bg-accent-profit/20',   border: 'border-accent-profit/35',   text_color: 'text-accent-profit'   },
+  SHORT:    { text: 'SHORT',    bg: 'bg-accent-loss/20',     border: 'border-accent-loss/35',     text_color: 'text-accent-loss'     },
+  HOLD:     { text: 'HOLD',     bg: 'bg-accent-alert/20',    border: 'border-accent-alert/35',    text_color: 'text-accent-alert'    },
+  NO_TRADE: { text: 'NO TRADE', bg: 'bg-text-muted/20',      border: 'border-text-muted/35',      text_color: 'text-text-muted'      },
+  WATCH:    { text: 'WATCH',    bg: 'bg-accent-electric/20', border: 'border-accent-electric/35', text_color: 'text-accent-electric' },
 };
 
 interface TickerCardProps {

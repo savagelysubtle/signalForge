@@ -20,10 +20,20 @@ from anthropic import AsyncAnthropic
 
 from pipeline.prompts.claude_chart import (
     CHART_SYSTEM_PROMPT,
+    CHART_SYSTEM_PROMPT_V2,
     build_chart_prompt,
+    build_chart_prompt_v2,
 )
 from pipeline.prompts.claude_chart import get_prompt_hash as chart_hash
-from pipeline.schemas import ChartAnalysis, SentimentAnalysis, StrategyConfig
+from pipeline.prompts.claude_chart import get_prompt_hash_v2 as chart_hash_v2
+from pipeline.schemas import (
+    ChartAnalysis,
+    MultiTimeframeTechnical,
+    SentimentAnalysis,
+    StrategyConfig,
+    TechnicalAssessment,
+)
+from pipeline.stages.numerical_ta import format_ta_for_prompt
 from pipeline.validation import with_validation_retry
 from services.chart_image import fetch_chart_image
 from services.keyring_service import get_api_key
@@ -350,6 +360,215 @@ async def run_chart_analysis(
 
     logger.info(
         "Claude chart analysis: %d/%d tickers succeeded",
+        len(charts),
+        len(tickers),
+    )
+    return charts, all_metadata
+
+
+# ---------------------------------------------------------------------------
+# Pipeline v2: Independent technical analysis (no sentiment/FMP injection)
+# ---------------------------------------------------------------------------
+
+
+async def _analyze_ticker_v2(
+    ticker: str,
+    config: StrategyConfig,
+    ta_context: str,
+    run_id: str,
+    user_id: str = "",
+    timeframe_override: str | None = None,
+    indicators_override: list[str] | None = None,
+    regime_context: str = "",
+) -> tuple[TechnicalAssessment | None, dict]:
+    """Run v2 chart analysis for a single ticker and timeframe.
+
+    Pipeline v2: Claude acts as a technical analyst whose primary data is
+    the numerical TA snapshot.  The chart image is a visual sanity check.
+    Returns a ``TechnicalAssessment`` (aliased as ``ChartAnalysis``).
+
+    Args:
+        ticker: Stock/crypto ticker symbol.
+        config: Strategy configuration with chart params.
+        ta_context: Pre-formatted numerical TA text.
+        run_id: Pipeline run UUID for chart image filenames.
+        user_id: User UUID for storage path isolation.
+        timeframe_override: Override timeframe for additional/short TFs.
+        indicators_override: Override indicators for short-TF analysis.
+        regime_context: Pre-formatted market regime header, or empty.
+
+    Returns:
+        Tuple of (validated TechnicalAssessment or None, metadata dict).
+    """
+    effective_timeframe = timeframe_override or config.chart_timeframe
+    effective_indicators = indicators_override or config.chart_indicators
+    user_prompt = build_chart_prompt_v2(
+        ticker,
+        config,
+        ta_context,
+        timeframe_override=timeframe_override,
+        indicators_override=effective_indicators,
+        regime_context=regime_context,
+    )
+    metadata: dict = {
+        "stage": "claude",
+        "ticker": ticker,
+        "model": CLAUDE_MODEL,
+        "prompt_hash": chart_hash_v2(),
+        "prompt_text": f"{CHART_SYSTEM_PROMPT_V2}\n---\n{user_prompt}",
+        "pipeline_version": "v2",
+    }
+
+    start = time.perf_counter()
+
+    last_fetch_error: Exception | None = None
+    for attempt in range(2):
+        try:
+            image_bytes, image_path = await fetch_chart_image(
+                ticker,
+                effective_timeframe,
+                effective_indicators,
+                run_id,
+                user_id,
+            )
+            last_fetch_error = None
+            break
+        except Exception as exc:
+            last_fetch_error = exc
+            if attempt == 0:
+                logger.warning("Chart fetch attempt 1 failed for %s, retrying: %s", ticker, exc)
+                await asyncio.sleep(2)
+
+    if last_fetch_error is not None:
+        metadata["duration_ms"] = int((time.perf_counter() - start) * 1000)
+        metadata["status"] = "chart_fetch_error"
+        metadata["error"] = str(last_fetch_error)
+        logger.exception("Chart image fetch failed for %s after retry", ticker)
+        return None, metadata
+
+    try:
+        result = await _call_claude_vision(CHART_SYSTEM_PROMPT_V2, user_prompt, image_bytes)
+        metadata["duration_ms"] = int((time.perf_counter() - start) * 1000)
+
+        if result is not None:
+            result.ticker = ticker
+            result.timeframe = effective_timeframe
+            result.chart_image_path = image_path
+            metadata["status"] = "success"
+            metadata["raw_response"] = result.model_dump_json()
+            metadata["retry_count"] = getattr(result, "_retry_count", 0)
+        else:
+            metadata["status"] = "validation_failed"
+
+        return result, metadata
+    except Exception as exc:
+        metadata["duration_ms"] = int((time.perf_counter() - start) * 1000)
+        metadata["status"] = "api_error"
+        metadata["error"] = str(exc)
+        logger.exception("Claude Vision v2 failed for %s", ticker)
+        return None, metadata
+
+
+async def run_chart_analysis_v2(
+    tickers: list[str],
+    config: StrategyConfig,
+    ta_snapshots: list[MultiTimeframeTechnical],
+    run_id: str,
+    user_id: str = "",
+    regime_context: str = "",
+) -> tuple[list[TechnicalAssessment], list[dict]]:
+    """Run v2 chart analysis for all tickers in parallel.
+
+    Pipeline v2: Each ticker receives numerical TA data as its primary
+    analytical input.  Claude interprets the numbers and uses the chart
+    image as visual confirmation.  Returns ``TechnicalAssessment`` objects
+    (aliased as ``ChartAnalysis`` for backward compatibility).
+
+    Args:
+        tickers: List of ticker symbols.
+        config: Strategy configuration with chart params.
+        ta_snapshots: MultiTimeframeTechnical results from Phase 1 stage.
+        run_id: Pipeline run UUID.
+        user_id: User UUID for storage path isolation.
+        regime_context: Pre-formatted market regime header, or empty.
+
+    Returns:
+        Tuple of (list of successful ChartAnalysis results,
+        list of per-ticker metadata dicts).
+    """
+    ta_map: dict[str, MultiTimeframeTechnical] = {s.ticker: s for s in ta_snapshots}
+
+    tasks = []
+    task_tickers: list[str] = []
+    for ticker in tickers:
+        ta = ta_map.get(ticker)
+        ta_text = format_ta_for_prompt(ta) if ta else f"Ticker: {ticker}\n[No TA data available]"
+
+        tasks.append(
+            _analyze_ticker_v2(
+                ticker, config, ta_text, run_id, user_id, regime_context=regime_context
+            )
+        )
+        task_tickers.append(ticker)
+
+        for extra_tf in config.additional_timeframes:
+            if extra_tf != config.chart_timeframe:
+                tasks.append(
+                    _analyze_ticker_v2(
+                        ticker,
+                        config,
+                        ta_text,
+                        run_id,
+                        user_id,
+                        timeframe_override=extra_tf,
+                        regime_context=regime_context,
+                    )
+                )
+                task_tickers.append(ticker)
+
+        for short_tf in config.short_timeframes:
+            if short_tf != config.chart_timeframe:
+                tasks.append(
+                    _analyze_ticker_v2(
+                        ticker,
+                        config,
+                        ta_text,
+                        run_id,
+                        user_id,
+                        timeframe_override=short_tf,
+                        indicators_override=config.short_tf_indicators,
+                        regime_context=regime_context,
+                    )
+                )
+                task_tickers.append(ticker)
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    charts: list[ChartAnalysis] = []
+    all_metadata: list[dict] = []
+
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            logger.error("Claude v2 task failed for %s: %s", task_tickers[i], result)
+            all_metadata.append(
+                {
+                    "stage": "claude",
+                    "ticker": task_tickers[i],
+                    "model": CLAUDE_MODEL,
+                    "status": "api_error",
+                    "error": str(result),
+                    "pipeline_version": "v2",
+                }
+            )
+            continue
+
+        chart, metadata = result
+        all_metadata.append(metadata)
+        if chart is not None:
+            charts.append(chart)
+
+    logger.info(
+        "Claude v2 chart analysis: %d/%d tickers succeeded",
         len(charts),
         len(tickers),
     )

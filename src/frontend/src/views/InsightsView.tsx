@@ -45,6 +45,7 @@ import { calculatePnl, resolveExitPrice } from "../lib/pnl";
 import type {
   PerformanceOverview,
   RecommendationWithStatus,
+  RecommendationAction,
   DecisionCreate,
   OutcomeCreate,
   PendingMatch,
@@ -1006,7 +1007,7 @@ function RecommendationJournal({
   const activeFilterCount =
     filters.action.length + (filters.confidenceMin > 0 || filters.confidenceMax < 1 ? 1 : 0) + (calendarFilterDate ? 1 : 0);
 
-  const toggleAction = (action: "BUY" | "SHORT" | "HOLD") => {
+  const toggleAction = (action: RecommendationAction) => {
     const current = new Set(filters.action);
     if (current.has(action)) current.delete(action);
     else current.add(action);
@@ -1142,8 +1143,9 @@ function RecommendationJournal({
                   Action
                 </span>
                 <div className="flex items-center gap-1">
-                  {(["BUY", "SHORT", "HOLD"] as const).map((action) => {
+                  {(["BUY", "SHORT", "HOLD", "NO_TRADE", "WATCH"] as const).map((action) => {
                     const active = filters.action.includes(action);
+                    const label = action === "NO_TRADE" ? "NO TRADE" : action;
                     return (
                       <button
                         key={action}
@@ -1156,11 +1158,15 @@ function RecommendationJournal({
                             "bg-accent-loss/20 text-accent-loss border border-accent-loss/40",
                           active && action === "HOLD" &&
                             "bg-accent-alert/20 text-accent-alert border border-accent-alert/40",
+                          active && action === "NO_TRADE" &&
+                            "bg-text-muted/20 text-text-muted border border-text-muted/40",
+                          active && action === "WATCH" &&
+                            "bg-accent-electric/20 text-accent-electric border border-accent-electric/40",
                           !active &&
                             "bg-bg-steel/30 text-text-muted border border-transparent hover:bg-bg-steel/60 hover:text-text-secondary",
                         )}
                       >
-                        {action}
+                        {label}
                       </button>
                     );
                   })}
@@ -2076,7 +2082,7 @@ function OutcomeForm({
   onSubmit,
 }: {
   decisionId: string;
-  action: "BUY" | "SHORT" | "HOLD";
+  action: RecommendationAction;
   onSubmit: (decisionId: string, body: OutcomeCreate) => Promise<void>;
 }) {
   const [entryPrice, setEntryPrice] = useState("");

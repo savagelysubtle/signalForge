@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
 BULL_PROMPT_VERSION = "v3"
 BEAR_PROMPT_VERSION = "v3"
-JUDGE_PROMPT_VERSION = "v8"
+JUDGE_PROMPT_VERSION = "v9"
 
 _BIAS_SCORE: dict[str, int] = {
     "strongly_bullish": 2,
@@ -108,7 +108,7 @@ Guidelines:
 JUDGE_SYSTEM_PROMPT = """\
 You are a senior portfolio manager presiding over a bull/bear debate.
 Your job is to weigh both sides, consider the raw data, apply risk management
-rules, and produce final BUY/SHORT/HOLD recommendations for each ticker.
+rules, and produce final recommendations for each ticker.
 
 You must return ONLY valid JSON — no commentary outside the JSON structure.
 
@@ -117,7 +117,7 @@ Return a JSON object with this exact structure:
   "recommendations": [
     {
       "ticker": "<SYMBOL>",
-      "action": "BUY" | "SHORT" | "HOLD",
+      "action": "BUY" | "SHORT" | "HOLD" | "NO_TRADE" | "WATCH",
       "confidence": <float from 0.0 to 1.0>,
       "entry_price": <float or null>,
       "stop_loss": <float or null>,
@@ -143,7 +143,15 @@ Return a JSON object with this exact structure:
       },
       "judge_reasoning": "<2-4 sentence synthesis explaining your decision>",
       "key_factors": ["<factor 1>", "<factor 2>", ...],
-      "warnings": ["<risk warning 1>", ...]
+      "warnings": ["<risk warning 1>", ...],
+      "track_agreement": {
+        "perplexity_direction": "bullish" | "bearish" | "neutral",
+        "gemini_direction": "bullish" | "bearish" | "neutral",
+        "claude_direction": "bullish" | "bearish" | "neutral",
+        "agreement_score": <float from 0.0 to 1.0>,
+        "conflicts": ["<conflict description 1>", ...]
+      },
+      "confidence_adjustment": "<why confidence was raised or lowered>"
     }
   ]
 }
@@ -152,13 +160,33 @@ Decision framework:
 - BUY: Bull case significantly outweighs bear case, with favorable risk/reward
 - SHORT: Bear case dominates; bearish setup with favorable short risk/reward for active shorting
 - HOLD: Mixed signals, insufficient conviction, or wait-for-confirmation setup
+- NO_TRADE: Tracks fundamentally disagree on direction, or conditions make any entry reckless
+- WATCH: Interesting setup but not yet actionable — monitor for a trigger
+
+TRACK AGREEMENT DECISION RULES:
+- 3/3 tracks agree on direction → proceed with signal, confidence based on strength
+- 2/3 tracks agree, 1 dissents → proceed with LOWER confidence, note the dissent
+- All 3 tracks disagree → NO_TRADE. Do not force a direction.
+- 2/3 agree but numerical TA contradicts → WATCH. Flag the discrepancy.
+- Any signal where ADX < 20 and strategy requires trending market → NO_TRADE
+- Momentum score near zero (-0.2 to 0.2) → WATCH unless other signals are strong
+
+For track_agreement: assess each upstream analysis (Perplexity fundamentals,
+Gemini sentiment, Claude technicals) and classify its directional lean as
+"bullish", "bearish", or "neutral". The agreement_score should reflect how
+aligned the three tracks are (1.0 = all same direction, 0.5 = 2/3 agree,
+0.0 = all disagree). List specific conflicts in the conflicts array.
+
+confidence_adjustment must explain WHY you raised or lowered confidence from
+what the raw signal strength would suggest. Reference track agreement,
+risk flags, or historical patterns as justification.
 
 Confidence calibration:
 - 0.85+: Overwhelming signal alignment across all data sources
 - 0.70-0.85: Strong conviction with minor caveats
 - 0.55-0.70: Moderate conviction, proceed with caution
-- 0.40-0.55: Low conviction, likely HOLD unless specific catalyst
-- <0.40: Very weak signal, default to HOLD
+- 0.40-0.55: Low conviction, likely HOLD or WATCH unless specific catalyst
+- <0.40: Very weak signal, default to NO_TRADE or WATCH
 
 Entry price rules (CRITICAL — MANDATORY for BUY and SHORT):
 - entry_price, stop_loss, and take_profit are REQUIRED (non-null) for ALL BUY
@@ -180,6 +208,9 @@ Entry price rules (CRITICAL — MANDATORY for BUY and SHORT):
 - For HOLD recommendations, set entry_price to the price level at which you
   would convert to BUY (the trigger price). Set stop_loss and take_profit
   to null for HOLD.
+- For NO_TRADE and WATCH recommendations, set entry_price, stop_loss,
+  take_profit to null and position_size_pct to 0. For WATCH, optionally set
+  entry_price to the level that would trigger a re-evaluation.
 
 Risk management rules:
 - Position sizes should respect the provided risk parameters
@@ -310,18 +341,47 @@ def _format_screening_data(screening: ScreeningResult | None, tickers: list[str]
 
 
 def _format_single_chart(ca: ChartAnalysis) -> str:
-    """Format a single ChartAnalysis into text for GPT."""
+    """Format a single ChartAnalysis / TechnicalAssessment into text for GPT."""
     lines = [
         f"\n#### {ca.ticker} ({ca.timeframe} timeframe)",
     ]
     if ca.current_price is not None:
         lines.append(f"**Current/Last Price: ${ca.current_price:.2f}**")
+
+    confidence_str = (
+        f"{ca.confidence:.0%}" if isinstance(ca.confidence, float) else str(ca.confidence)
+    )
     lines.extend(
         [
             f"Trend: {ca.trend_direction} ({ca.trend_strength})",
-            f"Overall bias: {ca.overall_bias} | Confidence: {ca.confidence}",
+            f"Overall bias: {ca.overall_bias} | Confidence: {confidence_str}",
         ]
     )
+
+    if ca.ema_assessment:
+        lines.append(f"EMA assessment: {ca.ema_assessment}")
+    if ca.momentum_assessment:
+        lines.append(f"Momentum: {ca.momentum_assessment}")
+    if ca.volume_assessment:
+        lines.append(f"Volume assessment: {ca.volume_assessment}")
+    if ca.trend_assessment:
+        lines.append(f"Trend assessment: {ca.trend_assessment}")
+
+    if ca.nearest_support is not None or ca.nearest_resistance is not None:
+        level_parts: list[str] = []
+        if ca.nearest_support is not None:
+            level_parts.append(f"Support: ${ca.nearest_support:.2f}")
+        if ca.nearest_resistance is not None:
+            level_parts.append(f"Resistance: ${ca.nearest_resistance:.2f}")
+        lines.append(f"Nearest levels: {' | '.join(level_parts)}")
+    if ca.suggested_stop_zone:
+        lines.append(f"Suggested stop zone: {ca.suggested_stop_zone}")
+
+    if not ca.chart_confirms_data:
+        lines.append("⚠ CHART DISCREPANCY — chart does NOT confirm numerical data")
+        for disc in ca.chart_discrepancies:
+            lines.append(f"  - {disc}")
+
     if ca.key_levels:
         level_strs = [f"  ${lv.price:.2f} ({lv.level_type}, {lv.strength})" for lv in ca.key_levels]
         lines.append("Key levels:\n" + "\n".join(level_strs))
@@ -332,7 +392,11 @@ def _format_single_chart(ca: ChartAnalysis) -> str:
         lines.append("Indicators:\n" + "\n".join(ind_strs))
     if ca.volume_analysis:
         lines.append(f"Volume: {ca.volume_analysis}")
-    lines.append(f"Summary: {ca.summary}")
+    if ca.summary:
+        lines.append(f"Summary: {ca.summary}")
+
+    if ca.timeframe_alignment_note:
+        lines.append(f"Timeframe alignment: {ca.timeframe_alignment_note}")
     return "\n".join(lines)
 
 
