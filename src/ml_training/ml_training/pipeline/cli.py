@@ -73,6 +73,9 @@ def _setup_logging(verbose: bool = False) -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+    # Suppress noisy/leaky HTTP debug logs (they print API keys in URLs)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 def cmd_acquire(args: argparse.Namespace) -> None:
