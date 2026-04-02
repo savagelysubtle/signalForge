@@ -12,42 +12,42 @@ todos:
     content:
       'Phase 0: Build FMP historical data puller -- rate-limited, checkpointed,
       stores OHLCV + indicators + fundamentals for 750 tickers over 2 years'
-    status: pending
+    status: completed
   - id: phase-1-features-dataset
     content:
       'Phase 1: Feature engineering + dataset builder -- strategy-aware
       historical simulation, feature extraction, outcome labeling, dataset
       validation'
-    status: pending
+    status: completed
   - id: phase-2-primary-model
     content:
       'Phase 2: Primary LightGBM model -- walk-forward optimization, probability
       calibration, model registry, direction classifier + return regressor'
-    status: pending
+    status: completed
   - id: phase-3-judge-model
     content:
       'Phase 3: Judge system (6 layers) -- CPCV/purge/embargo/DSR validation,
       Logistic Regression meta-learner, SHAP importance drift, NannyML CBPE,
       ADWIN regime detection, PSI/KS statistical drift, strategy audit,
       conformal coverage verification, JudgeReport generation'
-    status: pending
+    status: completed
   - id: phase-4-training-loop
     content:
       'Phase 4: Iterative training loop -- orchestrate train-judge cycles,
       hyperparameter tuning, quality bar enforcement, iterate until pass'
-    status: pending
+    status: completed
   - id: phase-5-shadow-pipeline
     content:
       'Phase 5: Shadow pipeline integration -- wire ML after GPT in
       orchestrator, log predictions without affecting output, ML vs GPT
       comparison dashboard'
-    status: pending
+    status: completed
   - id: phase-6-active-continuous
     content:
       'Phase 6: Active mode + continuous learning -- replace
       confidence_calibration with ML, auto-retrain on new outcomes, judge
       validates each new model version'
-    status: pending
+    status: completed
 isProject: false
 ---
 
@@ -1029,6 +1029,65 @@ it.
 
 **Total: ~18-24 days of implementation**, done incrementally. Each phase is
 independently testable and produces visible results before moving on.
+
+---
+
+## Critical Checkpoints (Honest Guardrails)
+
+These prevent wasted effort by catching fundamental problems early:
+
+**Phase 1 checkpoint: Do we have enough data?**
+
+- Before building any model, verify: do we have 200+ labeled samples per
+  strategy type? If not for some strategies, flag them as "insufficient data"
+  upfront rather than discovering this in Phase 3.
+- Check for survivorship bias: are we only looking at stocks that exist today?
+  Stocks that delisted or went bankrupt should be included if available from
+  FMP.
+
+**Phase 2 checkpoint: Does the model beat baselines?**
+
+- Before investing in the judge system, compare the primary model against three
+  dumb baselines:
+  - "Always predict UP" (tests if the dataset is biased toward bull markets)
+  - "Follow the 20-day price trend" (tests if simple momentum beats ML)
+  - "Random prediction" (tests if the model adds any signal at all)
+- If the model doesn't beat all three baselines on out-of-sample data, stop and
+  fix features/data before building the judge.
+
+**Phase 2 checkpoint: Transaction cost reality check**
+
+- Compute predicted returns NET of estimated transaction costs (commissions +
+  spread). If signals are profitable before costs but not after, the model is
+  not useful for actual trading.
+- Canadian TSX round-trip costs are roughly 0.1-0.3% for Questrade.
+
+**Phase 3 checkpoint: Non-stationarity acknowledgment**
+
+- Markets are non-stationary. A model trained on 2024-2025 may degrade in 2026.
+  The drift detection layers exist to catch this, but be realistic: the model
+  WILL need retraining regularly, and periods of quarantine are normal, not
+  failures.
+- Track how quickly model accuracy degrades after training (decay curve). If it
+  drops below baseline within 30 days, the signal may be too ephemeral to
+  capture.
+
+**Phase 5 checkpoint: Does ML add value over GPT alone?**
+
+- In shadow mode, track: when ML and GPT disagree, who is right more often?
+- If ML accuracy <= GPT accuracy after 30+ shadow predictions, the model is not
+  adding value. Options: retrain with more features, or accept the model's role
+  is purely calibration (adjusting GPT's confidence), not independent
+  prediction.
+
+**Overall goal clarity:**
+
+- The primary goal is **calibration**: telling you how much to trust GPT's
+  predictions, not replacing GPT.
+- The secondary goal is **independent prediction**: if the model beats GPT on
+  direction, that's a bonus.
+- Even a model that only says "GPT is overconfident here" adds significant value
+  by preventing bad trades.
 
 ---
 

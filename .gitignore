@@ -60,3 +60,9 @@ node_modules/
 
 # Docker
 docker-compose.override.yml
+
+# ML Training artifacts and raw data
+src/ml_training/data/raw/
+src/ml_training/data/datasets/
+src/ml_training/models/artifacts/*.joblib
+src/backend/ml/artifacts/*.joblib

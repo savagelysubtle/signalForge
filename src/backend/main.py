@@ -117,6 +117,7 @@ from api.recommendations import router as recommendations_router  # noqa: E402
 from api.reflections import router as reflections_router  # noqa: E402
 from api.settings import router as settings_router  # noqa: E402
 from api.strategies import router as strategies_router  # noqa: E402
+from api.ml_predictions import router as ml_router  # noqa: E402
 
 app.include_router(charts_router, prefix="/api")
 app.include_router(decisions_router, prefix="/api")
@@ -127,3 +128,4 @@ app.include_router(reflections_router, prefix="/api")
 app.include_router(strategies_router, prefix="/api")
 app.include_router(questrade_router, prefix="/api")
 app.include_router(settings_router, prefix="/api")
+app.include_router(ml_router, prefix="/api")
