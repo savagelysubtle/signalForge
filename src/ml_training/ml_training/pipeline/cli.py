@@ -2,12 +2,15 @@
 
 Usage::
 
-    uv run python -m ml_training.pipeline.cli acquire --api-key YOUR_KEY
+    uv run python -m ml_training.pipeline.cli acquire
     uv run python -m ml_training.pipeline.cli build-dataset
     uv run python -m ml_training.pipeline.cli train --rounds 3
     uv run python -m ml_training.pipeline.cli tune
     uv run python -m ml_training.pipeline.cli verify
     uv run python -m ml_training.pipeline.cli promote
+
+The FMP API key is loaded automatically from your .env file
+(FMP_API_KEY). You can override it with --api-key if needed.
 """
 
 from __future__ import annotations
@@ -16,10 +19,51 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 logger = logging.getLogger("ml_training")
+
+ENV_CANDIDATES = [
+    Path.cwd() / ".env",
+    Path(__file__).resolve().parents[3] / ".env",
+    Path(__file__).resolve().parents[4] / ".env",
+]
+
+
+def _load_env() -> None:
+    """Load .env file from the project root."""
+    for env_file in ENV_CANDIDATES:
+        if env_file.exists():
+            load_dotenv(env_file, override=True)
+            logger.debug("Loaded .env from %s", env_file)
+            return
+    logger.debug("No .env file found -- using existing environment variables")
+
+
+def _get_fmp_key(cli_override: str | None = None) -> str:
+    """Get the FMP API key from CLI arg, env var, or .env file.
+
+    Args:
+        cli_override: Explicit key passed via --api-key.
+
+    Returns:
+        The FMP API key.
+
+    Raises:
+        SystemExit: If no key is found anywhere.
+    """
+    if cli_override:
+        return cli_override
+    key = os.environ.get("FMP_API_KEY")
+    if key:
+        return key
+    print("Error: FMP_API_KEY not found in .env or environment.")
+    print("Either set FMP_API_KEY in your .env file or pass --api-key.")
+    sys.exit(1)
 
 
 def _setup_logging(verbose: bool = False) -> None:
@@ -35,8 +79,10 @@ def cmd_acquire(args: argparse.Namespace) -> None:
     """Run data acquisition from FMP."""
     from ml_training.data.acquisition import AcquisitionConfig, DataAcquisitionPipeline
 
+    api_key = _get_fmp_key(getattr(args, "api_key", None))
+
     config = AcquisitionConfig(
-        api_key=args.api_key,
+        api_key=api_key,
         data_dir=Path(args.data_dir),
         timeframes=args.timeframes.split(","),
         daily_lookback_days=args.lookback_days,
@@ -180,7 +226,9 @@ def main() -> None:
 
     # acquire
     p_acquire = sub.add_parser("acquire", help="Pull historical data from FMP")
-    p_acquire.add_argument("--api-key", required=True, help="FMP API key")
+    p_acquire.add_argument(
+        "--api-key", default=None, help="FMP API key (reads from .env if omitted)"
+    )
     p_acquire.add_argument(
         "--data-dir", default="src/ml_training/data/raw", help="Output directory"
     )
@@ -226,6 +274,7 @@ def main() -> None:
 
     args = parser.parse_args()
     _setup_logging(args.verbose)
+    _load_env()
     args.func(args)
 
 
