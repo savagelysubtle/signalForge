@@ -380,11 +380,13 @@ async def _analyze_ticker_v2(
     timeframe_override: str | None = None,
     indicators_override: list[str] | None = None,
     regime_context: str = "",
+    live_quote_context: str | None = None,
 ) -> tuple[TechnicalAssessment | None, dict]:
     """Run v2 chart analysis for a single ticker and timeframe.
 
     Pipeline v2: Claude acts as a technical analyst whose primary data is
     the numerical TA snapshot.  The chart image is a visual sanity check.
+    Live quotes provide real-time price calibration.
     Returns a ``TechnicalAssessment`` (aliased as ``ChartAnalysis``).
 
     Args:
@@ -396,6 +398,7 @@ async def _analyze_ticker_v2(
         timeframe_override: Override timeframe for additional/short TFs.
         indicators_override: Override indicators for short-TF analysis.
         regime_context: Pre-formatted market regime header, or empty.
+        live_quote_context: Pre-formatted real-time quote string, or None.
 
     Returns:
         Tuple of (validated TechnicalAssessment or None, metadata dict).
@@ -409,6 +412,7 @@ async def _analyze_ticker_v2(
         timeframe_override=timeframe_override,
         indicators_override=effective_indicators,
         regime_context=regime_context,
+        live_quote_context=live_quote_context,
     )
     metadata: dict = {
         "stage": "claude",
@@ -476,13 +480,15 @@ async def run_chart_analysis_v2(
     run_id: str,
     user_id: str = "",
     regime_context: str = "",
+    live_quotes: dict | None = None,
 ) -> tuple[list[TechnicalAssessment], list[dict]]:
     """Run v2 chart analysis for all tickers in parallel.
 
     Pipeline v2: Each ticker receives numerical TA data as its primary
     analytical input.  Claude interprets the numbers and uses the chart
-    image as visual confirmation.  Returns ``TechnicalAssessment`` objects
-    (aliased as ``ChartAnalysis`` for backward compatibility).
+    image as visual confirmation.  Live quotes provide real-time price
+    calibration.  Returns ``TechnicalAssessment`` objects (aliased as
+    ``ChartAnalysis`` for backward compatibility).
 
     Args:
         tickers: List of ticker symbols.
@@ -491,6 +497,8 @@ async def run_chart_analysis_v2(
         run_id: Pipeline run UUID.
         user_id: User UUID for storage path isolation.
         regime_context: Pre-formatted market regime header, or empty.
+        live_quotes: Mapping of ticker -> FmpQuote for real-time
+            price injection into chart prompts (may be None).
 
     Returns:
         Tuple of (list of successful ChartAnalysis results,
@@ -503,10 +511,17 @@ async def run_chart_analysis_v2(
     for ticker in tickers:
         ta = ta_map.get(ticker)
         ta_text = format_ta_for_prompt(ta) if ta else f"Ticker: {ticker}\n[No TA data available]"
+        quote_str = _format_quote_for_claude(live_quotes, ticker) if live_quotes else None
 
         tasks.append(
             _analyze_ticker_v2(
-                ticker, config, ta_text, run_id, user_id, regime_context=regime_context
+                ticker,
+                config,
+                ta_text,
+                run_id,
+                user_id,
+                regime_context=regime_context,
+                live_quote_context=quote_str,
             )
         )
         task_tickers.append(ticker)
@@ -522,6 +537,7 @@ async def run_chart_analysis_v2(
                         user_id,
                         timeframe_override=extra_tf,
                         regime_context=regime_context,
+                        live_quote_context=quote_str,
                     )
                 )
                 task_tickers.append(ticker)
@@ -538,6 +554,7 @@ async def run_chart_analysis_v2(
                         timeframe_override=short_tf,
                         indicators_override=config.short_tf_indicators,
                         regime_context=regime_context,
+                        live_quote_context=quote_str,
                     )
                 )
                 task_tickers.append(ticker)

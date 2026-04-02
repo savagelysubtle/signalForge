@@ -12,7 +12,7 @@ from pipeline.schemas import SentimentAnalysis, StrategyConfig
 from utils.hashing import prompt_hash
 
 PROMPT_VERSION = "v8"
-PROMPT_VERSION_V2 = "v10"
+PROMPT_VERSION_V2 = "v11"
 
 CHART_SYSTEM_PROMPT = """\
 You are an expert technical analyst reviewing a TradingView chart screenshot.
@@ -305,12 +305,13 @@ def build_chart_prompt_v2(
     timeframe_override: str | None = None,
     indicators_override: list[str] | None = None,
     regime_context: str = "",
+    live_quote_context: str | None = None,
 ) -> str:
     """Build the v2 user prompt for independent technical chart analysis.
 
     Pipeline v2: Claude receives numerical TA data as its PRIMARY input.
-    The chart image is a visual sanity check.  No sentiment, FMP
-    fundamentals, or live quotes are injected.
+    The chart image is a visual sanity check.  Live quotes provide
+    real-time price calibration for support/resistance/entry levels.
 
     Args:
         ticker: Stock/crypto ticker symbol.
@@ -322,6 +323,7 @@ def build_chart_prompt_v2(
         indicators_override: If set, use these indicators instead of the
             strategy's ``chart_indicators``.
         regime_context: Pre-formatted market regime header block, or empty.
+        live_quote_context: Pre-formatted real-time quote string, or None.
 
     Returns:
         The formatted user prompt string.
@@ -340,6 +342,17 @@ def build_chart_prompt_v2(
         f"Indicators on chart: {', '.join(effective_indicators)}\n"
         f"\n{ta_context}"
     )
+
+    if live_quote_context:
+        parts.append(
+            "\n--- LIVE MARKET DATA (real-time) ---"
+            f"\n{live_quote_context}"
+            "\nThis is the CURRENT intraday snapshot. The numerical TA data above "
+            "reflects the latest completed candle, which may lag. Use this live price "
+            "to calibrate your current_price, support/resistance, and entry levels. "
+            "If the live price diverges significantly from the TA data, note it."
+            "\n--- END LIVE MARKET DATA ---"
+        )
 
     if config.ta_focus:
         parts.append(f"\nAnalysis focus: {config.ta_focus}")
