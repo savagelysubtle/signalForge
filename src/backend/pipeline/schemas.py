@@ -753,3 +753,133 @@ class TradeHistoryEntry(BaseModel):
     cumulative_pnl: float
     action: str
     confidence: float
+
+
+# ---------------------------------------------------------------------------
+# Numerical Technical Analysis (Phase 1 — Pipeline v2)
+# ---------------------------------------------------------------------------
+
+
+class EMASnapshot(BaseModel):
+    """EMA values at the current candle for a single period."""
+
+    period: int
+    current_value: float
+    previous_value: float
+    slope: float = 0.0
+
+    @model_validator(mode="after")
+    def _compute_slope(self) -> EMASnapshot:
+        """Derive slope from current - previous if not explicitly set."""
+        if self.slope == 0.0 and self.current_value != self.previous_value:
+            self.slope = self.current_value - self.previous_value
+        return self
+
+
+class EMACross(BaseModel):
+    """Detected EMA crossover event between two periods."""
+
+    fast_period: int
+    slow_period: int
+    cross_type: Literal["bullish", "bearish"]
+    candles_ago: int
+    spread_pct: float
+    spread_direction: Literal["widening", "narrowing"]
+
+
+class MACDSnapshot(BaseModel):
+    """MACD state at the current candle."""
+
+    macd_line: float
+    signal_line: float
+    histogram: float
+    histogram_slope: Literal["expanding", "contracting"]
+    signal_cross: Literal["above", "below"]
+
+
+class RSISnapshot(BaseModel):
+    """RSI state at the current candle."""
+
+    current: float
+    previous: float
+    trend: Literal["rising", "falling", "flat"]
+    zone: Literal["overbought", "neutral", "oversold"]
+    divergence: Literal["bullish_divergence", "bearish_divergence", "none"] = "none"
+
+    @model_validator(mode="after")
+    def _derive_fields(self) -> RSISnapshot:
+        """Compute trend and zone from values when not explicitly set."""
+        delta = self.current - self.previous
+        if delta > 1.0:
+            self.trend = "rising"
+        elif delta < -1.0:
+            self.trend = "falling"
+        else:
+            self.trend = "flat"
+
+        if self.current >= 70:
+            self.zone = "overbought"
+        elif self.current <= 30:
+            self.zone = "oversold"
+        else:
+            self.zone = "neutral"
+        return self
+
+
+class VolumeSnapshot(BaseModel):
+    """Volume analysis at the current candle."""
+
+    current: int
+    avg_20: float
+    ratio: float = 0.0
+    trend: Literal["increasing", "decreasing", "stable"] = "stable"
+
+    @model_validator(mode="after")
+    def _compute_ratio(self) -> VolumeSnapshot:
+        if self.ratio == 0.0 and self.avg_20 > 0:
+            self.ratio = self.current / self.avg_20
+        return self
+
+
+class TechnicalSnapshot(BaseModel):
+    """Complete numerical TA for one ticker at one timeframe."""
+
+    ticker: str
+    timeframe: str
+    timestamp: datetime
+    price_current: float
+    price_open: float
+    price_high: float
+    price_low: float
+
+    emas: list[EMASnapshot] = Field(default_factory=list)
+    ema_crosses: list[EMACross] = Field(default_factory=list)
+    macd: MACDSnapshot | None = None
+    rsi: RSISnapshot | None = None
+    adx: float = 0.0
+    atr: float = 0.0
+    atr_pct: float = 0.0
+    volume: VolumeSnapshot | None = None
+
+    trend_alignment: Literal["all_bullish", "all_bearish", "mixed"] = "mixed"
+    momentum_score: float = Field(default=0.0, ge=-1.0, le=1.0)
+
+    @field_validator("ticker", mode="before")
+    @classmethod
+    def _clean_ticker(cls, v: str) -> str:
+        return normalize_ticker(v) if isinstance(v, str) else v
+
+
+class MultiTimeframeTechnical(BaseModel):
+    """TA across all strategy timeframes for one ticker."""
+
+    ticker: str
+    primary: TechnicalSnapshot
+    additional: list[TechnicalSnapshot] = Field(default_factory=list)
+    short: list[TechnicalSnapshot] = Field(default_factory=list)
+    timeframe_alignment: Literal["aligned_bullish", "aligned_bearish", "divergent"] = "divergent"
+
+    @field_validator("ticker", mode="before")
+    @classmethod
+    def _clean_ticker(cls, v: str) -> str:
+        return normalize_ticker(v) if isinstance(v, str) else v
