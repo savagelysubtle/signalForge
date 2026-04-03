@@ -63,6 +63,7 @@ class JudgeSystem:
         strategy_labels: np.ndarray | None = None,
         shap_importances_train: dict[str, float] | None = None,
         shap_importances_test: dict[str, float] | None = None,
+        dataset_size: int | None = None,
     ) -> JudgeReport:
         """Run the complete judge evaluation pipeline.
 
@@ -151,7 +152,7 @@ class JudgeSystem:
 
         # Final verdict
         logger.info("Determining verdict...")
-        determine_verdict(report, self._quality_bar)
+        determine_verdict(report, self._quality_bar, dataset_size=dataset_size)
 
         logger.info(
             "Judge verdict: %s (accuracy=%.1f%%, ECE=%.4f)",
@@ -224,6 +225,16 @@ class JudgeSystem:
 
         X_meta = np.hstack(meta_features)
         y_meta = (predictions == true_labels).astype(int)
+
+        n_classes = len(np.unique(y_meta))
+        if n_classes < 2:
+            accuracy = float(y_meta.mean()) if y_meta.sum() > 0 else 0.0
+            logger.warning(
+                "Reliability meta-learner skipped: only %d class in labels (accuracy=%.3f)",
+                n_classes,
+                accuracy,
+            )
+            return accuracy
 
         self._reliability_model = LogisticRegression(
             C=1.0,

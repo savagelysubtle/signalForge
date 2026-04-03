@@ -69,7 +69,6 @@ class ProbabilityCalibrator:
             C=1.0,
             max_iter=1000,
             solver="lbfgs",
-            multi_class="multinomial",
         )
         self._calibrator.fit(raw_probs, true_labels)
 

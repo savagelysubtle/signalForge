@@ -6,8 +6,10 @@ to find optimal hyperparameters without overfitting.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import lightgbm as lgb
@@ -16,7 +18,15 @@ import pandas as pd
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.preprocessing import LabelEncoder
 
-from ml_training.models.predictor import CATEGORICAL_FEATURES, DIRECTION_CLASSES, _prepare_features
+from ml_training.models.predictor import (
+    CATEGORICAL_FEATURES,
+    DEFAULT_EMBARGO_WINDOW,
+    DEFAULT_PURGE_WINDOW,
+    DIRECTION_CLASSES,
+    _identify_feature_columns,
+    _prepare_features,
+    _purged_split,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,14 +63,18 @@ class HyperparameterTuner:
     def __init__(
         self,
         target_col: str = "direction_10d",
-        n_cv_splits: int = 3,
+        n_cv_splits: int = 5,
         n_boost_rounds: int = 300,
         param_grid: list[dict[str, Any]] | None = None,
+        purge_window: int = DEFAULT_PURGE_WINDOW,
+        embargo_window: int = DEFAULT_EMBARGO_WINDOW,
     ) -> None:
         self._target_col = target_col
         self._n_splits = n_cv_splits
         self._n_rounds = n_boost_rounds
         self._grid = param_grid or PARAM_GRID
+        self._purge_window = purge_window
+        self._embargo_window = embargo_window
 
     def search(self, dataset: pd.DataFrame) -> HyperparameterSearchResult:
         """Run hyperparameter search across the parameter grid.
@@ -73,27 +87,7 @@ class HyperparameterTuner:
         """
         df = dataset.dropna(subset=[self._target_col]).sort_values("date").reset_index(drop=True)
 
-        feature_cols = [
-            c
-            for c in df.columns
-            if c
-            not in {
-                "ticker",
-                "date",
-                "strategy_id",
-                "timeframe",
-                "close",
-                "return_5d",
-                "return_10d",
-                "return_20d",
-                "direction_5d",
-                "direction_10d",
-                "direction_20d",
-                "max_favorable_excursion",
-                "max_adverse_excursion",
-                "stop_hit",
-            }
-        ]
+        feature_cols = _identify_feature_columns(df)
 
         X, _encoders = _prepare_features(df, feature_cols)
         le = LabelEncoder()
@@ -103,6 +97,7 @@ class HyperparameterTuner:
         categorical_indices = [X.columns.get_loc(c) for c in CATEGORICAL_FEATURES if c in X.columns]
 
         tscv = TimeSeriesSplit(n_splits=self._n_splits)
+        n_samples = len(X)
         results: list[dict[str, Any]] = []
         best_score = -1.0
         best_params: dict[str, Any] = {}
@@ -116,6 +111,7 @@ class HyperparameterTuner:
                 "feature_fraction": 0.8,
                 "bagging_fraction": 0.8,
                 "bagging_freq": 5,
+                "is_unbalance": True,
                 "verbose": -1,
                 "n_jobs": -1,
                 "seed": 42,
@@ -123,7 +119,15 @@ class HyperparameterTuner:
             }
 
             fold_scores: list[float] = []
-            for train_idx, test_idx in tscv.split(X):
+            fold_train_scores: list[float] = []
+            for raw_train_idx, test_idx in tscv.split(X):
+                train_idx = _purged_split(
+                    n_samples,
+                    raw_train_idx,
+                    test_idx,
+                    self._purge_window,
+                    self._embargo_window,
+                )
                 X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
                 y_train, y_test = y[train_idx], y[test_idx]
 
@@ -133,33 +137,43 @@ class HyperparameterTuner:
                     y_train,
                     categorical_feature=categorical_indices,
                     eval_set=[(X_test, y_test)],
-                    callbacks=[lgb.log_evaluation(0), lgb.early_stopping(30, verbose=False)],
+                    callbacks=[lgb.log_evaluation(0), lgb.early_stopping(50, verbose=False)],
                 )
-                score = float(np.mean(clf.predict(X_test) == y_test))
-                fold_scores.append(score)
+                test_score = float(np.mean(clf.predict(X_test) == y_test))
+                train_score = float(np.mean(clf.predict(X_train) == y_train))
+                fold_scores.append(test_score)
+                fold_train_scores.append(train_score)
 
             mean_score = float(np.mean(fold_scores))
             std_score = float(np.std(fold_scores))
+            mean_train = float(np.mean(fold_train_scores))
+            overfit_gap = mean_train - mean_score
+
+            composite = mean_score - 2 * overfit_gap
 
             result = {
                 "params": params,
                 "mean_accuracy": mean_score,
                 "std_accuracy": std_score,
+                "overfit_gap": overfit_gap,
+                "composite_score": composite,
                 "fold_scores": fold_scores,
             }
             results.append(result)
 
             logger.info(
-                "Config %d/%d: accuracy=%.3f±%.3f | %s",
+                "Config %d/%d: accuracy=%.3f±%.3f gap=%.3f composite=%.3f | %s",
                 i + 1,
                 len(self._grid),
                 mean_score,
                 std_score,
+                overfit_gap,
+                composite,
                 params,
             )
 
-            if mean_score > best_score:
-                best_score = mean_score
+            if composite > best_score:
+                best_score = composite
                 best_params = full_params
 
         return HyperparameterSearchResult(
@@ -168,3 +182,179 @@ class HyperparameterTuner:
             all_results=results,
             n_trials=len(self._grid),
         )
+
+    def search_optuna(
+        self,
+        dataset: pd.DataFrame,
+        n_trials: int = 30,
+    ) -> HyperparameterSearchResult:
+        """Bayesian hyperparameter search using Optuna TPE sampler.
+
+        Falls back to grid search if optuna is not installed.
+
+        Args:
+            dataset: Full training dataset with features and labels.
+            n_trials: Number of Optuna trials to run.
+
+        Returns:
+            HyperparameterSearchResult with best parameters.
+        """
+        try:
+            import optuna
+        except ImportError:
+            logger.warning("optuna not installed, falling back to grid search")
+            return self.search(dataset)
+
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+        df = dataset.dropna(subset=[self._target_col]).sort_values("date").reset_index(drop=True)
+        feature_cols = _identify_feature_columns(df)
+
+        X, _encoders = _prepare_features(df, feature_cols)
+        le = LabelEncoder()
+        le.fit(DIRECTION_CLASSES)
+        y = le.transform(df[self._target_col].values)
+        categorical_indices = [X.columns.get_loc(c) for c in CATEGORICAL_FEATURES if c in X.columns]
+        n_samples = len(X)
+        tscv = TimeSeriesSplit(n_splits=self._n_splits)
+
+        def objective(trial: optuna.Trial) -> float:
+            params = {
+                "objective": "multiclass",
+                "num_class": 3,
+                "metric": "multi_logloss",
+                "boosting_type": "gbdt",
+                "is_unbalance": True,
+                "verbose": -1,
+                "n_jobs": -1,
+                "seed": 42,
+                "num_leaves": trial.suggest_int("num_leaves", 15, 127),
+                "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.15, log=True),
+                "min_child_samples": trial.suggest_int("min_child_samples", 20, 100),
+                "feature_fraction": trial.suggest_float("feature_fraction", 0.5, 0.9),
+                "bagging_fraction": trial.suggest_float("bagging_fraction", 0.5, 0.9),
+                "bagging_freq": 5,
+                "reg_alpha": trial.suggest_float("reg_alpha", 1e-8, 1.0, log=True),
+                "reg_lambda": trial.suggest_float("reg_lambda", 1e-8, 1.0, log=True),
+                "max_depth": trial.suggest_int("max_depth", 5, 15),
+                "min_gain_to_split": trial.suggest_float("min_gain_to_split", 0.0, 0.5),
+            }
+
+            fold_test_scores: list[float] = []
+            fold_train_scores: list[float] = []
+            for raw_train_idx, test_idx in tscv.split(X):
+                train_idx = _purged_split(
+                    n_samples,
+                    raw_train_idx,
+                    test_idx,
+                    self._purge_window,
+                    self._embargo_window,
+                )
+                X_tr, X_te = X.iloc[train_idx], X.iloc[test_idx]
+                y_tr, y_te = y[train_idx], y[test_idx]
+
+                clf = lgb.LGBMClassifier(**params, n_estimators=self._n_rounds)
+                clf.fit(
+                    X_tr,
+                    y_tr,
+                    categorical_feature=categorical_indices,
+                    eval_set=[(X_te, y_te)],
+                    callbacks=[lgb.log_evaluation(0), lgb.early_stopping(50, verbose=False)],
+                )
+                fold_test_scores.append(float(np.mean(clf.predict(X_te) == y_te)))
+                fold_train_scores.append(float(np.mean(clf.predict(X_tr) == y_tr)))
+
+            mean_test = float(np.mean(fold_test_scores))
+            mean_train = float(np.mean(fold_train_scores))
+            gap = mean_train - mean_test
+            return mean_test - 2 * gap
+
+        study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler())
+        study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
+
+        best_trial = study.best_trial
+        best_full_params = {
+            "objective": "multiclass",
+            "num_class": 3,
+            "metric": "multi_logloss",
+            "boosting_type": "gbdt",
+            "is_unbalance": True,
+            "verbose": -1,
+            "n_jobs": -1,
+            "seed": 42,
+            "bagging_freq": 5,
+            **best_trial.params,
+        }
+
+        logger.info(
+            "Optuna best: composite=%.4f after %d trials | %s",
+            best_trial.value,
+            n_trials,
+            best_trial.params,
+        )
+
+        return HyperparameterSearchResult(
+            best_params=best_full_params,
+            best_score=best_trial.value or 0.0,
+            all_results=[
+                {"trial": t.number, "value": t.value, "params": t.params} for t in study.trials
+            ],
+            n_trials=n_trials,
+        )
+
+    @staticmethod
+    def save_best_params(
+        result: HyperparameterSearchResult,
+        data_dir: Path,
+        strategy_type: str | None = None,
+    ) -> Path:
+        """Save best hyperparameters to JSON for the train command to pick up.
+
+        Args:
+            result: Tuning search result.
+            data_dir: Base data directory (e.g. data/raw).
+            strategy_type: If provided, saves as ``best_params_{strategy_type}.json``.
+
+        Returns:
+            Path to the saved JSON file.
+        """
+        filename = f"best_params_{strategy_type}.json" if strategy_type else "best_params.json"
+        path = data_dir / filename
+        payload = {
+            "best_params": result.best_params,
+            "best_score": result.best_score,
+            "n_trials": result.n_trials,
+            "strategy_type": strategy_type,
+        }
+        path.write_text(json.dumps(payload, indent=2))
+        logger.info("Saved best params to %s (score=%.4f)", path, result.best_score)
+        return path
+
+
+def load_tuned_params(
+    data_dir: Path,
+    strategy_type: str | None = None,
+) -> dict[str, Any] | None:
+    """Load previously tuned hyperparameters from JSON.
+
+    Args:
+        data_dir: Base data directory containing best_params.json.
+        strategy_type: If provided, loads ``best_params_{strategy_type}.json``.
+
+    Returns:
+        Dict of LightGBM params, or None if no tuning results exist.
+    """
+    if strategy_type:
+        path = data_dir / f"best_params_{strategy_type}.json"
+    else:
+        path = data_dir / "best_params.json"
+    if not path.exists():
+        return None
+    payload = json.loads(path.read_text())
+    logger.info(
+        "Loaded tuned params from %s (score=%.4f, %d trials)",
+        path,
+        payload.get("best_score", 0),
+        payload.get("n_trials", 0),
+    )
+    return payload.get("best_params")

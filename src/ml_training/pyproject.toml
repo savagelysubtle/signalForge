@@ -17,6 +17,8 @@ dependencies = [
     "mapie>=0.9.0",
     "scipy>=1.15.0",
     "tqdm>=4.67.0",
+    "yfinance>=0.2.50",
+    "optuna>=4.0.0",
 ]
 
 [project.scripts]

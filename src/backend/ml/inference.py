@@ -1,7 +1,7 @@
-"""Load trained model artifact and run predictions.
+"""Load trained model artifacts and run predictions.
 
-Thin inference-only layer -- loads a .joblib file and runs .predict().
-No training code, no heavy dependencies beyond lightgbm + joblib + numpy.
+Supports per-strategy models with automatic fallback to a combined model
+when no strategy-specific artifact is available.
 """
 
 from __future__ import annotations
@@ -18,86 +18,132 @@ from ml.schemas import MLPrediction
 logger = logging.getLogger(__name__)
 
 ARTIFACTS_DIR = Path("ml/artifacts")
-ACTIVE_MODEL = "model_active.joblib"
+ACTIVE_MODEL_NAME = "model_active.joblib"
 
 DIRECTION_CLASSES = ["DOWN", "FLAT", "UP"]
 
-_loaded_model: dict[str, Any] | None = None
+_strategy_models: dict[str, dict[str, Any]] = {}
+_fallback_model: dict[str, Any] | None = None
+_loaded = False
 
 
-def _get_model() -> dict[str, Any] | None:
-    """Load or return cached model artifact.
+def _unpack_artifact(artifact: Any) -> dict[str, Any]:
+    """Convert a ModelArtifact into a plain dict for runtime use."""
+    return {
+        "classifier": artifact.classifier,
+        "regressor": artifact.regressor,
+        "label_encoder": artifact.label_encoder,
+        "calibrator": artifact.calibrator,
+        "conformal": artifact.conformal,
+        "feature_names": artifact.metadata.feature_names if artifact.metadata else [],
+        "metadata": artifact.metadata,
+    }
 
-    Returns:
-        Dict with model components, or None if no artifact exists.
+
+def _load_all_models() -> None:
+    """Discover and load all active models from the artifacts directory.
+
+    Looks for:
+      - ``model_{strategy_type}_active.joblib`` → per-strategy models
+      - ``model_active.joblib`` → combined fallback model
     """
-    global _loaded_model
+    global _strategy_models, _fallback_model, _loaded
+    _strategy_models = {}
+    _fallback_model = None
 
-    if _loaded_model is not None:
-        return _loaded_model
+    if not ARTIFACTS_DIR.exists():
+        logger.debug("Artifacts directory does not exist: %s", ARTIFACTS_DIR)
+        _loaded = True
+        return
 
-    model_path = ARTIFACTS_DIR / ACTIVE_MODEL
-    if not model_path.exists():
-        logger.debug("No active model at %s", model_path)
-        return None
+    fallback_path = ARTIFACTS_DIR / ACTIVE_MODEL_NAME
+    if fallback_path.exists():
+        try:
+            _fallback_model = _unpack_artifact(joblib.load(fallback_path))
+            version = _fallback_model["metadata"].model_version if _fallback_model["metadata"] else "?"
+            logger.info("Loaded combined fallback model: %s", version)
+        except Exception:
+            logger.exception("Failed to load fallback model")
 
-    try:
-        artifact = joblib.load(model_path)
-        _loaded_model = {
-            "classifier": artifact.classifier,
-            "regressor": artifact.regressor,
-            "label_encoder": artifact.label_encoder,
-            "calibrator": artifact.calibrator,
-            "conformal": artifact.conformal,
-            "feature_names": artifact.metadata.feature_names if artifact.metadata else [],
-            "metadata": artifact.metadata,
-        }
-        version = artifact.metadata.model_version if artifact.metadata else "unknown"
-        logger.info("Loaded ML model: %s", version)
-        return _loaded_model
-    except Exception:
-        logger.exception("Failed to load model artifact")
-        return None
+    for p in sorted(ARTIFACTS_DIR.glob("model_*_active.joblib")):
+        if p.name == ACTIVE_MODEL_NAME:
+            continue
+        parts = p.stem.split("_")
+        strategy_type = "_".join(parts[1:-1])
+        try:
+            artifact = joblib.load(p)
+            _strategy_models[strategy_type] = _unpack_artifact(artifact)
+            version = artifact.metadata.model_version if artifact.metadata else "?"
+            logger.info("Loaded strategy model [%s]: %s", strategy_type, version)
+        except Exception:
+            logger.exception("Failed to load strategy model: %s", p.name)
+
+    _loaded = True
+    logger.info(
+        "Model loading complete: %d strategy models + %s fallback",
+        len(_strategy_models),
+        "1" if _fallback_model else "no",
+    )
 
 
-def ml_model_available() -> bool:
+def _get_model(strategy_type: str | None = None) -> dict[str, Any] | None:
+    """Get the best available model for a given strategy type.
+
+    Priority: strategy-specific model → combined fallback → None.
+    """
+    if not _loaded:
+        _load_all_models()
+
+    if strategy_type and strategy_type in _strategy_models:
+        return _strategy_models[strategy_type]
+    return _fallback_model
+
+
+def ml_model_available(strategy_type: str | None = None) -> bool:
     """Check if a trained ML model is available for inference."""
-    return _get_model() is not None
+    return _get_model(strategy_type) is not None
 
 
 def reload_model() -> bool:
-    """Force reload the model artifact (hot-reload for new versions).
+    """Force reload all model artifacts (hot-reload for new versions).
 
     Returns:
-        True if model loaded successfully.
+        True if at least one model loaded successfully.
     """
-    global _loaded_model
-    _loaded_model = None
-    return _get_model() is not None
+    global _loaded
+    _loaded = False
+    _load_all_models()
+    return bool(_strategy_models) or _fallback_model is not None
 
 
 def get_model_info() -> dict[str, Any]:
-    """Get information about the currently loaded model.
+    """Get information about all currently loaded models.
 
     Returns:
-        Dict with model version, accuracy, status, etc.
+        Dict with model status, strategy model list, and fallback info.
     """
-    model = _get_model()
-    if model is None:
-        return {"status": "inactive", "model_version": "none"}
+    if not _loaded:
+        _load_all_models()
 
-    meta = model.get("metadata")
-    if meta is None:
-        return {"status": "active", "model_version": "unknown"}
+    strategy_info: dict[str, dict[str, Any]] = {}
+    for st, model in _strategy_models.items():
+        meta = model.get("metadata")
+        strategy_info[st] = {
+            "model_version": meta.model_version if meta else "unknown",
+            "judge_verdict": meta.judge_verdict if meta else "unknown",
+            "accuracy": meta.metrics.get("overall_accuracy", 0) if meta else 0,
+        }
+
+    fallback_meta = _fallback_model.get("metadata") if _fallback_model else None
 
     return {
-        "status": "active",
-        "model_version": meta.model_version,
-        "training_date": meta.training_date,
-        "overall_accuracy": meta.metrics.get("overall_accuracy", 0),
-        "judge_verdict": meta.judge_verdict or "unknown",
-        "approved_strategies": meta.approved_strategies,
-        "feature_count": len(meta.feature_names),
+        "status": "active" if (_strategy_models or _fallback_model) else "inactive",
+        "strategy_models": strategy_info,
+        "fallback": {
+            "model_version": fallback_meta.model_version if fallback_meta else "none",
+            "judge_verdict": fallback_meta.judge_verdict if fallback_meta else "none",
+        },
+        "total_models": len(_strategy_models) + (1 if _fallback_model else 0),
     }
 
 
@@ -130,7 +176,10 @@ def run_prediction(
     strategy_type: str,
     features: dict[str, Any],
 ) -> MLPrediction | None:
-    """Run ML prediction for a single ticker.
+    """Run ML prediction for a single ticker using the best available model.
+
+    Automatically selects the strategy-specific model if available,
+    falling back to the combined model otherwise.
 
     Args:
         ticker: Ticker symbol.
@@ -140,7 +189,7 @@ def run_prediction(
     Returns:
         MLPrediction or None if model unavailable.
     """
-    model = _get_model()
+    model = _get_model(strategy_type)
     if model is None:
         return None
 
@@ -183,6 +232,8 @@ def run_prediction(
             top_features = [{feature_names[i]: float(importances[i])} for i in top_idx]
 
         model_version = metadata.model_version if metadata else "unknown"
+        model_strategy = metadata.strategy_type if metadata else None
+        used_fallback = model_strategy is None or model_strategy != strategy_type
 
         return MLPrediction(
             ticker=ticker,
@@ -195,7 +246,7 @@ def run_prediction(
             prediction_set=prediction_set,
             reliability_score=reliability,
             top_features=top_features,
-            model_version=model_version,
+            model_version=f"{model_version}{'(fallback)' if used_fallback else ''}",
         )
     except Exception:
         logger.exception("ML prediction failed for %s", ticker)

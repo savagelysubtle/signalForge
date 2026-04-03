@@ -121,6 +121,23 @@ class ParquetStore:
             merged.to_parquet(path, engine="pyarrow", index=False)
         return path
 
+    def save_indicators_df(self, symbol: str, timeframe: str, df: pd.DataFrame) -> Path:
+        """Save a pre-computed indicator DataFrame to Parquet.
+
+        Args:
+            symbol: Ticker symbol.
+            timeframe: Timeframe key.
+            df: DataFrame with a 'date' column and indicator columns.
+
+        Returns:
+            Path to the written Parquet file.
+        """
+        path = self._indicators_dir / f"{symbol}_{timeframe}.parquet"
+        if "date" in df.columns:
+            df = df.sort_values("date").reset_index(drop=True)
+        df.to_parquet(path, engine="pyarrow", index=False)
+        return path
+
     def load_indicators(self, symbol: str, timeframe: str) -> pd.DataFrame:
         """Load merged indicator data from Parquet."""
         path = self._indicators_dir / f"{symbol}_{timeframe}.parquet"
@@ -205,6 +222,21 @@ class ParquetStore:
         suffix = f"_{timeframe}.parquet"
         return sorted(
             p.stem.replace(suffix.replace(".parquet", ""), "") for p in dir_path.glob(f"*{suffix}")
+        )
+
+    def list_strategy_datasets(self) -> list[str]:
+        """Discover available per-strategy feature datasets.
+
+        Returns:
+            Sorted list of strategy type names that have saved datasets.
+            E.g. ["crypto_swing", "swing", "value"] from files like
+            ``crypto_swing_features.parquet``.
+        """
+        suffix = "_features.parquet"
+        return sorted(
+            p.stem.replace("_features", "")
+            for p in self._datasets_dir.glob(f"*{suffix}")
+            if p.stem != "all_features"
         )
 
     def verify_data(self) -> dict[str, Any]:

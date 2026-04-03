@@ -33,6 +33,23 @@ CLASSIFIER_PARAMS: dict[str, Any] = {
     "bagging_fraction": 0.8,
     "bagging_freq": 5,
     "min_child_samples": 20,
+    "is_unbalance": True,
+    "verbose": -1,
+    "n_jobs": -1,
+    "seed": 42,
+}
+
+BINARY_CLASSIFIER_PARAMS: dict[str, Any] = {
+    "objective": "binary",
+    "metric": "binary_logloss",
+    "boosting_type": "gbdt",
+    "num_leaves": 63,
+    "learning_rate": 0.05,
+    "feature_fraction": 0.8,
+    "bagging_fraction": 0.8,
+    "bagging_freq": 5,
+    "min_child_samples": 20,
+    "is_unbalance": True,
     "verbose": -1,
     "n_jobs": -1,
     "seed": 42,
@@ -78,6 +95,7 @@ class FoldResult:
     test_accuracy: float
     test_predictions: np.ndarray
     test_probabilities: np.ndarray
+    train_indices: np.ndarray
     test_indices: np.ndarray
     test_true: np.ndarray
     feature_importances: np.ndarray
@@ -103,6 +121,8 @@ def _identify_feature_columns(df: pd.DataFrame) -> list[str]:
     """Identify columns that should be used as features.
 
     Excludes metadata columns, target columns, and non-predictive columns.
+    Uses prefix matching so any horizon (``return_Xd``, ``direction_Xd``)
+    is automatically excluded.
     """
     exclude = {
         "ticker",
@@ -110,17 +130,16 @@ def _identify_feature_columns(df: pd.DataFrame) -> list[str]:
         "strategy_id",
         "timeframe",
         "close",
-        "return_5d",
-        "return_10d",
-        "return_20d",
-        "direction_5d",
-        "direction_10d",
-        "direction_20d",
         "max_favorable_excursion",
         "max_adverse_excursion",
         "stop_hit",
+        "profitable",
     }
-    return [c for c in df.columns if c not in exclude]
+    return [
+        c
+        for c in df.columns
+        if c not in exclude and not c.startswith("return_") and not c.startswith("direction_")
+    ]
 
 
 def _prepare_features(
@@ -146,9 +165,14 @@ def _prepare_features(
             X[col] = le.fit_transform(X[col])
             encoders[col] = le
 
+    non_cat = [c for c in X.columns if c not in CATEGORICAL_FEATURES]
+    for col in non_cat:
+        X[col] = pd.to_numeric(X[col], errors="coerce")
+
     numeric_cols = X.select_dtypes(include=[np.number]).columns
     for col in numeric_cols:
-        X[col] = X[col].fillna(X[col].median())
+        median = X[col].median()
+        X[col] = X[col].fillna(median if pd.notna(median) else 0.0)
 
     return X, encoders
 
@@ -205,11 +229,16 @@ class PredictionModel:
         cpcv_config: CPCVConfig | None = None,
         classifier_params: dict[str, Any] | None = None,
         regressor_params: dict[str, Any] | None = None,
+        binary_mode: bool = False,
     ) -> None:
         self._target_col = target_col
         self._return_col = return_col
         self._cpcv = cpcv_config or CPCVConfig()
-        self._clf_params = classifier_params or CLASSIFIER_PARAMS.copy()
+        self._binary_mode = binary_mode
+        if binary_mode:
+            self._clf_params = classifier_params or BINARY_CLASSIFIER_PARAMS.copy()
+        else:
+            self._clf_params = classifier_params or CLASSIFIER_PARAMS.copy()
         self._reg_params = regressor_params or REGRESSOR_PARAMS.copy()
         self._result: TrainingResult | None = None
 
@@ -228,22 +257,43 @@ class PredictionModel:
         feature_cols = _identify_feature_columns(df)
         X, _encoders = _prepare_features(df, feature_cols)
 
-        label_encoder = LabelEncoder()
-        label_encoder.fit(DIRECTION_CLASSES)
-        y_cls = label_encoder.transform(df[self._target_col].values)
-        y_reg = df[self._return_col].fillna(0).values
+        if self._binary_mode:
+            label_encoder = LabelEncoder()
+            label_encoder.fit([0, 1])
+            y_cls = df[self._target_col].astype(int).values
+        else:
+            label_encoder = LabelEncoder()
+            label_encoder.fit(DIRECTION_CLASSES)
+            y_cls = label_encoder.transform(df[self._target_col].values)
 
-        tscv = TimeSeriesSplit(n_splits=self._cpcv.n_splits)
+        return_col = self._return_col if self._return_col in df.columns else None
+        y_reg = df[return_col].fillna(0).values if return_col else np.zeros(len(df))
+
+        n_samples = len(X)
+        effective_splits = self._cpcv.n_splits
+        effective_purge = self._cpcv.purge_window
+
+        if n_samples < 100_000:
+            effective_splits = min(self._cpcv.n_splits, 3)
+            effective_purge = min(self._cpcv.purge_window, max(20, n_samples // 500))
+            logger.info(
+                "Small dataset (%d rows): using n_splits=%d, purge_window=%d",
+                n_samples,
+                effective_splits,
+                effective_purge,
+            )
+
+        tscv = TimeSeriesSplit(n_splits=effective_splits)
         fold_results: list[FoldResult] = []
         all_test_preds: list[np.ndarray] = []
         all_test_true: list[np.ndarray] = []
 
         for fold_idx, (train_idx, test_idx) in enumerate(tscv.split(X)):
             train_idx_clean = _purged_split(
-                len(X),
+                n_samples,
                 train_idx,
                 test_idx,
-                self._cpcv.purge_window,
+                effective_purge,
                 self._cpcv.embargo_window,
             )
 
@@ -289,6 +339,7 @@ class PredictionModel:
                 test_accuracy=test_acc,
                 test_predictions=test_preds,
                 test_probabilities=test_probs,
+                train_indices=train_idx_clean,
                 test_indices=test_idx,
                 test_true=y_test,
                 feature_importances=clf.feature_importances_,

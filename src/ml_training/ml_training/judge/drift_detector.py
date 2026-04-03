@@ -239,8 +239,8 @@ class DriftDetector:
             report.shap_ndcg = 1.0
             return
 
-        ref_ranking = sorted(ref_importances, key=ref_importances.get, reverse=True)
-        cur_ranking = sorted(cur_importances, key=cur_importances.get, reverse=True)
+        ref_ranking = sorted(ref_importances, key=lambda k: float(ref_importances[k]), reverse=True)
+        cur_ranking = sorted(cur_importances, key=lambda k: float(cur_importances[k]), reverse=True)
 
         report.shap_ndcg = compute_ndcg(ref_ranking, cur_ranking)
 

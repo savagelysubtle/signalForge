@@ -18,8 +18,8 @@ import joblib
 
 logger = logging.getLogger(__name__)
 
-ARTIFACTS_DIR = Path("src/ml_training/models/artifacts")
-BACKEND_ARTIFACTS_DIR = Path("src/backend/ml/artifacts")
+ARTIFACTS_DIR = Path(__file__).resolve().parent / "artifacts"
+BACKEND_ARTIFACTS_DIR = Path(__file__).resolve().parents[3] / "backend" / "ml" / "artifacts"
 
 
 @dataclass
@@ -34,6 +34,8 @@ class ModelMetadata:
     judge_verdict: str | None = None
     approved_strategies: list[str] = field(default_factory=list)
     status: str = "trained"
+    strategy_type: str | None = None
+    shap_importance: dict[str, float] | None = None
 
 
 @dataclass
@@ -65,9 +67,14 @@ class ModelRegistry:
         self._backend_dir = backend_dir or BACKEND_ARTIFACTS_DIR
         self._artifacts_dir.mkdir(parents=True, exist_ok=True)
 
-    def _next_version(self) -> str:
-        """Generate the next model version string."""
-        existing = list(self._artifacts_dir.glob("model_v*.joblib"))
+    def _next_version(self, strategy_type: str | None = None) -> str:
+        """Generate the next model version string.
+
+        Args:
+            strategy_type: If provided, version is scoped to that strategy.
+        """
+        pattern = f"model_{strategy_type}_v*.joblib" if strategy_type else "model_v*.joblib"
+        existing = list(self._artifacts_dir.glob(pattern))
         if not existing:
             return "v1"
 
@@ -85,19 +92,27 @@ class ModelRegistry:
         self,
         artifact: ModelArtifact,
         version: str | None = None,
+        strategy_type: str | None = None,
     ) -> Path:
         """Save a model artifact to disk.
 
         Args:
             artifact: Complete model artifact with all components.
             version: Explicit version string. Auto-generated if None.
+            strategy_type: Strategy type key (e.g. "swing"). If provided,
+                the artifact is stored as ``model_{strategy_type}_v{N}_{date}.joblib``.
 
         Returns:
             Path to the saved .joblib file.
         """
-        version = version or self._next_version()
+        version = version or self._next_version(strategy_type)
         date_str = datetime.now(tz=UTC).strftime("%Y%m%d")
-        filename = f"model_{version}_{date_str}.joblib"
+
+        if strategy_type:
+            filename = f"model_{strategy_type}_{version}_{date_str}.joblib"
+        else:
+            filename = f"model_{version}_{date_str}.joblib"
+
         path = self._artifacts_dir / filename
 
         if artifact.metadata is None:
@@ -105,15 +120,17 @@ class ModelRegistry:
                 model_version=version,
                 training_date=date_str,
                 feature_names=[],
+                strategy_type=strategy_type,
             )
         else:
             artifact.metadata.model_version = version
             artifact.metadata.training_date = date_str
+            artifact.metadata.strategy_type = strategy_type
 
         joblib.dump(artifact, path)
         logger.info("Saved model artifact: %s", path)
 
-        meta_path = self._artifacts_dir / f"model_{version}_{date_str}_meta.json"
+        meta_path = path.with_suffix("").with_name(path.stem + "_meta.json")
         meta_path.write_text(json.dumps(asdict(artifact.metadata), indent=2))
 
         return path
@@ -147,35 +164,89 @@ class ModelRegistry:
             versions.append({"path": str(p), "filename": p.name, **meta})
         return versions
 
-    def get_latest(self) -> Path | None:
+    def get_latest(self, strategy_type: str | None = None) -> Path | None:
         """Get the path to the latest model artifact.
+
+        Args:
+            strategy_type: If provided, returns the latest per-strategy model.
+                If None, returns the latest combined (non-strategy) model.
 
         Returns:
             Path to the most recent .joblib file, or None if none exist.
         """
-        artifacts = sorted(self._artifacts_dir.glob("model_v*.joblib"))
+        pattern = f"model_{strategy_type}_v*.joblib" if strategy_type else "model_v*.joblib"
+        artifacts = sorted(self._artifacts_dir.glob(pattern))
         return artifacts[-1] if artifacts else None
 
-    def promote_to_shadow(self, artifact_path: Path) -> Path:
+    def list_strategy_models(self) -> dict[str, Path]:
+        """List the latest model artifact for each strategy type.
+
+        Returns:
+            Mapping of strategy_type → Path for each available per-strategy model.
+        """
+        models: dict[str, Path] = {}
+        for p in sorted(self._artifacts_dir.glob("model_*_v*.joblib")):
+            parts = p.stem.split("_")
+            v_idx = next(
+                (i for i, x in enumerate(parts) if x.startswith("v") and x[1:].isdigit()), None
+            )
+            if v_idx is not None and v_idx > 1:
+                strategy = "_".join(parts[1:v_idx])
+                models[strategy] = p
+        return models
+
+    def promote_to_shadow(
+        self,
+        artifact_path: Path,
+        strategy_type: str | None = None,
+    ) -> Path:
         """Copy a model artifact to the backend for shadow mode.
 
         Args:
             artifact_path: Path to the source .joblib artifact.
+            strategy_type: If provided, names the file
+                ``model_{strategy_type}_active.joblib``.
 
         Returns:
             Path to the copied artifact in the backend directory.
         """
         self._backend_dir.mkdir(parents=True, exist_ok=True)
-        dest = self._backend_dir / "model_active.joblib"
+        if strategy_type:
+            dest = self._backend_dir / f"model_{strategy_type}_active.joblib"
+        else:
+            dest = self._backend_dir / "model_active.joblib"
         shutil.copy2(artifact_path, dest)
         logger.info("Promoted model to shadow: %s -> %s", artifact_path, dest)
         return dest
 
-    def get_active_model_path(self) -> Path | None:
-        """Get the path to the currently active model in the backend.
+    def promote_all_strategies(self) -> list[Path]:
+        """Promote the latest model for every strategy type plus the combined fallback.
 
         Returns:
-            Path to model_active.joblib if it exists, None otherwise.
+            List of paths to promoted artifacts in the backend directory.
         """
-        active = self._backend_dir / "model_active.joblib"
+        promoted: list[Path] = []
+
+        combined = self.get_latest()
+        if combined:
+            promoted.append(self.promote_to_shadow(combined))
+
+        for strategy_type, path in self.list_strategy_models().items():
+            promoted.append(self.promote_to_shadow(path, strategy_type))
+
+        return promoted
+
+    def get_active_model_path(self, strategy_type: str | None = None) -> Path | None:
+        """Get the path to the currently active model in the backend.
+
+        Args:
+            strategy_type: If provided, looks for the strategy-specific active model.
+
+        Returns:
+            Path to the active .joblib if it exists, None otherwise.
+        """
+        if strategy_type:
+            active = self._backend_dir / f"model_{strategy_type}_active.joblib"
+        else:
+            active = self._backend_dir / "model_active.joblib"
         return active if active.exists() else None
