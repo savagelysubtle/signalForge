@@ -51,6 +51,8 @@ TIMEFRAME_MAP: dict[str, str] = {
     "M": "monthly",
 }
 
+_INTRADAY_FMP_TIMEFRAMES = frozenset({"1min", "5min", "15min", "30min", "1hour", "4hour"})
+
 
 def _get_api_key() -> str:
     """Retrieve the FMP API key or raise."""
@@ -531,8 +533,15 @@ async def build_technical_snapshot(
         logger.warning("No price data for %s/%s — cannot build snapshot", symbol, timeframe)
         return None
 
-    latest = candles[0]
-    price_current = latest.get("close", latest.get("price", 0))
+    # For intraday timeframes, candles[0] is the currently forming (incomplete)
+    # bar whose partial close/high/low would contaminate indicators. Use the
+    # most recently *completed* bar instead.
+    latest = candles[1] if fmp_tf in _INTRADAY_FMP_TIMEFRAMES and len(candles) > 1 else candles[0]
+    # Prefer split/dividend-adjusted close for equities (daily FMP endpoint
+    # returns adjClose). This keeps inference aligned with training data which
+    # uses yfinance auto_adjust=True.  For intraday or when adjClose is absent
+    # (crypto), fall back to raw close.
+    price_current = latest.get("adjClose") or latest.get("close") or latest.get("price", 0)
     if not price_current:
         return None
 

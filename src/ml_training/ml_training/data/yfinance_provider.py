@@ -48,14 +48,24 @@ def _from_yf_symbol(yf_symbol: str) -> str:
     return yf_symbol
 
 
+YF_INTERVAL_MAP: dict[str, str] = {
+    "D": "1d",
+    "W": "1wk",
+    "M": "1mo",
+}
+
+
 def download_daily_ohlcv(
     tickers: list[str],
     category: str,
     store: ParquetStore,
     completed: set[str],
     lookback_years: int = 2,
+    timeframe: str = "D",
 ) -> dict[str, int]:
-    """Batch-download daily OHLCV for all tickers via yfinance.
+    """Batch-download OHLCV for all tickers via yfinance.
+
+    Supports daily (D), weekly (W), and monthly (M) intervals.
 
     Args:
         tickers: List of ticker symbols in internal format.
@@ -63,17 +73,21 @@ def download_daily_ohlcv(
         store: ParquetStore to save data into.
         completed: Set of checkpoint keys already done.
         lookback_years: How many years of history to fetch.
+        timeframe: Internal timeframe code ('D', 'W', or 'M').
 
     Returns:
         Dict mapping symbol → number of candles stored.
     """
     import yfinance as yf
 
+    yf_interval = YF_INTERVAL_MAP.get(timeframe, "1d")
+    tf_label = {"D": "daily", "W": "weekly", "M": "monthly"}.get(timeframe, timeframe)
+
     to_fetch: list[str] = []
     yf_to_internal: dict[str, str] = {}
 
     for sym in tickers:
-        key = f"prices:{sym}:D"
+        key = f"prices:{sym}:{timeframe}"
         if key in completed:
             continue
         yf_sym = _to_yf_symbol(sym, category)
@@ -81,18 +95,19 @@ def download_daily_ohlcv(
         yf_to_internal[yf_sym] = sym
 
     if not to_fetch:
-        logger.info("All %s daily prices already downloaded, skipping", category)
+        logger.info("All %s %s prices already downloaded, skipping", category, tf_label)
         return {}
 
     logger.info(
-        "Downloading daily OHLCV via yfinance: %d %s tickers (%d yr history)",
+        "Downloading %s OHLCV via yfinance: %d %s tickers (%d yr history)",
+        tf_label,
         len(to_fetch),
         category,
         lookback_years,
     )
 
     results: dict[str, int] = {}
-    pbar = tqdm(total=len(to_fetch), desc=f"yf {category} daily", unit="ticker")
+    pbar = tqdm(total=len(to_fetch), desc=f"yf {category} {tf_label}", unit="ticker")
 
     for batch_start in range(0, len(to_fetch), YF_BATCH_SIZE):
         batch = to_fetch[batch_start : batch_start + YF_BATCH_SIZE]
@@ -101,7 +116,7 @@ def download_daily_ohlcv(
             data = yf.download(
                 tickers=batch,
                 period=f"{lookback_years}y",
-                interval="1d",
+                interval=yf_interval,
                 group_by="ticker",
                 auto_adjust=True,
                 threads=True,
@@ -160,9 +175,9 @@ def download_daily_ohlcv(
                     if hasattr(row.get("date"), "isoformat"):
                         row["date"] = row["date"].isoformat()[:10]
 
-                store.save_prices(internal_sym, "D", candle_list)
+                store.save_prices(internal_sym, timeframe, candle_list)
                 results[internal_sym] = len(candle_list)
-                completed.add(f"prices:{internal_sym}:D")
+                completed.add(f"prices:{internal_sym}:{timeframe}")
             except Exception:
                 logger.warning("Failed to process yfinance data for %s", yf_sym)
 
@@ -174,7 +189,8 @@ def download_daily_ohlcv(
     pbar.close()
     stored = sum(results.values())
     logger.info(
-        "yfinance: stored daily OHLCV for %d/%d %s tickers (%d total candles)",
+        "yfinance: stored %s OHLCV for %d/%d %s tickers (%d total candles)",
+        tf_label,
         len(results),
         len(to_fetch),
         category,

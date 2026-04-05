@@ -19,6 +19,10 @@ dependencies = [
     "tqdm>=4.67.0",
     "yfinance>=0.2.50",
     "optuna>=4.0.0",
+    "supabase>=2.0.0",
+    "hmmlearn>=0.3",
+    "tsfresh>=0.20",
+    "crepes>=0.9.0",
 ]
 
 [project.scripts]
@@ -68,6 +72,4 @@ dev = [
     "ruff>=0.15.7",
     "ty>=0.0.24",
 ]
-judge = [
-    "crepes>=0.9.0",
-]
+judge = []

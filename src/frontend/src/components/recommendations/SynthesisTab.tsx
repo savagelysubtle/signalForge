@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import type { Recommendation, DebateCase, TrackAgreement, ConfidenceBreakdown, SignalStrength } from '../../types';
 import { motion, AnimatePresence } from 'motion/react';
-import { ShieldAlert, ChevronDown, ChevronUp, Ban, Eye, Gauge, Clock, AlertTriangle } from 'lucide-react';
+import { ShieldAlert, ChevronDown, ChevronUp, Ban, Eye, Gauge, Clock, AlertTriangle, BrainCircuit, ShieldOff } from 'lucide-react';
 import clsx from 'clsx';
 
 interface SynthesisTabProps {
@@ -169,6 +169,127 @@ function ConfidenceBreakdownPanel({ breakdown, rawConfidence, signalStrength }: 
           </ul>
         </div>
       )}
+    </div>
+  );
+}
+
+function mlProbColor(prob: number): string {
+  if (prob >= 0.65) return 'text-accent-profit';
+  if (prob >= 0.52) return 'text-accent-alert';
+  return 'text-accent-loss';
+}
+
+function mlProbBarColor(prob: number): string {
+  if (prob >= 0.65) return 'bg-accent-profit';
+  if (prob >= 0.52) return 'bg-accent-alert';
+  return 'bg-accent-loss';
+}
+
+function MLGatePanel({ rec }: { rec: Recommendation }) {
+  if (rec.ml_probability == null) return null;
+
+  const probPct = Math.round(rec.ml_probability * 100);
+  const wasAdjusted = rec.raw_gpt_position_size_pct != null
+    && rec.raw_gpt_position_size_pct !== rec.position_size_pct;
+  const multPct = rec.ml_size_multiplier != null ? Math.round(rec.ml_size_multiplier * 100) : null;
+
+  return (
+    <div className="bg-bg-concrete rounded-lg border border-border-gutter p-6 mb-6">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <BrainCircuit className="w-4 h-4 text-accent-electric" />
+          <h3 className="text-sm font-semibold text-text-secondary font-body">ML Gate</h3>
+        </div>
+        {rec.ml_model_version && (
+          <span className="text-[11px] font-display text-text-muted bg-bg-void px-2 py-0.5 rounded">
+            {rec.ml_model_version}
+          </span>
+        )}
+      </div>
+
+      {/* Probability bar */}
+      <div className="mb-4">
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-xs text-text-muted font-body">P(profitable)</span>
+          <span className={clsx('text-lg font-display font-bold tabular-nums', mlProbColor(rec.ml_probability))}>
+            {probPct}%
+          </span>
+        </div>
+        <div className="h-2 bg-bg-void rounded-full overflow-hidden">
+          <div
+            className={clsx('h-full rounded-full transition-all', mlProbBarColor(rec.ml_probability))}
+            style={{ width: `${probPct}%` }}
+          />
+        </div>
+      </div>
+
+      {/* Size multiplier + position delta */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+        {multPct != null && (
+          <div className="bg-bg-void rounded-lg p-3 border border-border-gutter">
+            <div className="text-xs text-text-muted mb-1 font-body">Size Multiplier</div>
+            <div className={clsx(
+              'text-sm font-display font-semibold tabular-nums',
+              multPct >= 100 ? 'text-accent-profit' : multPct >= 50 ? 'text-accent-alert' : 'text-accent-loss',
+            )}>
+              {multPct}%
+            </div>
+          </div>
+        )}
+
+        {wasAdjusted && rec.raw_gpt_position_size_pct != null && (
+          <>
+            <div className="bg-bg-void rounded-lg p-3 border border-border-gutter">
+              <div className="text-xs text-text-muted mb-1 font-body">GPT Size</div>
+              <div className="text-sm font-display font-semibold tabular-nums text-text-secondary line-through decoration-text-muted/40">
+                {rec.raw_gpt_position_size_pct.toFixed(1)}%
+              </div>
+            </div>
+            <div className="bg-bg-void rounded-lg p-3 border border-border-gutter">
+              <div className="text-xs text-text-muted mb-1 font-body">Adjusted Size</div>
+              <div className={clsx('text-sm font-display font-semibold tabular-nums', mlProbColor(rec.ml_probability))}>
+                {rec.position_size_pct.toFixed(1)}%
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Conformal set */}
+      {rec.ml_conformal_set.length > 0 && (
+        <div className="mt-3 flex items-center gap-2">
+          <span className="text-xs text-text-muted font-body">Conformal set:</span>
+          <div className="flex gap-1.5">
+            {rec.ml_conformal_set.map(s => (
+              <span key={s} className="text-[11px] font-display font-semibold px-2 py-0.5 rounded bg-accent-electric/15 text-accent-electric">
+                {s}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MLBlockedBanner({ rec }: { rec: Recommendation }) {
+  if (!rec.ml_blocked) return null;
+
+  const probPct = rec.ml_probability != null ? Math.round(rec.ml_probability * 100) : null;
+
+  return (
+    <div className="mb-6 rounded-lg border border-accent-loss/40 bg-accent-loss/8 p-4 flex items-start gap-3">
+      <ShieldOff className="w-5 h-5 text-accent-loss shrink-0 mt-0.5" />
+      <div>
+        <h3 className="text-sm font-display font-semibold text-accent-loss mb-1">
+          ML Gate Blocked
+        </h3>
+        <p className="text-xs text-accent-loss/80">
+          The independent LightGBM model assigned this trade a low probability of success
+          {probPct != null && <> (<span className="font-display font-semibold tabular-nums">{probPct}%</span>)</>}.
+          Position sizing has been zeroed. Consider skipping this trade or waiting for better conditions.
+        </p>
+      </div>
     </div>
   );
 }
@@ -409,6 +530,9 @@ export function SynthesisTab({ recommendation }: SynthesisTabProps) {
         </div>
       )}
 
+      {/* ML Gate — Blocked Banner */}
+      <MLBlockedBanner rec={recommendation} />
+
       {/* Track Agreement */}
       {recommendation.track_agreement && (
         <TrackAgreementPanel agreement={recommendation.track_agreement} />
@@ -422,6 +546,9 @@ export function SynthesisTab({ recommendation }: SynthesisTabProps) {
           signalStrength={recommendation.signal_strength ?? null}
         />
       )}
+
+      {/* ML Gate — Probability, Sizing, Conformal Set */}
+      <MLGatePanel rec={recommendation} />
 
       {/* Confidence Adjustment */}
       {recommendation.confidence_adjustment && recommendation.action !== 'NO_TRADE' && recommendation.action !== 'WATCH' && (

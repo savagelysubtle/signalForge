@@ -17,10 +17,60 @@ logger = logging.getLogger(__name__)
 
 EMA_PERIODS = [9, 21, 50, 200]
 
+# Per-strategy triple-barrier TP/SL multipliers.  The TP/SL ratio must match
+# each strategy's natural edge: mean-reversion needs tight TP with wider SL,
+# momentum should let winners run, scalps need symmetric tight barriers, etc.
+STRATEGY_BARRIER_CONFIG: dict[str, dict[str, float]] = {
+    "mean_reversion": {"profit_mult": 1.0, "stop_mult": 1.5},
+    "momentum_breakout": {"profit_mult": 3.0, "stop_mult": 1.0},
+    "swing": {"profit_mult": 2.0, "stop_mult": 1.0},
+    "earnings_play": {"profit_mult": 2.5, "stop_mult": 1.0},
+    "value_accumulation": {"profit_mult": 2.0, "stop_mult": 1.5},
+    "bollinger_band_squeeze_breakout": {"profit_mult": 1.5, "stop_mult": 1.0},
+    "intraday_scalp": {"profit_mult": 1.2, "stop_mult": 1.0},
+    "vwap_reversal_scalp": {"profit_mult": 1.0, "stop_mult": 1.0},
+    "ema_21_pullback": {"profit_mult": 2.0, "stop_mult": 1.0},
+    "ema_50_200_golden_cross": {"profit_mult": 2.5, "stop_mult": 1.0},
+    "ema_stack_momentum": {"profit_mult": 2.0, "stop_mult": 1.0},
+    "crypto_swing": {"profit_mult": 2.0, "stop_mult": 1.0},
+    "crypto_intraday": {"profit_mult": 1.5, "stop_mult": 1.0},
+    "crypto_intraday_scalp": {"profit_mult": 1.2, "stop_mult": 1.0},
+    "intraday": {"profit_mult": 1.5, "stop_mult": 1.0},
+}
+_DEFAULT_BARRIER = {"profit_mult": 2.0, "stop_mult": 1.0}
+
+
+def get_barrier_config(strategy_type: str) -> dict[str, float]:
+    """Return triple-barrier TP/SL config for a strategy type.
+
+    Falls back to the default 2:1 ratio for unknown strategies.
+    """
+    return STRATEGY_BARRIER_CONFIG.get(strategy_type, _DEFAULT_BARRIER)
+
+
+# Per-asset-class FFD differencing order.  Crypto is more mean-reverting and
+# needs less differencing; high-frequency intraday has more noise to remove.
+FFD_D_BY_STRATEGY: dict[str, float] = {
+    "crypto_swing": 0.3,
+    "crypto_intraday": 0.3,
+    "crypto_intraday_scalp": 0.3,
+    "intraday_scalp": 0.5,
+    "vwap_reversal_scalp": 0.5,
+    "ema_stack_momentum": 0.5,
+    "intraday": 0.45,
+}
+_DEFAULT_FFD_D = 0.4
+
+
+def get_ffd_d(strategy_type: str) -> float:
+    """Return the FFD differencing order for a strategy type."""
+    return FFD_D_BY_STRATEGY.get(strategy_type, _DEFAULT_FFD_D)
+
 
 def compute_technical_features(
     prices: pd.DataFrame,
     indicators: pd.DataFrame,
+    ffd_d: float = _DEFAULT_FFD_D,
 ) -> pd.DataFrame:
     """Compute technical features for each row in the price DataFrame.
 
@@ -30,6 +80,7 @@ def compute_technical_features(
     Args:
         prices: OHLCV DataFrame with columns: date, open, high, low, close, volume.
         indicators: Merged indicator DataFrame with date + indicator columns.
+        ffd_d: Fractional differencing order for FFD features.
 
     Returns:
         DataFrame with one row per date and ~25 technical feature columns.
@@ -126,6 +177,10 @@ def compute_technical_features(
             (df["close"] - rolling_low_20) / rolling_low_20 * 100
         ).replace([np.inf, -np.inf], np.nan)
 
+    ffd = compute_ffd_features(df, d=ffd_d)
+    features["ffd_close"] = ffd["ffd_close"]
+    features["ffd_return_1d"] = ffd["ffd_return_1d"]
+
     return features
 
 
@@ -216,6 +271,261 @@ def compute_context_features(
         "sector_relative_strength": None,
         "market_breadth_proxy": market_breadth,
     }
+
+
+def compute_ffd_features(
+    prices: pd.DataFrame,
+    d: float = 0.4,
+    threshold: float = 1e-5,
+) -> pd.DataFrame:
+    """Compute fractionally differenced price features (FFD).
+
+    Implements Fixed-Width Window Fractional Differencing from Lopez de Prado
+    Ch. 5. Produces a stationary series that preserves long-term memory,
+    unlike standard differencing which destroys it.
+
+    Args:
+        prices: DataFrame with a ``close`` column.
+        d: Fractional differencing order. 0.4 is typically the minimum
+            for stationarity while preserving memory.
+        threshold: Minimum weight magnitude for truncation.
+
+    Returns:
+        DataFrame with ``ffd_close`` and ``ffd_return_1d`` columns.
+    """
+    close = prices["close"].values.astype(float)
+    n = len(close)
+
+    weights = [1.0]
+    k = 1
+    while True:
+        w = -weights[-1] * (d - k + 1) / k
+        if abs(w) < threshold:
+            break
+        weights.append(w)
+        k += 1
+    weights = np.array(weights)
+    width = len(weights)
+
+    ffd = np.full(n, np.nan)
+    for i in range(width - 1, n):
+        ffd[i] = np.dot(weights, close[i - width + 1 : i + 1])
+
+    ffd_series = pd.Series(ffd, index=prices.index)
+    ffd_return = ffd_series.pct_change(fill_method=None) * 100
+
+    return pd.DataFrame(
+        {"ffd_close": ffd_series, "ffd_return_1d": ffd_return},
+        index=prices.index,
+    )
+
+
+def compute_triple_barrier_label(
+    prices: pd.DataFrame,
+    idx: int,
+    atr_pct: float,
+    profit_mult: float = 2.0,
+    stop_mult: float = 1.0,
+    max_horizon: int = 20,
+) -> dict[str, Any]:
+    """Compute triple-barrier label for path-dependent outcomes.
+
+    Walks forward bar-by-bar from ``idx`` checking whether price hits
+    the profit barrier (upper), stop-loss barrier (lower), or the
+    vertical (time) barrier first.
+
+    Args:
+        prices: OHLCV DataFrame sorted by date.
+        idx: Row index to label.
+        atr_pct: ATR as percentage of price.
+        profit_mult: Multiplier for upper barrier (profit target).
+        stop_mult: Multiplier for lower barrier (stop-loss).
+        max_horizon: Maximum bars to look forward (vertical barrier).
+
+    Returns:
+        Dict with ``triple_barrier_label``, ``barrier_type``,
+        ``bars_to_barrier``, and ``risk_reward_ratio``.
+    """
+    close = prices["close"].values
+    high = prices["high"].values if "high" in prices.columns else close
+    low = prices["low"].values if "low" in prices.columns else close
+    n = len(close)
+
+    entry_price = close[idx]
+    if atr_pct is None or atr_pct <= 0:
+        atr_pct = 2.0
+
+    upper = entry_price * (1 + profit_mult * atr_pct / 100)
+    lower = entry_price * (1 - stop_mult * atr_pct / 100)
+
+    for bar in range(1, min(max_horizon + 1, n - idx)):
+        future_idx = idx + bar
+        if high[future_idx] >= upper:
+            return {
+                "triple_barrier_label": 1,
+                "barrier_type": "profit",
+                "bars_to_barrier": bar,
+                "risk_reward_ratio": profit_mult / stop_mult,
+            }
+        if low[future_idx] <= lower:
+            return {
+                "triple_barrier_label": 0,
+                "barrier_type": "stop",
+                "bars_to_barrier": bar,
+                "risk_reward_ratio": profit_mult / stop_mult,
+            }
+
+    final_return = (close[min(idx + max_horizon, n - 1)] - entry_price) / entry_price
+    return {
+        "triple_barrier_label": 1 if final_return > 0 else 0,
+        "barrier_type": "timeout",
+        "bars_to_barrier": max_horizon,
+        "risk_reward_ratio": profit_mult / stop_mult,
+    }
+
+
+def compute_tsfresh_features(
+    prices: pd.DataFrame,
+    idx: int,
+    window: int = 20,
+) -> dict[str, float]:
+    """Extract automated statistical features via TSFresh.
+
+    Uses the ``MinimalFCParameters`` subset (~30 features) on close
+    and volume series from a rolling window ending at ``idx``.
+
+    Args:
+        prices: OHLCV DataFrame sorted by date.
+        idx: Row index (end of window).
+        window: Lookback window size.
+
+    Returns:
+        Dict of prefixed features (e.g. ``tsf_close_mean``).
+    """
+    try:
+        from tsfresh import extract_features
+        from tsfresh.feature_extraction import MinimalFCParameters
+    except ImportError:
+        return {}
+
+    start = max(0, idx - window + 1)
+    if idx - start < 5:
+        return {}
+
+    window_df = prices.iloc[start : idx + 1].copy()
+
+    ts_input = pd.DataFrame(
+        {
+            "id": 0,
+            "time": range(len(window_df)),
+            "close": window_df["close"].values,
+            "volume": window_df["volume"].values if "volume" in window_df.columns else 0.0,
+        }
+    )
+
+    try:
+        extracted = extract_features(
+            ts_input,
+            column_id="id",
+            column_sort="time",
+            default_fc_parameters=MinimalFCParameters(),
+            disable_progressbar=True,
+            n_jobs=0,
+        )
+        result: dict[str, float] = {}
+        for col in extracted.columns:
+            clean_name = col.replace("__", "_").replace('"', "")
+            result[f"tsf_{clean_name}"] = float(extracted[col].iloc[0])
+        return result
+    except Exception:
+        logger.debug("TSFresh extraction failed at idx=%d", idx, exc_info=True)
+        return {}
+
+
+def compute_primary_signal(
+    prices: pd.DataFrame,
+    indicators: pd.DataFrame,
+    strategy_type: str,
+    idx: int,
+) -> dict[str, Any]:
+    """Generate a rule-based primary trade signal for meta-labeling.
+
+    Produces a directional signal (+1 long, -1 short, 0 neutral)
+    based on classic strategy rules. The meta-labeler then decides
+    whether to take each signal.
+
+    Args:
+        prices: OHLCV DataFrame.
+        indicators: Indicator DataFrame with EMAs, RSI, etc.
+        strategy_type: Strategy type string.
+        idx: Row index to evaluate.
+
+    Returns:
+        Dict with ``primary_signal`` and ``signal_strength``.
+    """
+    close = prices["close"].values
+    if idx < 21:
+        return {"primary_signal": 0, "signal_strength": 0.0}
+
+    signal = 0
+    strength = 0.0
+
+    if strategy_type in ("swing", "crypto_swing"):
+        ema_9 = _safe_ema_at(indicators, "ema_9", idx)
+        ema_21 = _safe_ema_at(indicators, "ema_21", idx)
+        if ema_9 is not None and ema_21 is not None:
+            if ema_9 > ema_21:
+                signal = 1
+                strength = min(1.0, (ema_9 - ema_21) / ema_21 * 100)
+            elif ema_9 < ema_21:
+                signal = -1
+                strength = min(1.0, (ema_21 - ema_9) / ema_21 * 100)
+
+    elif strategy_type == "mean_reversion":
+        rsi = _safe_indicator_at(indicators, "rsi", idx)
+        if rsi is not None:
+            if rsi < 30:
+                signal = 1
+                strength = (30 - rsi) / 30
+            elif rsi > 70:
+                signal = -1
+                strength = (rsi - 70) / 30
+
+    elif strategy_type in ("value", "value_accumulation"):
+        if idx > 0:
+            ret_20 = (close[idx] - close[max(0, idx - 20)]) / close[max(0, idx - 20)]
+            if ret_20 < -0.05:
+                signal = 1
+                strength = min(1.0, abs(ret_20) / 0.10)
+
+    elif strategy_type in ("event", "earnings_play"):
+        signal = 1
+        strength = 0.5
+
+    elif strategy_type in ("intraday", "crypto_intraday"):
+        if idx >= 5:
+            high_5 = float(np.max(prices["high"].values[idx - 5 : idx]))
+            if close[idx] > high_5:
+                signal = 1
+                strength = min(1.0, (close[idx] - high_5) / high_5 * 100)
+
+    return {"primary_signal": signal, "signal_strength": strength}
+
+
+def _safe_ema_at(indicators: pd.DataFrame, col: str, idx: int) -> float | None:
+    """Safely retrieve an EMA value at a given index."""
+    if col not in indicators.columns or idx >= len(indicators):
+        return None
+    val = indicators[col].iloc[idx]
+    return float(val) if pd.notna(val) else None
+
+
+def _safe_indicator_at(indicators: pd.DataFrame, col: str, idx: int) -> float | None:
+    """Safely retrieve an indicator value at a given index."""
+    if col not in indicators.columns or idx >= len(indicators):
+        return None
+    val = indicators[col].iloc[idx]
+    return float(val) if pd.notna(val) else None
 
 
 def compute_outcome_labels(
@@ -538,6 +848,139 @@ def compute_multi_timeframe_features(
         result[f"{prefix}_momentum_score"] = float(ret)
 
     return result
+
+
+_ACTION_ENCODE = {
+    "BUY": 1,
+    "SHORT": -1,
+    "HOLD": 0,
+    "NO_TRADE": 0,
+    "WATCH": 0,
+}
+
+
+def compute_llm_features(
+    action: str,
+    confidence: float | None,
+    entry_price: float | None,
+    stop_loss: float | None,
+    take_profit: float | None,
+    risk_reward_ratio: float | None = None,
+    key_factors: list[str] | None = None,
+    warnings: list[str] | None = None,
+) -> dict[str, float | None]:
+    """Encode GPT recommendation metadata as numeric ML features.
+
+    These features capture the LLM pipeline's "opinion" so the meta-labeler
+    can learn which GPT signals are worth following.
+
+    Args:
+        action: Recommendation action (BUY, SHORT, HOLD, NO_TRADE, WATCH).
+        confidence: GPT confidence score (0-1).
+        entry_price: Recommended entry price.
+        stop_loss: Recommended stop-loss level.
+        take_profit: Recommended take-profit level.
+        risk_reward_ratio: Explicit R/R ratio from GPT.
+        key_factors: List of key factors cited.
+        warnings: List of warnings.
+
+    Returns:
+        Dict of LLM-derived numeric features.
+    """
+    action_encoded = _ACTION_ENCODE.get(action.upper() if action else "", 0)
+
+    sl_dist = None
+    tp_dist = None
+    if entry_price and entry_price > 0:
+        if stop_loss and stop_loss > 0:
+            sl_dist = abs(entry_price - stop_loss) / entry_price * 100
+        if take_profit and take_profit > 0:
+            tp_dist = abs(take_profit - entry_price) / entry_price * 100
+
+    computed_rr = None
+    if sl_dist and tp_dist and sl_dist > 0:
+        computed_rr = tp_dist / sl_dist
+
+    return {
+        "llm_action_encoded": float(action_encoded),
+        "llm_confidence": float(confidence) if confidence is not None else None,
+        "llm_rr_ratio": float(risk_reward_ratio) if risk_reward_ratio is not None else computed_rr,
+        "llm_sl_distance_pct": sl_dist,
+        "llm_tp_distance_pct": tp_dist,
+        "llm_key_factor_count": float(len(key_factors)) if key_factors else 0.0,
+        "llm_warning_count": float(len(warnings)) if warnings else 0.0,
+    }
+
+
+CATEGORICAL_FEATURES = {"strategy_type", "market_regime", "sector"}
+
+# Feature groups for model modes.  The independent (gate) model uses only
+# market-observable features — no LLM outputs — so it can run *before* GPT
+# and serve as an independent check.  The shadow model gets everything.
+LLM_FEATURES: frozenset[str] = frozenset(
+    {
+        "llm_action_encoded",
+        "llm_confidence",
+        "llm_rr_ratio",
+        "llm_sl_distance_pct",
+        "llm_tp_distance_pct",
+        "llm_key_factor_count",
+        "llm_warning_count",
+    }
+)
+
+_NEUTRALIZE_EXCLUDE = {
+    "ticker",
+    "date",
+    "strategy_id",
+    "strategy_type",
+    "timeframe",
+    "close",
+    "market_regime",
+    "sector",
+    "day_of_week",
+    "month",
+    "profitable",
+    "stop_hit",
+    "max_favorable_excursion",
+    "max_adverse_excursion",
+    "triple_barrier_label",
+    "barrier_type",
+    "bars_to_barrier",
+    "risk_reward_ratio",
+    "primary_signal",
+    "signal_strength",
+    "hmm_regime",
+}
+
+
+def neutralize_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Z-score normalize numeric features within each date across tickers.
+
+    This removes ticker-level identity from features.  After neutralization
+    a feature value represents "how extreme is this reading relative to the
+    cross-section today?" rather than an absolute level that the model can
+    use to fingerprint individual tickers.
+
+    Categorical and metadata columns are left untouched.  Dates with only
+    a single ticker are set to 0 (no cross-section to compare against).
+    """
+    numeric_cols = [
+        c
+        for c in df.select_dtypes(include=[np.number]).columns
+        if c not in _NEUTRALIZE_EXCLUDE
+        and not c.startswith("return_")
+        and not c.startswith("direction_")
+    ]
+    if not numeric_cols or "date" not in df.columns:
+        return df
+
+    df = df.copy()
+    for col in numeric_cols:
+        df[col] = df.groupby("date")[col].transform(
+            lambda x: (x - x.mean()) / (x.std() + 1e-8) if len(x) > 1 else 0.0
+        )
+    return df
 
 
 def _empty_fundamentals() -> dict[str, float | None]:

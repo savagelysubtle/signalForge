@@ -185,6 +185,14 @@ export interface Recommendation {
   signal_generated_at: string | null; // ISO 8601 UTC
   price_at_signal: number | null;
   entry_valid_window: string | null; // e.g. "1-2 hours", "1-2 trading days"
+  // Original GPT position size before ML gate adjustment
+  raw_gpt_position_size_pct: number | null;
+  // ML gate fields — set by the independent LightGBM model at Stage 4.8
+  ml_probability: number | null;
+  ml_size_multiplier: number | null;
+  ml_blocked: boolean;
+  ml_model_version: string | null;
+  ml_conformal_set: string[];
 }
 
 // ---------------------------------------------------------------------------

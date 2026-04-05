@@ -616,6 +616,258 @@ checking, not tests. The `pyproject.toml` has `per-file-ignores` configured for
 
 ---
 
+## ML Training Pipeline
+
+Standalone offline system in `src/ml_training/` that produces `.joblib` model
+artifacts. The backend (`src/backend/ml/`) only loads artifacts for inference —
+it never imports from `ml_training`. The only interface is the `.joblib` file
+that `promote` copies over.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                  ML TRAINING PIPELINE (src/ml_training/)            │
+│                                                                     │
+│  acquire ──► build-dataset ──► train ──► tune ──► promote           │
+│    │              │               │        │         │              │
+│  FMP/Binance   Features:        LightGBM  Optuna   Copy to        │
+│  yfinance      • Technical      TabPFN*   GT-Score  backend        │
+│  ──► Parquet   • FFD            Ensemble* objective                │
+│                • Triple barrier                                    │
+│                • TSFresh                  Judge:                    │
+│                • HMM regimes    Venn-ABERS calibration             │
+│                • Primary signal Mondrian conformal                 │
+│                • Augmentation   Drift detection (PSI/KS/ADWIN)     │
+│                ──► Parquet      WFO integrity + DSR                │
+│                                 ──► .joblib                        │
+└──────────────────────────────────────────┬──────────────────────────┘
+                                           │
+                            .joblib artifact drop-in
+                                           │
+                                           ▼
+                        ┌──────────────────────────────┐
+                        │  LIVE INFERENCE (src/backend) │
+                        │  Load artifact → .predict()   │
+                        └──────────────────────────────┘
+
+* TabPFN and Ensemble require optional deps not available on Python 3.14t yet
+```
+
+### CLI Reference
+
+All commands run from `src/ml_training/`. Free-threaded prefix:
+`uv run --python 3.14t python -X gil=0 -m ml_training.pipeline.cli <command>`
+
+| Command | Description | Key Flags |
+|---------|-------------|-----------|
+| `acquire` | Pull OHLCV + indicators + fundamentals | `--category {all,tsx,us,crypto}`, `--timeframes D,4H,1H,15m,1m`, `--lookback-days 730` |
+| `build-dataset` | Feature extraction, labeling, FFD, triple barrier, HMM | `--data-dir`, `--augment` |
+| `validate` | Dataset quality checks (leakage, balance) | `--data-dir` |
+| `train` | Train-judge loop with progressive adjustments | `--rounds N`, `--per-strategy`, `--three-class`, `--model {lgbm,tabpfn,ensemble}`, `--meta-label`, `--regime-split` |
+| `tune` | Hyperparameter search (GT-Score objective) | `--n-trials N`, `--method {grid,optuna}`, `--per-strategy` |
+| `verify` | Verify raw data quality | `--data-dir` |
+| `promote` | Copy passing artifacts to backend | — |
+| `resolve-outcomes` | Match predictions against actual prices | `--horizon N` |
+| `report-outcomes` | Print rolling accuracy dashboard | `--data-dir` |
+
+### Project Structure
+
+```
+src/ml_training/
+├── pyproject.toml                           # uv config, deps, ruff/ty settings
+├── data/raw/                                # Runtime data (gitignored Parquet)
+└── ml_training/                             # Installable Python package
+    ├── threading.py                         # Free-threading utilities (GIL detection, parallel_map)
+    ├── data/
+    │   ├── acquisition.py                   # FMP historical data puller (rate-limited, checkpointed)
+    │   ├── augmentation.py                  # Synthetic data augmentation (jitter, SMOTE-like)
+    │   ├── binance_provider.py              # Binance Vision CSV/zip downloads (threaded I/O)
+    │   ├── yfinance_provider.py             # Bulk daily OHLCV via yfinance
+    │   └── storage.py                       # ParquetStore: organized Parquet file I/O
+    ├── features/
+    │   ├── engineering.py                   # Feature extraction (technical + FFD + triple barrier + TSFresh)
+    │   ├── dataset_builder.py               # Strategy replay, labeling, HMM regimes (threaded)
+    │   ├── regime.py                        # HMM-based market regime detection (GaussianHMM)
+    │   └── validator.py                     # Pre-training dataset QA (leakage, balance, coverage)
+    ├── models/
+    │   ├── predictor.py                     # LightGBM classifier + regressor, CPCV splits
+    │   ├── tabpfn_model.py                  # TabPFN v2 wrapper (optional, needs tabpfn)
+    │   ├── ensemble.py                      # Stacked ensemble: LightGBM + CatBoost + XGBoost (optional)
+    │   ├── meta_labeler.py                  # Meta-labeling: filters primary trade signals
+    │   ├── calibration.py                   # Venn-ABERS / Platt / Isotonic + Mondrian conformal
+    │   ├── registry.py                      # Model versioning, .joblib export, backend promotion
+    │   └── artifacts/                       # Exported model files (.joblib, gitignored)
+    ├── judge/
+    │   ├── judge.py                         # JudgeSystem: orchestrates all 6 validation layers
+    │   ├── drift_detector.py                # PSI, KS, SHAP drift, ADWIN, CBPE
+    │   ├── wfo_validator.py                 # CPCV integrity, purge/embargo, Deflated Sharpe Ratio
+    │   └── report.py                        # JudgeReport generation + verdict + recommendations
+    └── pipeline/
+        ├── cli.py                           # CLI entry point (argparse, GIL logging)
+        ├── training_loop.py                 # Train/judge cycle, model routing, progressive adjustments
+        ├── hyperparameter_tuning.py         # LightGBM CV + Optuna search (GT-Score objective)
+        ├── outcome_tracker.py               # Prediction logging and outcome resolution
+        └── retrain.py                       # Continuous retraining (ADWIN-triggered, sample weighting)
+```
+
+### Feature Engineering
+
+Features are computed in `features/engineering.py` and assembled in
+`features/dataset_builder.py`.
+
+| Category | Features | Source |
+|----------|----------|--------|
+| Technical | EMA, SMA, RSI, MACD, Bollinger, Stochastic, ATR, VWAP, OBV, CCI, Ichimoku, DMI | Hand-crafted from OHLCV |
+| Fractional Differentiation (FFD) | `ffd_close`, `ffd_return_1d` | Price stationarity with memory preservation |
+| Triple Barrier | `triple_barrier_label`, `barrier_type`, `bars_to_barrier`, `risk_reward_ratio` | Path-dependent labeling |
+| TSFresh | Auto-extracted statistical features (mean, variance, entropy, etc.) | Rolling window on intraday strategies |
+| Fundamental | P/E, ROE, debt/equity, market cap, dividend yield | FMP API |
+| Context | VIX, sector breadth, SPY momentum, strategy type | Cross-sectional |
+| HMM Regime | `hmm_regime`, regime probabilities | `hmmlearn.GaussianHMM` on VIX + breadth + SPY |
+| Primary Signal | `primary_signal`, `signal_strength` | Rule-based trade signals for meta-labeling |
+
+**Labeling:** Binary `profitable` target is the default. The old 3-class
+`direction_Xd` (UP/DOWN/FLAT) is available via `--three-class`. Forward-looking
+labels include `return_Xd`, `MFE`, `MAE`, `stop_hit`.
+
+**Neutralization:** Cross-sectional Z-score normalization applied per date
+across tickers. Label and metadata columns are excluded via `_NEUTRALIZE_EXCLUDE`.
+
+### Model Types
+
+| Model | Flag | Dependencies | Notes |
+|-------|------|--------------|-------|
+| **LightGBM** (default) | `--model lgbm` | `lightgbm` (installed) | GBDT with CPCV, 7-seed ensemble, SHAP pruning |
+| **TabPFN v2** | `--model tabpfn` | `tabpfn` (optional) | Zero-tuning transformer, best for <10K samples |
+| **Stacked Ensemble** | `--model ensemble` | `catboost`, `xgboost` (optional) | LightGBM + CatBoost + XGBoost with LogisticRegression meta-learner |
+| **Meta-Labeler** | `--meta-label` | None extra | Trains only on data where primary signal fired |
+
+### Training Loop
+
+`pipeline/training_loop.py` orchestrates the train → judge → adjust cycle:
+
+1. Train model (route to LightGBM / TabPFN / Ensemble / MetaLabeler)
+2. Run 6-layer Judge validation
+3. If FAIL: apply progressive adjustments (increase regularization, switch to
+   DART boosting, increase min_child_samples)
+4. Repeat up to `--rounds N` times
+5. Calibrate probabilities with Venn-ABERS (default) or Platt/Isotonic
+6. Build conformal prediction sets (Mondrian for per-strategy coverage)
+7. Export `.joblib` artifact + metadata JSON
+
+### Judge System (6 Layers)
+
+| Layer | What It Checks | Tool |
+|-------|---------------|------|
+| Calibrator | Probability calibration quality (ECE, Brier) | Venn-ABERS / Platt / Isotonic |
+| Conformal | Prediction set coverage guarantees | Mondrian conformal (per-strategy) |
+| Drift Monitor | Feature distribution shift, concept drift | PSI, KS, SHAP NDCG, ADWIN |
+| WFO Validator | CPCV integrity, purge/embargo, overfit detection | Pure statistics + Deflated Sharpe Ratio |
+| Strategy Audit | Per-strategy accuracy with sample thresholds | Accuracy checks |
+| Reliability | Meta-learner predicting "will this prediction be correct?" | Logistic Regression |
+
+**Verdicts:** `PASS` → promote, `CONDITIONAL_PASS` → approve subset,
+`FAIL` → retrain with progressive adjustments.
+
+### Hyperparameter Tuning (GT-Score)
+
+Both grid search and Optuna TPE use a **GT-Score inspired objective** that
+penalizes overfitting and inconsistency across CV folds:
+
+```python
+composite = mean_score - 2.0 * overfit_gap - fold_variance * 5.0
+```
+
+This replaced the simpler `accuracy - 2 * overfit_gap` formula. The fold
+variance penalty ensures models are consistent, not just accurate on average.
+
+### Calibration & Conformal Prediction
+
+- **Venn-ABERS** (default): Produces calibrated probability *intervals* with
+  finite-sample guarantees, via `crepes` library
+- **Platt scaling**: Logistic regression on model outputs (classic method)
+- **Isotonic regression**: Non-parametric calibration
+- **Mondrian conformal prediction**: Strategy-specific thresholds when
+  `strategy_labels` are provided, ensuring per-strategy conditional coverage
+
+### HMM Regime Detection
+
+`features/regime.py` uses `hmmlearn.GaussianHMM` to identify market states:
+
+- **Inputs:** VIX return, market breadth (% of S&P 500 above 200-day SMA),
+  SPY 20-day momentum
+- **Output:** Hard labels (bull/bear/neutral) + soft probabilities per date
+- **Usage:** Added as features to training data; `--regime-split` trains
+  separate models per regime
+
+### Data Augmentation
+
+`data/augmentation.py` provides synthetic data generation for small strategies:
+
+- **Jitter augmentation** (80% of synthetic samples): Gaussian noise added to
+  numeric features, scaled by `noise_std_scale * column_std`
+- **SMOTE-like interpolation** (20%): Minority-class oversampling via k-NN
+  interpolation
+- **Quality validation**: KS test ensures synthetic data doesn't drift from
+  original distribution
+- Activated by `--augment` flag on `build-dataset` for strategies with <15K
+  samples
+
+### Retraining & Drift Response
+
+`pipeline/retrain.py` manages continuous model updates:
+
+- **ADWIN drift trigger**: When `river.drift.ADWIN` detects concept drift or
+  drift status reaches "quarantine", retraining fires automatically
+- **Exponential sample weighting**: Recent data weighted higher via
+  `exp(-decay_rate * age_in_days)`, half-life logged for transparency
+- **Warm-start**: LightGBM models can be warm-started from previous artifacts
+
+### Free-Threading (Python 3.14t)
+
+The pipeline uses Python 3.14's free-threaded build for true multi-core
+parallelism via `ThreadPoolExecutor`. The `ml_training/threading.py` module
+provides:
+
+- `is_free_threaded()` — detect if GIL is disabled
+- `optimal_workers(task_type)` — auto-detect worker count
+- `parallel_map(fn, items)` — parallel map with sequential fallback
+- `balanced_lgb_njobs(n)` — avoid OpenMP oversubscription with LightGBM
+
+| Parallelized Area | Mechanism | Est. Speedup |
+|-------------------|-----------|--------------|
+| Dataset building (tickers) | ThreadPoolExecutor per ticker | 4-8x |
+| Hyperparameter grid search | Parallel grid configs | 3-6x |
+| Per-strategy training | Concurrent strategy models | 3-4x |
+| SHAP analysis | Two parallel shap_values calls | ~2x |
+| Indicator computation | Parallel ticker × timeframe pairs | 3-5x |
+| Binance downloads | Parallel HTTP downloads (I/O) | 5-10x |
+
+### Dependencies
+
+**Core (installed):** `lightgbm`, `scikit-learn`, `joblib`, `pandas`, `numpy`,
+`pyarrow`, `httpx`, `pydantic`, `shap`, `mapie`, `scipy`, `tqdm`, `yfinance`,
+`optuna`, `hmmlearn`, `tsfresh`, `crepes`
+
+**Optional (no 3.14t wheels yet — code has `try/except ImportError` fallbacks):**
+- `catboost`, `xgboost` — for `--model ensemble`
+- `tabpfn` — for `--model tabpfn`
+- `river` — for ADWIN drift-triggered retraining
+
+**Dev:** `ruff`, `ty`
+
+### Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `FMP_API_KEY` | Yes (for `acquire`) | Financial Modeling Prep API key |
+
+The CLI auto-loads `.env` from project root or parent directories. Override
+with `--api-key` on the `acquire` command.
+
+---
+
 ## Common Tasks
 
 ### Adding a new chart indicator option
@@ -685,3 +937,12 @@ checking, not tests. The `pyproject.toml` has `per-file-ignores` configured for
 - **`App.css`** — leftover Vite template styles, dead code.
 - **`tailwind-merge`** — installed as dependency but not imported by any
   component.
+- **ML Training — optional deps blocked on 3.14t:** `catboost`, `xgboost`,
+  `tabpfn`, `river` have no free-threaded wheels. Code has graceful fallbacks.
+  `--model lgbm` (default) works fully.
+- **ML Training — dollar/volume bars:** Research recommended alternative bar
+  sampling but only time bars are currently implemented.
+- **ML Training — GAN augmentation:** Deferred; SMOTE-like augmentation is
+  implemented as a simpler alternative.
+- **ML Training — online learning pipeline:** `river`-based online learning is
+  implemented but blocked by the `river` 3.14t dependency issue.

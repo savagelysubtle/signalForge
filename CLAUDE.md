@@ -32,6 +32,7 @@ GPT) into a pipeline producing structured trading recommendations. It does
 | ------------ | ----------------------------------------------------- |
 | Frontend     | React 19 + TypeScript 5.9 + Tailwind v4 + Vite 8     |
 | Backend      | Python 3.14 (FastAPI) — ALL business logic lives here |
+| ML Training  | Python 3.14t (free-threaded), LightGBM, scikit-learn  |
 | Hosting      | Vercel (frontend), Railway (backend)                  |
 | Database     | Supabase PostgreSQL via PostgREST (not raw SQL)       |
 | Auth         | Supabase Auth (ES256 JWT via JWKS)                    |
@@ -40,6 +41,7 @@ GPT) into a pipeline producing structured trading recommendations. It does
 | Quality      | `ruff` (lint/format), `ty` (type check), `tsc`        |
 | LLM SDKs     | openai, anthropic, google-generativeai, perplexityai  |
 | Data APIs    | FMP (Financial Modeling Prep), Chart-Img v2           |
+| ML Libraries | lightgbm, shap, hmmlearn, tsfresh, crepes, optuna     |
 | License      | AGPL v3.0                                             |
 
 ---
@@ -56,10 +58,17 @@ GPT) into a pipeline producing structured trading recommendations. It does
 ## Code Quality Commands
 
 ```bash
+# Backend
 cd src/backend
 uv run ruff format          # format
 uv run ruff check --fix     # lint + auto-fix
 uv run ty check             # type check
+
+# ML Training (uses free-threaded Python 3.14t)
+cd src/ml_training
+uv run --python 3.14t ruff format ml_training/
+uv run --python 3.14t ruff check --fix ml_training/
+uv run --python 3.14t ty check
 ```
 
 After editing Python: run format + lint. Before completing a task: run ty check.
@@ -71,18 +80,25 @@ Never use `# noqa` or `# type: ignore` without a justification comment.
 
 ```
 signalForge/
-├── src/backend/          # Python 3.14 FastAPI
-│   ├── api/              # Route handlers
-│   ├── pipeline/         # LLM engine: orchestrator, schemas, validation, stages/, prompts/, tools/
-│   ├── services/         # Business logic (chart_image, fmp_service, strategy, keyring, reflection)
-│   ├── database/         # Supabase connection + SQL migrations
-│   └── middleware/       # JWT auth
-├── src/frontend/src/     # React 19 + TypeScript 5.9 + Tailwind v4
-│   ├── views/            # Recommendations, History, Strategies, Insights, Settings, Login
-│   ├── components/       # auth/, layout/, shared/, recommendations/
-│   ├── hooks/            # usePipeline, useStrategies, useApiKeyStatus, useInsights
-│   ├── api/client.ts     # HTTP client with JWT auth
-│   └── types/index.ts    # TypeScript interfaces (must mirror Pydantic schemas)
+├── src/backend/              # Python 3.14 FastAPI
+│   ├── api/                  # Route handlers
+│   ├── pipeline/             # LLM engine: orchestrator, schemas, validation, stages/, prompts/, tools/
+│   ├── services/             # Business logic (chart_image, fmp_service, strategy, keyring, reflection)
+│   ├── database/             # Supabase connection + SQL migrations
+│   └── middleware/           # JWT auth
+├── src/frontend/src/         # React 19 + TypeScript 5.9 + Tailwind v4
+│   ├── views/                # Recommendations, History, Strategies, Insights, Settings, Login
+│   ├── components/           # auth/, layout/, shared/, recommendations/
+│   ├── hooks/                # usePipeline, useStrategies, useApiKeyStatus, useInsights
+│   ├── api/client.ts         # HTTP client with JWT auth
+│   └── types/index.ts        # TypeScript interfaces (must mirror Pydantic schemas)
+├── src/ml_training/          # Offline ML model training pipeline (Python 3.14t)
+│   └── ml_training/          # Installable Python package
+│       ├── data/             # Data acquisition (FMP, Binance, yfinance) + augmentation
+│       ├── features/         # Feature engineering, dataset building, HMM regimes
+│       ├── models/           # LightGBM, TabPFN, ensemble, meta-labeler, calibration
+│       ├── judge/            # 6-layer validation (calibration, conformal, drift, WFO, audit, reliability)
+│       └── pipeline/         # CLI, training loop, hyperparameter tuning, retraining
 ├── templates/strategies.json
 └── .github/workflows/ci.yml
 ```
@@ -108,6 +124,34 @@ stage contract, concurrency, degraded pipeline, and prompt versioning details.
 
 ---
 
+## ML Training Pipeline Overview
+
+Separate offline system (`src/ml_training/`) that produces `.joblib` model
+artifacts for the backend's inference layer. **Never deployed to production.**
+
+```
+acquire ──► build-dataset ──► train ──► tune ──► promote
+  │              │               │        │         │
+FMP/Binance   Features+FFD    LightGBM  Optuna   Copy .joblib
+yfinance      Triple barrier  +Judge    GT-Score  to backend
+──► Parquet   HMM regimes     Venn-ABERS
+              TSFresh
+              Augmentation
+```
+
+Key concepts:
+- **Binary `profitable` target** (default) — not 3-class direction
+- **Venn-ABERS calibration** with finite-sample guarantees
+- **GT-Score objective** penalizing overfit gap AND fold variance
+- **CPCV** (Combinatorial Purged Cross-Validation) with embargo
+- **HMM regime detection** for market state awareness
+- **Free-threading** (Python 3.14t) for true multi-core parallelism
+
+See [`CLAUDE2.md` → ML Training Pipeline](CLAUDE2.md#ml-training-pipeline) for
+full architecture, CLI reference, feature engineering, and model details.
+
+---
+
 ## Git Workflow
 
 - **`main`** — production (auto-deploys to Railway). Protected, PR-only.
@@ -122,6 +166,11 @@ stage contract, concurrency, degraded pipeline, and prompt versioning details.
 ```bash
 cd src/backend && uv run uvicorn main:app --reload --port 8420   # backend
 cd src/frontend && bun run dev                                    # frontend
+
+# ML training (free-threaded, from src/ml_training/)
+uv run --python 3.14t python -X gil=0 -m ml_training.pipeline.cli acquire --category all
+uv run --python 3.14t python -X gil=0 -m ml_training.pipeline.cli build-dataset --augment
+uv run --python 3.14t python -X gil=0 -m ml_training.pipeline.cli train --rounds 3
 ```
 
 ---
@@ -160,5 +209,7 @@ For full details on any of these topics, see [`CLAUDE2.md`](CLAUDE2.md):
 - Perplexity Agent API and exchange/ticker resolution
 - Self-learning loop (reflections, feedback sync)
 - CI/CD pipeline details
+- **ML Training Pipeline** — architecture, CLI, feature engineering, models,
+  judge system, calibration, free-threading, dependencies
 - Common tasks (add indicator, add template, change prompt, add stage, add endpoint)
 - Known gaps and future work

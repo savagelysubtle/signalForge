@@ -178,6 +178,26 @@ export function RawTab({ data }: RawTabProps) {
         />
       )}
 
+      {data.recommendations.some(r => r.ml_probability != null) && (
+        <Section
+          title="Stage 4.8 — LightGBM Gate"
+          subtitle={`${data.recommendations.filter(r => r.ml_probability != null).length} scored · ${data.recommendations.filter(r => r.ml_blocked).length} blocked`}
+          data={data.recommendations
+            .filter(r => r.ml_probability != null)
+            .map(r => ({
+              ticker: r.ticker,
+              ml_probability: r.ml_probability,
+              ml_size_multiplier: r.ml_size_multiplier,
+              ml_blocked: r.ml_blocked,
+              ml_model_version: r.ml_model_version,
+              ml_conformal_set: r.ml_conformal_set,
+              raw_gpt_position_size_pct: r.raw_gpt_position_size_pct,
+              adjusted_position_size_pct: r.position_size_pct,
+            }))}
+          defaultOpen
+        />
+      )}
+
       {(data.stage_errors ?? []).length > 0 && (
         <Section
           title="Stage Errors"

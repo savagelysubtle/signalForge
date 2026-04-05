@@ -426,6 +426,16 @@ class Recommendation(BaseModel):
     price_at_signal: float | None = None  # Live market price at the moment GPT ran
     entry_valid_window: str | None = None  # GPT-estimated window e.g. "2 hours", "1-2 trading days"
 
+    # Original GPT position size before ML gate adjustment
+    raw_gpt_position_size_pct: float | None = None
+
+    # ML gate fields — set by the independent model at Stage 4.8
+    ml_probability: float | None = None
+    ml_size_multiplier: float | None = None
+    ml_blocked: bool = False
+    ml_conformal_set: list[str] = Field(default_factory=list)
+    ml_model_version: str | None = None
+
 
 class DebateCaseList(BaseModel):
     """Wrapper for batch bull/bear debate output from GPT."""
@@ -707,7 +717,7 @@ class StrategyConfig(BaseModel):
     strategy_type: str = "swing"
 
     # Pipeline version (v1 = legacy sequential, v2 = parallel independent tracks)
-    pipeline_version: Literal["v1", "v2"] = "v1"
+    pipeline_version: Literal["v1", "v2"] = "v2"
 
 
 # ---------------------------------------------------------------------------

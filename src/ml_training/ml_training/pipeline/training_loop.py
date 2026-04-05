@@ -7,6 +7,7 @@ improvement loop with configurable quality thresholds.
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,9 +22,9 @@ from ml_training.models.predictor import (
     DEFAULT_EMBARGO_WINDOW,
     DEFAULT_PURGE_WINDOW,
     PredictionModel,
-    TrainingResult,
 )
 from ml_training.models.registry import ModelArtifact, ModelMetadata, ModelRegistry
+from ml_training.threading import optimal_workers
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ class TrainingRoundResult:
     """Results from a single training round."""
 
     round_num: int
-    training_result: TrainingResult | None = None
+    training_result: Any = None
     judge_report: JudgeReport | None = None
     artifact_path: str | None = None
     shap_importances: dict[str, float] | None = None
@@ -65,15 +66,18 @@ class TrainingLoopConfig:
     """Configuration for the training loop."""
 
     max_rounds: int = 5
-    target_col: str = "direction_10d"
+    target_col: str = "triple_barrier_label"
     return_col: str = "return_10d"
     n_boost_rounds: int = 500
     auto_promote: bool = False
     quality_bar: dict[str, float] | None = None
     classifier_params: dict[str, Any] | None = None
     strategy_type: str | None = None
-    binary_mode: bool = False
-    feature_prune_fraction: float = 0.20
+    binary_mode: bool = True
+    feature_prune_fraction: float = 0.30
+    model_type: str = "lgbm"
+    meta_label: bool = False
+    model_mode: str = "shadow"
 
 
 class TrainingLoop:
@@ -150,35 +154,81 @@ class TrainingLoop:
                 "\n".join(f"  - {r}" for r in result.judge_report.recommendations),
             )
 
-            if (
-                round_num == 1
-                and result.shap_importances
-                and self._config.feature_prune_fraction > 0
-            ):
-                prune_frac = self._config.feature_prune_fraction
-                overfit_gap = result.judge_report.insample_vs_oos_gap
-                if overfit_gap > 0.15:
-                    prune_frac = max(prune_frac, 0.35)
-                    logger.info(
-                        "High overfit gap (%.1f%%) — increasing prune fraction to %.0f%%",
-                        overfit_gap * 100,
-                        prune_frac * 100,
-                    )
-                working_dataset = self._prune_features(
-                    working_dataset, result.shap_importances, prune_fraction=prune_frac
-                )
+            working_dataset = self._apply_round_adjustments(round_num, result, working_dataset)
 
         return self._rounds
 
-    def _apply_strategy_feature_mask(self, dataset: pd.DataFrame) -> pd.DataFrame:
-        """Drop feature groups known to be noise for certain strategy types.
+    def _apply_round_adjustments(
+        self,
+        round_num: int,
+        result: TrainingRoundResult,
+        working_dataset: pd.DataFrame,
+    ) -> pd.DataFrame:
+        """Apply round-specific adjustments so retries explore different configs.
 
-        Uses substring matching because per-strategy training passes the
-        strategy ID (e.g. ``ema_stack_momentum_intraday``) rather than
-        the template's ``strategy_type`` field.
+        Round 1 failure -> prune low-SHAP features (round 2 trains pruned).
+        Round 2 failure -> double ``reg_lambda``, increase ``min_child_samples``.
+        Round 3 failure -> switch boosting to DART with dropout.
+        Round 4 failure -> reduce tree complexity to minimum viable.
+
+        Returns the (possibly pruned) working dataset.
+        """
+        if round_num == 1 and result.shap_importances and self._config.feature_prune_fraction > 0:
+            prune_frac = self._config.feature_prune_fraction
+            overfit_gap = result.judge_report.insample_vs_oos_gap if result.judge_report else 0.0
+            if overfit_gap > 0.12:
+                prune_frac = max(prune_frac, 0.40)
+                logger.info(
+                    "High overfit gap (%.1f%%) — increasing prune fraction to %.0f%%",
+                    overfit_gap * 100,
+                    prune_frac * 100,
+                )
+            working_dataset = self._prune_features(
+                working_dataset, result.shap_importances, prune_fraction=prune_frac
+            )
+
+        params = self._config.classifier_params
+        if params is None:
+            params = {}
+            self._config.classifier_params = params
+
+        if round_num == 2:
+            old_lambda = params.get("reg_lambda", 5.0)
+            old_min_child = params.get("min_child_samples", 100)
+            params["reg_lambda"] = old_lambda * 2
+            params["min_child_samples"] = int(old_min_child * 1.5)
+            logger.info(
+                "Round 3 adjustment: reg_lambda=%.1f, min_child_samples=%d",
+                params["reg_lambda"],
+                params["min_child_samples"],
+            )
+
+        elif round_num == 3:
+            params["boosting_type"] = "dart"
+            params["drop_rate"] = 0.1
+            params["max_drop"] = 50
+            params["skip_drop"] = 0.5
+            logger.info("Round 4 adjustment: switched to DART boosting")
+
+        elif round_num == 4:
+            params["num_leaves"] = 15
+            params["max_depth"] = 4
+            params["min_child_samples"] = 200
+            logger.info("Round 5 adjustment: minimum viable tree complexity")
+
+        return working_dataset
+
+    def _apply_strategy_feature_mask(self, dataset: pd.DataFrame) -> pd.DataFrame:
+        """Drop fundamental features for all strategies except value-oriented ones.
+
+        Fundamental features (PE ratio, ROE, etc.) are static per-ticker and
+        change at most quarterly.  SHAP analysis shows these act as ticker
+        fingerprints that enable memorization rather than learning directional
+        patterns.  Only ``value`` strategies have a theoretical basis for
+        keeping them.
         """
         st = self._config.strategy_type or ""
-        if "intraday" in st or "scalp" in st:
+        if "value" not in st:
             drop = [c for c in FUNDAMENTAL_FEATURES if c in dataset.columns]
             if drop:
                 logger.info("Strategy mask: dropping %d fundamental features for %s", len(drop), st)
@@ -195,14 +245,15 @@ class TrainingLoop:
         from ml_training.models.predictor import _identify_feature_columns
 
         frac = prune_fraction if prune_fraction is not None else self._config.feature_prune_fraction
-        feature_cols = set(_identify_feature_columns(dataset))
+        feature_cols = set(_identify_feature_columns(dataset, model_mode=self._config.model_mode))
         scored = {f: v for f, v in shap_importances.items() if f in feature_cols}
         if not scored:
             return dataset
 
+        protected = {"primary_signal", "signal_strength"}
         sorted_feats = sorted(scored.items(), key=lambda x: x[1])
         n_drop = max(1, int(len(sorted_feats) * frac))
-        drop_cols = {f for f, _ in sorted_feats[:n_drop]}
+        drop_cols = {f for f, _ in sorted_feats[:n_drop]} - protected
 
         keep = [c for c in dataset.columns if c not in drop_cols]
         logger.info(
@@ -224,14 +275,45 @@ class TrainingLoop:
         """
         result = TrainingRoundResult(round_num=round_num)
 
-        model = PredictionModel(
-            target_col=self._config.target_col,
-            return_col=self._config.return_col,
-            classifier_params=self._config.classifier_params,
-            binary_mode=self._config.binary_mode,
-        )
+        if self._config.meta_label:
+            from ml_training.models.meta_labeler import MetaLabeler
 
-        training_result = model.train(dataset, n_rounds=self._config.n_boost_rounds)
+            model = MetaLabeler(
+                target_col=self._config.target_col,
+                return_col=self._config.return_col,
+                classifier_params=self._config.classifier_params,
+            )
+            training_result = model.train(
+                dataset, signal_col="primary_signal", n_rounds=self._config.n_boost_rounds
+            )
+        elif self._config.model_type == "tabpfn":
+            from ml_training.models.tabpfn_model import TabPFNModel
+
+            model = TabPFNModel(
+                target_col=self._config.target_col,
+                return_col=self._config.return_col,
+                binary_mode=self._config.binary_mode,
+            )
+            training_result = model.train(dataset, n_rounds=self._config.n_boost_rounds)
+        elif self._config.model_type == "ensemble":
+            from ml_training.models.ensemble import StackedEnsembleModel
+
+            model = StackedEnsembleModel(
+                target_col=self._config.target_col,
+                return_col=self._config.return_col,
+                classifier_params=self._config.classifier_params,
+                binary_mode=self._config.binary_mode,
+            )
+            training_result = model.train(dataset, n_rounds=self._config.n_boost_rounds)
+        else:
+            model = PredictionModel(
+                target_col=self._config.target_col,
+                return_col=self._config.return_col,
+                classifier_params=self._config.classifier_params,
+                binary_mode=self._config.binary_mode,
+                model_mode=self._config.model_mode,
+            )
+            training_result = model.train(dataset, n_rounds=self._config.n_boost_rounds)
         result.training_result = training_result
 
         if training_result.classifier is None:
@@ -281,28 +363,30 @@ class TrainingLoop:
         shap_sample_size = 2000
         try:
             explainer = shap.TreeExplainer(training_result.classifier)
-
             X_test_sample = X_test_judge.sample(
                 min(shap_sample_size, len(X_test_judge)), random_state=42
             )
-            shap_values = explainer.shap_values(X_test_sample)
-            if isinstance(shap_values, list):
-                mean_abs = np.mean([np.abs(sv).mean(axis=0) for sv in shap_values], axis=0)
-            else:
-                mean_abs = np.abs(shap_values).mean(axis=0)
-            mean_abs = np.asarray(mean_abs, dtype=float).ravel()
-            shap_test = dict(zip(feature_cols, mean_abs.tolist()))
-
             X_train_sample = X_train.sample(min(shap_sample_size, len(X_train)), random_state=42)
-            shap_values_train = explainer.shap_values(X_train_sample)
-            if isinstance(shap_values_train, list):
-                mean_abs_train = np.mean(
-                    [np.abs(sv).mean(axis=0) for sv in shap_values_train], axis=0
-                )
+
+            def _shap_importances(X_sample: pd.DataFrame) -> dict[str, float]:
+                sv = explainer.shap_values(X_sample)
+                if isinstance(sv, list):
+                    mean_abs = np.mean([np.abs(s).mean(axis=0) for s in sv], axis=0)
+                else:
+                    mean_abs = np.abs(sv).mean(axis=0)
+                mean_abs = np.asarray(mean_abs, dtype=float).ravel()
+                return dict(zip(feature_cols, mean_abs.tolist()))
+
+            workers = optimal_workers("cpu")
+            if workers > 1:
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    fut_test = pool.submit(_shap_importances, X_test_sample)
+                    fut_train = pool.submit(_shap_importances, X_train_sample)
+                    shap_test = fut_test.result()
+                    shap_train = fut_train.result()
             else:
-                mean_abs_train = np.abs(shap_values_train).mean(axis=0)
-            mean_abs_train = np.asarray(mean_abs_train, dtype=float).ravel()
-            shap_train = dict(zip(feature_cols, mean_abs_train.tolist()))
+                shap_test = _shap_importances(X_test_sample)
+                shap_train = _shap_importances(X_train_sample)
         except Exception:
             logger.warning("SHAP analysis failed, skipping importance drift check", exc_info=True)
 
@@ -341,7 +425,7 @@ class TrainingLoop:
         )
         result.judge_report = judge_report
 
-        calibrator = ProbabilityCalibrator()
+        calibrator = ProbabilityCalibrator(method="venn_abers")
         cal_result = calibrator.fit(cal_probabilities, y_cal)
 
         conformal = ConformalPredictor(target_coverage=0.90)
@@ -357,6 +441,7 @@ class TrainingLoop:
             "purge_window": DEFAULT_PURGE_WINDOW,
             "embargo_window": DEFAULT_EMBARGO_WINDOW,
             "strategy_type": self._config.strategy_type,
+            "model_mode": self._config.model_mode,
             "dataset_size": len(dataset),
         }
 
@@ -384,7 +469,10 @@ class TrainingLoop:
             ),
         )
 
-        path = self._registry.save_artifact(artifact, strategy_type=self._config.strategy_type)
+        save_key = self._config.strategy_type
+        if self._config.model_mode == "independent" and save_key:
+            save_key = f"{save_key}_independent"
+        path = self._registry.save_artifact(artifact, strategy_type=save_key)
         result.artifact_path = str(path)
 
         return result

@@ -145,6 +145,58 @@ def _parse_kline_csv(csv_bytes: bytes) -> pd.DataFrame:
     return df
 
 
+def _download_pair_timeframe(
+    pair: str,
+    tf: str,
+    months_back: int,
+    store: ParquetStore,
+) -> tuple[str, int]:
+    """Download all monthly archives for one pair x timeframe.
+
+    Returns:
+        (checkpoint_key, candle_count) tuple.
+    """
+    internal = _to_internal_symbol(pair)
+    monthly_urls = _generate_monthly_urls(pair, tf, months_back)
+    all_candles: list[pd.DataFrame] = []
+
+    with httpx.Client(timeout=30, follow_redirects=True) as client:
+        for url, label in monthly_urls:
+            try:
+                resp = client.get(url)
+                if resp.status_code in (404, 403):
+                    continue
+                if resp.status_code != 200:
+                    continue
+
+                with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+                    csv_name = zf.namelist()[0]
+                    csv_bytes = zf.read(csv_name)
+
+                chunk = _parse_kline_csv(csv_bytes)
+                if not chunk.empty:
+                    all_candles.append(chunk)
+            except Exception:
+                logger.debug("Failed to download %s %s %s", pair, tf, label)
+
+    key = f"prices:{internal}:{tf}"
+    if not all_candles:
+        return key, 0
+
+    combined = pd.concat(all_candles, ignore_index=True)
+    combined = combined.sort_values("date").drop_duplicates(subset=["date"])
+    combined = combined.reset_index(drop=True)
+
+    candle_list = combined.to_dict("records")
+    for row in candle_list:
+        if hasattr(row.get("date"), "isoformat"):
+            row["date"] = row["date"].isoformat()
+
+    store.save_prices(internal, tf, candle_list)
+    logger.debug("Stored %d candles for %s/%s (Binance)", len(candle_list), internal, tf)
+    return key, len(candle_list)
+
+
 def download_crypto_ohlcv(
     timeframes: list[str],
     store: ParquetStore,
@@ -153,6 +205,9 @@ def download_crypto_ohlcv(
     months_back: int = 24,
 ) -> dict[str, int]:
     """Download crypto OHLCV from Binance public data (free, no auth).
+
+    Downloads are parallelised via ``ThreadPoolExecutor`` since they
+    are I/O-bound (threads help even with the GIL active).
 
     Args:
         timeframes: List of timeframe keys (e.g. ['D', '4H', '1H']).
@@ -164,6 +219,10 @@ def download_crypto_ohlcv(
     Returns:
         Dict mapping internal_symbol → total candles stored.
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    from ml_training.threading import optimal_workers
+
     if pairs is None:
         pairs = TOP_CRYPTO_PAIRS
 
@@ -172,59 +231,36 @@ def download_crypto_ohlcv(
         logger.warning("No valid Binance timeframes in %s", timeframes)
         return {}
 
+    tasks = [
+        (pair, tf)
+        for pair in pairs
+        for tf in valid_tfs
+        if f"prices:{_to_internal_symbol(pair)}:{tf}" not in completed
+    ]
+
+    if not tasks:
+        logger.info("All Binance crypto data already downloaded, skipping")
+        return {}
+
     results: dict[str, int] = {}
-    total_tasks = len(pairs) * len(valid_tfs)
-    pbar = tqdm(total=total_tasks, desc="binance crypto", unit="pair-tf")
+    workers = optimal_workers("io", max_cap=10)
+    pbar = tqdm(total=len(tasks), desc="binance crypto", unit="pair-tf")
 
-    with httpx.Client(timeout=30, follow_redirects=True) as client:
-        for pair in pairs:
-            internal = _to_internal_symbol(pair)
-
-            for tf in valid_tfs:
-                key = f"prices:{internal}:{tf}"
-                if key in completed:
-                    pbar.update(1)
-                    continue
-
-                monthly_urls = _generate_monthly_urls(pair, tf, months_back)
-                all_candles: list[pd.DataFrame] = []
-
-                for url, label in monthly_urls:
-                    try:
-                        resp = client.get(url)
-                        if resp.status_code == 404:
-                            continue
-                        if resp.status_code != 200:
-                            continue
-
-                        with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
-                            csv_name = zf.namelist()[0]
-                            csv_bytes = zf.read(csv_name)
-
-                        chunk = _parse_kline_csv(csv_bytes)
-                        if not chunk.empty:
-                            all_candles.append(chunk)
-                    except Exception:
-                        logger.debug("Failed to download %s %s %s", pair, tf, label)
-
-                if all_candles:
-                    combined = pd.concat(all_candles, ignore_index=True)
-                    combined = combined.sort_values("date").drop_duplicates(subset=["date"])
-                    combined = combined.reset_index(drop=True)
-
-                    candle_list = combined.to_dict("records")
-                    for row in candle_list:
-                        if hasattr(row.get("date"), "isoformat"):
-                            row["date"] = row["date"].isoformat()
-
-                    store.save_prices(internal, tf, candle_list)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(_download_pair_timeframe, pair, tf, months_back, store): (pair, tf)
+            for pair, tf in tasks
+        }
+        for future in as_completed(futures):
+            try:
+                key, count = future.result()
+                if count > 0:
                     completed.add(key)
-                    results[f"{internal}:{tf}"] = len(candle_list)
-                    logger.debug(
-                        "Stored %d candles for %s/%s (Binance)", len(candle_list), internal, tf
-                    )
-
-                pbar.update(1)
+                    results[key.removeprefix("prices:")] = count
+            except Exception:
+                pair, tf = futures[future]
+                logger.warning("Failed download for %s/%s", pair, tf)
+            pbar.update(1)
 
     pbar.close()
     total_candles = sum(results.values())

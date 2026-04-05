@@ -224,20 +224,36 @@ class ParquetStore:
             p.stem.replace(suffix.replace(".parquet", ""), "") for p in dir_path.glob(f"*{suffix}")
         )
 
-    def list_strategy_datasets(self) -> list[str]:
+    def list_strategy_datasets(self, per_id_only: bool = False) -> list[str]:
         """Discover available per-strategy feature datasets.
 
+        Args:
+            per_id_only: When True, filter out type-level aggregate datasets
+                that duplicate a single per-id dataset.  This prevents
+                training identical models under different names.
+
         Returns:
-            Sorted list of strategy type names that have saved datasets.
-            E.g. ["crypto_swing", "swing", "value"] from files like
-            ``crypto_swing_features.parquet``.
+            Sorted list of strategy names that have saved datasets.
         """
         suffix = "_features.parquet"
-        return sorted(
+        all_names = sorted(
             p.stem.replace("_features", "")
             for p in self._datasets_dir.glob(f"*{suffix}")
             if p.stem != "all_features"
         )
+
+        if not per_id_only:
+            return all_names
+
+        from ml_training.features.dataset_builder import load_strategies
+
+        strategies = load_strategies()
+        id_set = {s.id for s in strategies}
+        type_counts: dict[str, int] = {}
+        for s in strategies:
+            type_counts[s.strategy_type] = type_counts.get(s.strategy_type, 0) + 1
+
+        return [name for name in all_names if name in id_set or type_counts.get(name, 0) >= 2]
 
     def verify_data(self) -> dict[str, Any]:
         """Run verification checks on stored data.

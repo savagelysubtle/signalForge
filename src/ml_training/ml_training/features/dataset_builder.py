@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -20,10 +21,18 @@ from ml_training.data.storage import ParquetStore
 from ml_training.features.engineering import (
     compute_context_features,
     compute_fundamental_features,
+    compute_llm_features,
     compute_multi_timeframe_features,
     compute_outcome_labels,
+    compute_primary_signal,
     compute_technical_features,
+    compute_triple_barrier_label,
+    compute_tsfresh_features,
+    get_barrier_config,
+    get_ffd_d,
+    neutralize_features,
 )
+from ml_training.threading import optimal_workers, parallel_map
 
 logger = logging.getLogger(__name__)
 
@@ -190,12 +199,15 @@ class DatasetBuilder:
         store: ParquetStore,
         strategies: list[StrategyTemplate] | None = None,
         vix_data: pd.DataFrame | None = None,
+        neutralize: bool = False,
     ) -> None:
         self._store = store
         self._strategies = strategies or load_strategies()
         self._vix_data = vix_data
+        self._neutralize = neutralize
         self._breadth_cache: dict[str, float] = {}
         self._spy_returns: pd.DataFrame | None = None
+        self._spy_prices: pd.DataFrame | None = None
         self._tf_available: dict[str, bool] = {}
 
     def _get_vix_at_date(self, date: pd.Timestamp) -> float | None:
@@ -208,25 +220,36 @@ class DatasetBuilder:
         return None
 
     def _precompute_market_breadth(self, tickers: list[str]) -> None:
-        """Precompute daily market breadth: % of tickers above their 200-day EMA."""
-        date_above: dict[str, int] = {}
-        date_total: dict[str, int] = {}
+        """Precompute daily market breadth: % of tickers above their 200-day EMA.
 
-        for symbol in tickers:
+        Vectorised per-ticker (no iterrows) and parallelised across tickers
+        via free-threading when the GIL is disabled.
+        """
+
+        def _breadth_for_ticker(symbol: str) -> pd.DataFrame | None:
             prices = self._store.load_prices(symbol, "D")
             if len(prices) < 200:
-                continue
+                return None
+            prices = prices.copy()
             prices["date"] = pd.to_datetime(prices["date"])
             prices["ema_200"] = prices["close"].ewm(span=200, min_periods=100).mean()
+            valid = prices.dropna(subset=["ema_200"])
+            return pd.DataFrame(
+                {
+                    "date_str": valid["date"].dt.strftime("%Y-%m-%d").values,
+                    "above": (valid["close"].values > valid["ema_200"].values).astype(int),
+                }
+            )
 
-            for _, row in prices.dropna(subset=["ema_200"]).iterrows():
-                d = str(row["date"])[:10]
-                date_total[d] = date_total.get(d, 0) + 1
-                if row["close"] > row["ema_200"]:
-                    date_above[d] = date_above.get(d, 0) + 1
+        chunks = parallel_map(_breadth_for_ticker, tickers, desc="market breadth")
 
-        for d in date_total:
-            self._breadth_cache[d] = date_above.get(d, 0) / date_total[d]
+        valid_chunks = [c for c in chunks if c is not None and not c.empty]
+        if valid_chunks:
+            combined = pd.concat(valid_chunks, ignore_index=True)
+            grouped = combined.groupby("date_str")["above"].agg(["sum", "count"])
+            self._breadth_cache = {
+                str(d): row["sum"] / row["count"] for d, row in grouped.iterrows()
+            }
 
         logger.info("Precomputed market breadth for %d trading days", len(self._breadth_cache))
 
@@ -244,6 +267,102 @@ class DatasetBuilder:
             return float(self._spy_returns.loc[mask, "ret_20d"].iloc[-1])
         return None
 
+    def _fit_regime_detector(
+        self,
+        spy_prices: pd.DataFrame,
+    ) -> Any:
+        """Fit an HMM regime detector on VIX/SPY/breadth data.
+
+        Returns the fitted detector, or None if data is insufficient.
+        """
+        try:
+            from ml_training.features.regime import RegimeDetector, compute_regime_features
+        except ImportError:
+            logger.warning("hmmlearn not available, skipping regime detection")
+            return None
+
+        if self._vix_data is None or self._vix_data.empty or spy_prices.empty:
+            return None
+
+        regime_df = compute_regime_features(
+            self._vix_data,
+            spy_prices,
+            self._breadth_cache,
+        )
+        if len(regime_df) < 100:
+            logger.warning("Insufficient data for regime detection (%d rows)", len(regime_df))
+            return None
+
+        detector = RegimeDetector(n_regimes=3)
+        detector.fit(
+            regime_df["vix_return"].values,
+            regime_df["breadth"].values,
+            regime_df["momentum"].values,
+        )
+        logger.info("HMM regime detector fitted on %d observations", len(regime_df))
+        return detector
+
+    def _add_regime_features(
+        self,
+        df: pd.DataFrame,
+        detector: Any,
+    ) -> pd.DataFrame:
+        """Add HMM regime labels and probabilities to a dataset."""
+        if detector is None:
+            return df
+
+        try:
+            from ml_training.features.regime import compute_regime_features
+
+            if self._vix_data is None or self._spy_prices is None:
+                return df
+            regime_df = compute_regime_features(
+                self._vix_data,
+                self._spy_prices,
+                self._breadth_cache,
+            )
+
+            regime_df["date"] = pd.to_datetime(regime_df["date"])
+            features_arr = regime_df[["vix_return", "breadth", "momentum"]].values
+
+            regime_labels = detector.predict(features_arr)
+            regime_probs = detector.predict_proba(features_arr)
+
+            regime_lookup = pd.DataFrame(
+                {
+                    "date": regime_df["date"].dt.strftime("%Y-%m-%d"),
+                    "hmm_regime": regime_labels,
+                    "hmm_regime_prob_bear": regime_probs[:, 0],
+                    "hmm_regime_prob_neutral": regime_probs[:, 1],
+                    "hmm_regime_prob_bull": regime_probs[:, 2],
+                }
+            )
+
+            df = df.copy()
+            df["_date_str"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+            df = df.merge(
+                regime_lookup,
+                left_on="_date_str",
+                right_on="date",
+                how="left",
+                suffixes=("", "_regime"),
+            )
+            df.drop(columns=["_date_str", "date_regime"], errors="ignore", inplace=True)
+
+            for col in [
+                "hmm_regime",
+                "hmm_regime_prob_bear",
+                "hmm_regime_prob_neutral",
+                "hmm_regime_prob_bull",
+            ]:
+                if col in df.columns:
+                    df[col] = df[col].fillna(1 if col == "hmm_regime" else 0.33)
+
+        except Exception:
+            logger.warning("Failed to add regime features", exc_info=True)
+
+        return df
+
     def build_for_strategy(
         self,
         strategy: StrategyTemplate,
@@ -251,6 +370,11 @@ class DatasetBuilder:
         timeframe: str | None = None,
     ) -> pd.DataFrame:
         """Build feature dataset for a single strategy.
+
+        Ticker processing is parallelised via ``ThreadPoolExecutor``
+        when free-threading is active (GIL disabled).  Each ticker's
+        work is fully independent: load data → compute features →
+        return rows.
 
         Args:
             strategy: Strategy template to simulate.
@@ -261,7 +385,6 @@ class DatasetBuilder:
             DataFrame with feature columns + outcome labels.
         """
         tf = timeframe or strategy.chart_timeframe
-        all_rows: list[dict[str, Any]] = []
 
         extra_tfs = [t for t in strategy.additional_timeframes if t != tf]
         for etf_check in extra_tfs:
@@ -275,18 +398,23 @@ class DatasetBuilder:
                 )
         extra_tfs = [t for t in extra_tfs if self._tf_available.get(t, False)]
 
-        for symbol in tqdm(tickers, desc=f"{strategy.name}", unit="ticker", leave=False):
+        horizons = sorted({*BASE_HORIZONS, strategy.target_horizon_bars})
+        max_outcome_horizon = max(horizons)
+
+        def _process_ticker(symbol: str) -> list[dict[str, Any]]:
+            """Process one ticker — thread-safe, no shared mutable state."""
             prices = self._store.load_prices(symbol, tf)
             if len(prices) < MIN_PRICE_ROWS:
-                continue
+                return []
 
             indicators = self._store.load_indicators(symbol, tf)
             fundamentals_df = self._store.load_fundamentals(symbol)
             fund_features = compute_fundamental_features(fundamentals_df)
 
-            tech_features = compute_technical_features(prices, indicators)
+            ffd_d = get_ffd_d(strategy.strategy_type)
+            tech_features = compute_technical_features(prices, indicators, ffd_d=ffd_d)
             if tech_features.empty:
-                continue
+                return []
 
             extra_tf_data: list[tuple[str, pd.DataFrame, pd.DataFrame]] = []
             for etf in extra_tfs:
@@ -295,9 +423,7 @@ class DatasetBuilder:
                 if not ep.empty:
                     extra_tf_data.append((etf, ep, ei))
 
-            horizons = sorted({*BASE_HORIZONS, strategy.target_horizon_bars})
-            max_outcome_horizon = max(horizons)
-
+            rows: list[dict[str, Any]] = []
             for idx in range(LOOKBACK_BUFFER, len(prices) - max_outcome_horizon):
                 price_row = prices.iloc[idx]
 
@@ -326,6 +452,24 @@ class DatasetBuilder:
                     atr_threshold_multiplier=ATR_THRESHOLD_MULTIPLIER,
                 )
 
+                effective_atr = float(atr_pct) if atr_pct is not None and atr_pct > 0 else 2.0
+                barrier_cfg = get_barrier_config(strategy.strategy_type)
+                tb_labels = compute_triple_barrier_label(
+                    prices,
+                    idx,
+                    effective_atr,
+                    profit_mult=barrier_cfg["profit_mult"],
+                    stop_mult=barrier_cfg["stop_mult"],
+                    max_horizon=strategy.target_horizon_bars,
+                )
+
+                signal_data = compute_primary_signal(
+                    prices,
+                    indicators,
+                    strategy.strategy_type,
+                    idx,
+                )
+
                 row_dict: dict[str, Any] = {
                     "ticker": symbol,
                     "date": date,
@@ -346,6 +490,15 @@ class DatasetBuilder:
                     row_dict[k] = v
                 for k, v in outcomes.items():
                     row_dict[k] = v
+                for k, v in tb_labels.items():
+                    row_dict[k] = v
+                for k, v in signal_data.items():
+                    row_dict[k] = v
+
+                if strategy.strategy_type in ("intraday", "crypto_intraday"):
+                    tsf = compute_tsfresh_features(prices, idx)
+                    for k, v in tsf.items():
+                        row_dict[k] = v
 
                 for etf_label, etf_prices, etf_indicators in extra_tf_data:
                     mtf = compute_multi_timeframe_features(
@@ -353,31 +506,61 @@ class DatasetBuilder:
                     )
                     row_dict.update(mtf)
 
-                all_rows.append(row_dict)
+                rows.append(row_dict)
+            return rows
+
+        workers = optimal_workers("cpu")
+        all_rows: list[dict[str, Any]] = []
+
+        if workers > 1:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {pool.submit(_process_ticker, sym): sym for sym in tickers}
+                for future in tqdm(
+                    as_completed(futures),
+                    total=len(tickers),
+                    desc=strategy.name,
+                    unit="ticker",
+                    leave=False,
+                ):
+                    all_rows.extend(future.result())
+        else:
+            for symbol in tqdm(tickers, desc=strategy.name, unit="ticker", leave=False):
+                all_rows.extend(_process_ticker(symbol))
 
         if not all_rows:
             logger.warning("No samples generated for strategy %s", strategy.name)
             return pd.DataFrame()
 
         df = pd.DataFrame(all_rows)
-        logger.info(
-            "Strategy %s: %d samples across %d tickers",
-            strategy.name,
-            len(df),
-            df["ticker"].nunique(),
-        )
+        if self._neutralize:
+            df = neutralize_features(df)
+            logger.info(
+                "Strategy %s: %d samples across %d tickers (features neutralized)",
+                strategy.name,
+                len(df),
+                df["ticker"].nunique(),
+            )
+        else:
+            logger.info(
+                "Strategy %s: %d samples across %d tickers",
+                strategy.name,
+                len(df),
+                df["ticker"].nunique(),
+            )
         return df
 
     def build_all(
         self,
         tickers: list[str] | None = None,
         save: bool = True,
+        augment: bool = False,
     ) -> pd.DataFrame:
         """Build feature datasets for all strategies and combine.
 
         Args:
             tickers: Override ticker list. If None, uses all available tickers.
             save: Whether to save the combined dataset to Parquet.
+            augment: Whether to augment small strategy datasets with synthetic data.
 
         Returns:
             Combined DataFrame with all strategy samples.
@@ -396,11 +579,21 @@ class DatasetBuilder:
             spy_prices = spy_prices.copy()
             spy_prices["date"] = pd.to_datetime(spy_prices["date"])
             spy_prices["ret_20d"] = spy_prices["close"].pct_change(20)
+            self._spy_prices = spy_prices[["date", "close"]].copy()
             self._spy_returns = spy_prices[["date", "ret_20d"]].dropna()
         else:
+            self._spy_prices = None
             self._spy_returns = None
 
         self._precompute_market_breadth(tickers)
+
+        regime_detector = self._fit_regime_detector(spy_prices)
+
+        augmenter = None
+        if augment:
+            from ml_training.data.augmentation import TimeSeriesAugmenter
+
+            augmenter = TimeSeriesAugmenter(target_size=25000)
 
         all_dfs: list[pd.DataFrame] = []
         type_dfs: dict[str, list[pd.DataFrame]] = {}
@@ -408,6 +601,35 @@ class DatasetBuilder:
         for strategy in tqdm(self._strategies, desc="Strategies", unit="strategy"):
             df = self.build_for_strategy(strategy, tickers)
             if not df.empty:
+                df = self._add_regime_features(df, regime_detector)
+                if "triple_barrier_label" in df.columns:
+                    dist = df["triple_barrier_label"].value_counts(normalize=True)
+                    pos_pct = dist.get(1, 0) * 100
+                    neg_pct = dist.get(0, 0) * 100
+                    logger.info(
+                        "[%s] Label distribution — positive: %.1f%%, negative: %.1f%% (%d samples)",
+                        strategy.name,
+                        pos_pct,
+                        neg_pct,
+                        len(df),
+                    )
+                    if pos_pct < 35 or pos_pct > 65:
+                        logger.warning(
+                            "[%s] Imbalanced labels (%.1f%% positive) — "
+                            "model accuracy may be misleading",
+                            strategy.name,
+                            pos_pct,
+                        )
+
+                if augmenter is not None and len(df) < 15000:
+                    original_size = len(df)
+                    df = augmenter.augment(df, target_col="triple_barrier_label")
+                    logger.info(
+                        "Augmented %s: %d → %d samples",
+                        strategy.name,
+                        original_size,
+                        len(df),
+                    )
                 all_dfs.append(df)
                 type_dfs.setdefault(strategy.strategy_type, []).append(df)
                 if save:
@@ -419,7 +641,15 @@ class DatasetBuilder:
 
         if save:
             for stype, dfs in type_dfs.items():
-                merged = pd.concat(dfs, ignore_index=True)
+                if len(dfs) < 2:
+                    logger.info(
+                        "Strategy type '%s': only 1 sub-strategy, skipping type-level save "
+                        "(identical to per-id dataset)",
+                        stype,
+                    )
+                    continue
+                clean_dfs = [d for d in dfs if not d.empty and not d.isna().all(axis=None)]
+                merged = pd.concat(clean_dfs, ignore_index=True)
                 self._store.save_dataset(f"{stype}_features", merged)
                 logger.info(
                     "Strategy type '%s': %d samples from %d sub-strategies",
@@ -428,7 +658,8 @@ class DatasetBuilder:
                     len(dfs),
                 )
 
-        combined = pd.concat(all_dfs, ignore_index=True)
+        clean_all = [d for d in all_dfs if not d.empty and not d.isna().all(axis=None)]
+        combined = pd.concat(clean_all, ignore_index=True)
         logger.info(
             "Combined dataset: %d samples, %d features, %d strategies",
             len(combined),
@@ -440,3 +671,243 @@ class DatasetBuilder:
             self._store.save_dataset("all_features", combined)
 
         return combined
+
+    def build_for_recommendations(
+        self,
+        recs_df: pd.DataFrame,
+        save: bool = True,
+        min_samples: int = 200,
+    ) -> pd.DataFrame:
+        """Build meta-label training features anchored at recommendation dates.
+
+        For each graded recommendation, computes the same technical/context
+        features as regular training PLUS LLM-derived features encoding
+        the GPT pipeline's output. The result is a dataset where each row
+        represents a GPT recommendation with both market features and
+        GPT metadata, labeled with the graded outcome.
+
+        Args:
+            recs_df: Graded recommendations with columns from
+                supabase_provider + outcome_grader (must have
+                ``graded_profitable`` and ``graded_label``).
+            save: Whether to save per-strategy datasets.
+            min_samples: Minimum samples per strategy to save.
+
+        Returns:
+            Combined meta-label feature DataFrame.
+        """
+        required = {"ticker", "graded_profitable", "graded_label"}
+        missing = required - set(recs_df.columns)
+        if missing:
+            logger.error("Missing required columns: %s. Run grade-recommendations first.", missing)
+            return pd.DataFrame()
+
+        active_recs = recs_df[
+            recs_df["graded_label"].isin({"TP_HIT", "SL_HIT", "TIME_EXIT"})
+        ].copy()
+        if active_recs.empty:
+            logger.warning("No active (BUY/SHORT) graded recommendations to build from")
+            return pd.DataFrame()
+
+        if self._vix_data is None:
+            self._vix_data = self._store.load_prices("VIX", "D")
+
+        spy_prices = self._store.load_prices("SPY", "D")
+        if len(spy_prices) >= 20 and self._spy_returns is None:
+            spy_prices = spy_prices.copy()
+            spy_prices["date"] = pd.to_datetime(spy_prices["date"])
+            spy_prices["ret_20d"] = spy_prices["close"].pct_change(20)
+            self._spy_prices = spy_prices[["date", "close"]].copy()
+            self._spy_returns = spy_prices[["date", "ret_20d"]].dropna()
+
+        if not self._breadth_cache:
+            daily_tickers = self._store.list_tickers("prices", "D")
+            if daily_tickers:
+                self._precompute_market_breadth(daily_tickers)
+
+        all_rows: list[dict[str, Any]] = []
+
+        for _, rec in active_recs.iterrows():
+            ticker = rec["ticker"]
+            signal_date = self._resolve_rec_date(rec)
+            if signal_date is None:
+                continue
+
+            prices = self._store.load_prices(ticker, "D")
+            if len(prices) < MIN_PRICE_ROWS:
+                continue
+
+            prices = prices.copy()
+            prices["date"] = pd.to_datetime(prices["date"])
+
+            entry_idx = self._find_date_index(prices, signal_date)
+            if entry_idx is None or entry_idx < LOOKBACK_BUFFER:
+                continue
+
+            strategy_template = rec.get("strategy_template", "")
+            strategy_type = self._infer_strategy_type(strategy_template)
+
+            indicators = self._store.load_indicators(ticker, "D")
+            fundamentals_df = self._store.load_fundamentals(ticker)
+            fund_features = compute_fundamental_features(fundamentals_df)
+
+            ffd_d_rec = get_ffd_d(strategy_type)
+            tech_features = compute_technical_features(prices, indicators, ffd_d=ffd_d_rec)
+            if tech_features.empty or entry_idx >= len(tech_features):
+                continue
+
+            tech_row = tech_features.iloc[entry_idx]
+
+            date = pd.Timestamp(prices.iloc[entry_idx]["date"])
+            vix = self._get_vix_at_date(date)
+
+            context = compute_context_features(
+                strategy_type=strategy_type,
+                sector=None,
+                date=date,
+                vix_level=vix,
+            )
+            context["market_breadth_proxy"] = self._get_breadth_at_date(date)
+            context["sector_relative_strength"] = self._get_spy_return_at_date(date)
+
+            key_factors = rec.get("key_factors")
+            if isinstance(key_factors, str):
+                try:
+                    import json
+
+                    key_factors = json.loads(key_factors)
+                except Exception:
+                    key_factors = []
+
+            warnings_list = rec.get("warnings")
+            if isinstance(warnings_list, str):
+                try:
+                    import json
+
+                    warnings_list = json.loads(warnings_list)
+                except Exception:
+                    warnings_list = []
+
+            llm_feats = compute_llm_features(
+                action=rec.get("action", ""),
+                confidence=rec.get("confidence"),
+                entry_price=rec.get("entry_price"),
+                stop_loss=rec.get("stop_loss"),
+                take_profit=rec.get("take_profit"),
+                risk_reward_ratio=rec.get("risk_reward_ratio"),
+                key_factors=key_factors if isinstance(key_factors, list) else None,
+                warnings=warnings_list if isinstance(warnings_list, list) else None,
+            )
+
+            row_dict: dict[str, Any] = {
+                "ticker": ticker,
+                "date": date,
+                "strategy_type": strategy_type,
+                "close": float(prices.iloc[entry_idx]["close"]),
+                "primary_signal": llm_feats["llm_action_encoded"],
+                "signal_strength": llm_feats.get("llm_confidence", 0.5),
+                "profitable": int(rec["graded_profitable"]),
+                "graded_label": rec["graded_label"],
+                "actual_return_pct": rec.get("actual_return_pct"),
+            }
+
+            if isinstance(tech_row, pd.Series):
+                for col in tech_row.index:
+                    if col != "date":
+                        row_dict[col] = tech_row[col]
+
+            for k, v in fund_features.items():
+                row_dict[k] = v
+            for k, v in context.items():
+                row_dict[k] = v
+            for k, v in llm_feats.items():
+                row_dict[k] = v
+
+            all_rows.append(row_dict)
+
+        if not all_rows:
+            logger.warning("No feature rows generated from recommendations")
+            return pd.DataFrame()
+
+        df = pd.DataFrame(all_rows)
+        if self._neutralize:
+            df = neutralize_features(df)
+
+        logger.info(
+            "Meta-label dataset: %d samples across %d tickers, %d features",
+            len(df),
+            df["ticker"].nunique(),
+            len(df.columns),
+        )
+
+        if save:
+            type_groups = df.groupby("strategy_type")
+            for stype, group_df in type_groups:
+                if len(group_df) >= min_samples:
+                    self._store.save_dataset(f"meta_{stype}_features", group_df)
+                    logger.info("Saved meta_%s_features: %d samples", stype, len(group_df))
+                else:
+                    logger.warning(
+                        "Strategy '%s' has only %d samples (min=%d), skipping save",
+                        stype,
+                        len(group_df),
+                        min_samples,
+                    )
+            self._store.save_dataset("meta_all_features", df)
+
+        return df
+
+    @staticmethod
+    def _resolve_rec_date(rec: pd.Series) -> pd.Timestamp | None:
+        """Extract signal date from a recommendation row."""
+        for col in ("signal_generated_at", "created_at"):
+            val = rec.get(col)
+            if val is not None and pd.notna(val):
+                try:
+                    ts = pd.Timestamp(val)
+                    if ts.tzinfo is not None:
+                        ts = ts.tz_localize(None)
+                    return ts
+                except Exception:
+                    continue
+        return None
+
+    @staticmethod
+    def _find_date_index(prices: pd.DataFrame, target_date: pd.Timestamp) -> int | None:
+        """Find index of the bar closest to target_date."""
+        prices_dates = (
+            prices["date"].dt.tz_localize(None)
+            if prices["date"].dt.tz is not None
+            else prices["date"]
+        )
+        target_norm = target_date.normalize()
+
+        on_date = prices_dates == target_norm
+        if on_date.any():
+            return int(on_date.idxmax())
+
+        before = prices_dates <= target_norm
+        if before.any():
+            return int(before[::-1].idxmax())
+
+        return None
+
+    @staticmethod
+    def _infer_strategy_type(strategy_template: str) -> str:
+        """Map a strategy template name to a strategy_type key."""
+        if not strategy_template:
+            return "swing"
+        tpl = strategy_template.lower()
+        if "crypto" in tpl and "intraday" in tpl:
+            return "crypto_intraday"
+        if "crypto" in tpl:
+            return "crypto_swing"
+        if "intraday" in tpl or "scalp" in tpl or "opening_range" in tpl or "vwap" in tpl:
+            return "intraday"
+        if "mean_reversion" in tpl:
+            return "mean_reversion"
+        if "value" in tpl:
+            return "value"
+        if "event" in tpl or "earnings" in tpl:
+            return "event"
+        return "swing"

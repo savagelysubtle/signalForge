@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import joblib
 import numpy as np
@@ -22,7 +22,20 @@ ACTIVE_MODEL_NAME = "model_active.joblib"
 
 DIRECTION_CLASSES = ["DOWN", "FLAT", "UP"]
 
+LLM_FEATURES: frozenset[str] = frozenset(
+    {
+        "llm_action_encoded",
+        "llm_confidence",
+        "llm_rr_ratio",
+        "llm_sl_distance_pct",
+        "llm_tp_distance_pct",
+        "llm_key_factor_count",
+        "llm_warning_count",
+    }
+)
+
 _strategy_models: dict[str, dict[str, Any]] = {}
+_independent_models: dict[str, dict[str, Any]] = {}
 _fallback_model: dict[str, Any] | None = None
 _loaded = False
 
@@ -44,11 +57,13 @@ def _load_all_models() -> None:
     """Discover and load all active models from the artifacts directory.
 
     Looks for:
-      - ``model_{strategy_type}_active.joblib`` → per-strategy models
+      - ``model_{strategy}_active.joblib`` → per-strategy shadow models
+      - ``model_{strategy}_independent_active.joblib`` → per-strategy gate models
       - ``model_active.joblib`` → combined fallback model
     """
-    global _strategy_models, _fallback_model, _loaded
+    global _strategy_models, _independent_models, _fallback_model, _loaded
     _strategy_models = {}
+    _independent_models = {}
     _fallback_model = None
 
     if not ARTIFACTS_DIR.exists():
@@ -60,7 +75,9 @@ def _load_all_models() -> None:
     if fallback_path.exists():
         try:
             _fallback_model = _unpack_artifact(joblib.load(fallback_path))
-            version = _fallback_model["metadata"].model_version if _fallback_model["metadata"] else "?"
+            version = (
+                _fallback_model["metadata"].model_version if _fallback_model["metadata"] else "?"
+            )
             logger.info("Loaded combined fallback model: %s", version)
         except Exception:
             logger.exception("Failed to load fallback model")
@@ -69,39 +86,84 @@ def _load_all_models() -> None:
         if p.name == ACTIVE_MODEL_NAME:
             continue
         parts = p.stem.split("_")
-        strategy_type = "_".join(parts[1:-1])
+        # model_{strategy_type}_independent_active → independent model
+        # model_{strategy_type}_active → shadow/default model
+        strategy_key = "_".join(parts[1:-1])
+        is_independent = strategy_key.endswith("_independent")
+        if is_independent:
+            strategy_type = strategy_key.removesuffix("_independent")
+            target_dict = _independent_models
+            label = "independent"
+        else:
+            strategy_type = strategy_key
+            target_dict = _strategy_models
+            label = "shadow"
         try:
             artifact = joblib.load(p)
-            _strategy_models[strategy_type] = _unpack_artifact(artifact)
+            if is_independent:
+                feat_names = set(artifact.metadata.feature_names) if artifact.metadata else set()
+                llm_leak = feat_names & LLM_FEATURES
+                if llm_leak:
+                    logger.warning(
+                        "Independent model %s contains LLM features %s — refusing to load as gate",
+                        p.name,
+                        llm_leak,
+                    )
+                    continue
+            target_dict[strategy_type] = _unpack_artifact(artifact)
             version = artifact.metadata.model_version if artifact.metadata else "?"
-            logger.info("Loaded strategy model [%s]: %s", strategy_type, version)
+            logger.info("Loaded %s model [%s]: %s", label, strategy_type, version)
         except Exception:
-            logger.exception("Failed to load strategy model: %s", p.name)
+            logger.exception("Failed to load model: %s", p.name)
 
     _loaded = True
     logger.info(
-        "Model loading complete: %d strategy models + %s fallback",
+        "Model loading complete: %d shadow + %d independent + %s fallback",
         len(_strategy_models),
+        len(_independent_models),
         "1" if _fallback_model else "no",
     )
 
 
-def _get_model(strategy_type: str | None = None) -> dict[str, Any] | None:
-    """Get the best available model for a given strategy type.
+def _get_model(
+    strategy_type: str | None = None,
+    mode: str = "shadow",
+) -> dict[str, Any] | None:
+    """Get the best available model for a given strategy type and mode.
 
-    Priority: strategy-specific model → combined fallback → None.
+    For ``mode="independent"``: strategy independent → shadow model (if LLM-free) → None.
+    For ``mode="shadow"``: strategy shadow → combined fallback → None.
     """
     if not _loaded:
         _load_all_models()
+
+    if mode == "independent":
+        if strategy_type and strategy_type in _independent_models:
+            return _independent_models[strategy_type]
+        # Fall back to shadow model if it contains no LLM features
+        shadow = _strategy_models.get(strategy_type) if strategy_type else None
+        if shadow is not None:
+            feat_set = frozenset(shadow.get("feature_names", []))
+            if not (feat_set & LLM_FEATURES):
+                logger.info(
+                    "No independent model for %s — using LLM-free shadow model as gate",
+                    strategy_type,
+                )
+                return shadow
+            logger.debug(
+                "Shadow model for %s contains LLM features, cannot use as gate",
+                strategy_type,
+            )
+        return None
 
     if strategy_type and strategy_type in _strategy_models:
         return _strategy_models[strategy_type]
     return _fallback_model
 
 
-def ml_model_available(strategy_type: str | None = None) -> bool:
+def ml_model_available(strategy_type: str | None = None, mode: str = "shadow") -> bool:
     """Check if a trained ML model is available for inference."""
-    return _get_model(strategy_type) is not None
+    return _get_model(strategy_type, mode=mode) is not None
 
 
 def reload_model() -> bool:
@@ -134,16 +196,30 @@ def get_model_info() -> dict[str, Any]:
             "accuracy": meta.metrics.get("overall_accuracy", 0) if meta else 0,
         }
 
+    independent_info: dict[str, dict[str, Any]] = {}
+    for st, model in _independent_models.items():
+        meta = model.get("metadata")
+        independent_info[st] = {
+            "model_version": meta.model_version if meta else "unknown",
+            "judge_verdict": meta.judge_verdict if meta else "unknown",
+            "accuracy": meta.metrics.get("overall_accuracy", 0) if meta else 0,
+        }
+
     fallback_meta = _fallback_model.get("metadata") if _fallback_model else None
 
     return {
-        "status": "active" if (_strategy_models or _fallback_model) else "inactive",
+        "status": "active"
+        if (_strategy_models or _independent_models or _fallback_model)
+        else "inactive",
         "strategy_models": strategy_info,
+        "independent_models": independent_info,
         "fallback": {
             "model_version": fallback_meta.model_version if fallback_meta else "none",
             "judge_verdict": fallback_meta.judge_verdict if fallback_meta else "none",
         },
-        "total_models": len(_strategy_models) + (1 if _fallback_model else 0),
+        "total_models": len(_strategy_models)
+        + len(_independent_models)
+        + (1 if _fallback_model else 0),
     }
 
 
@@ -151,6 +227,7 @@ def build_feature_vector(
     ta_features: dict[str, float | None],
     fundamental_features: dict[str, float | None] | None = None,
     context_features: dict[str, Any] | None = None,
+    llm_features: dict[str, float | None] | None = None,
 ) -> dict[str, Any]:
     """Build a feature vector for inference from live pipeline data.
 
@@ -158,6 +235,7 @@ def build_feature_vector(
         ta_features: Technical analysis features from TechnicalSnapshot.
         fundamental_features: Fundamental data features (optional).
         context_features: Strategy type, regime, sector (optional).
+        llm_features: LLM-derived features for meta-labeling (optional).
 
     Returns:
         Complete feature dict ready for model input.
@@ -168,6 +246,8 @@ def build_feature_vector(
         features.update(fundamental_features)
     if context_features:
         features.update(context_features)
+    if llm_features:
+        features.update(llm_features)
     return features
 
 
@@ -175,21 +255,24 @@ def run_prediction(
     ticker: str,
     strategy_type: str,
     features: dict[str, Any],
+    mode: str = "shadow",
 ) -> MLPrediction | None:
     """Run ML prediction for a single ticker using the best available model.
 
     Automatically selects the strategy-specific model if available,
-    falling back to the combined model otherwise.
+    falling back to the combined model otherwise.  Handles both binary
+    (profitable / not-profitable) and 3-class (UP / FLAT / DOWN) models.
 
     Args:
         ticker: Ticker symbol.
         strategy_type: Strategy template type.
         features: Complete feature dict.
+        mode: ``"independent"`` for gate model, ``"shadow"`` for full model.
 
     Returns:
         MLPrediction or None if model unavailable.
     """
-    model = _get_model(strategy_type)
+    model = _get_model(strategy_type, mode=mode)
     if model is None:
         return None
 
@@ -198,6 +281,7 @@ def run_prediction(
     feature_names = model["feature_names"]
     calibrator = model.get("calibrator")
     conformal = model.get("conformal")
+    label_encoder = model.get("label_encoder")
     metadata = model.get("metadata")
 
     feature_vector = np.array([features.get(name, 0.0) or 0.0 for name in feature_names]).reshape(
@@ -205,22 +289,44 @@ def run_prediction(
     )
 
     try:
-        dir_probs = classifier.predict_proba(feature_vector)[0]
+        raw_probs = classifier.predict_proba(feature_vector)[0]
 
         if calibrator is not None:
-            dir_probs = calibrator.calibrate(dir_probs.reshape(1, -1))[0]
+            raw_probs = calibrator.calibrate(raw_probs.reshape(1, -1))[0]
 
-        predicted_class = int(np.argmax(dir_probs))
-        predicted_direction = DIRECTION_CLASSES[predicted_class]
+        n_classes = len(raw_probs)
+        is_binary = n_classes == 2
+
+        direction: Literal["UP", "DOWN", "FLAT"]
+        if is_binary:
+            if label_encoder is not None and hasattr(label_encoder, "classes_"):
+                pos_indices = np.where(label_encoder.classes_ == 1)[0]
+                pos_idx = int(pos_indices[0]) if len(pos_indices) > 0 else 1
+            else:
+                pos_idx = 1
+            prob_profitable = float(raw_probs[pos_idx])
+            direction = "UP" if prob_profitable > 0.5 else "DOWN"
+            probability_up = prob_profitable
+            probability_down = 1.0 - prob_profitable
+            probability_flat = 0.0
+        else:
+            prob_profitable = None
+            predicted_class = int(np.argmax(raw_probs))
+            direction = DIRECTION_CLASSES[predicted_class]  # type: ignore[assignment]
+            probability_up = float(raw_probs[DIRECTION_CLASSES.index("UP")])
+            probability_down = float(raw_probs[DIRECTION_CLASSES.index("DOWN")])
+            probability_flat = float(raw_probs[DIRECTION_CLASSES.index("FLAT")])
 
         predicted_return = float(regressor.predict(feature_vector)[0]) if regressor else 0.0
 
-        prediction_set = DIRECTION_CLASSES.copy()
-        reliability = 1.0 / 3.0
+        default_set: list[str] = (
+            ["NOT_PROFITABLE", "PROFITABLE"] if is_binary else DIRECTION_CLASSES.copy()
+        )
+        reliability = 1.0 / n_classes
         if conformal is not None:
             try:
-                conf_result = conformal.predict_sets(dir_probs.reshape(1, -1))
-                prediction_set = conf_result.prediction_sets[0]
+                conf_result = conformal.predict_sets(raw_probs.reshape(1, -1))
+                default_set = [str(s) for s in conf_result.prediction_sets[0]]
                 reliability = float(conf_result.reliability_scores[0])
             except Exception:
                 logger.debug("Conformal prediction failed, using full set")
@@ -238,12 +344,13 @@ def run_prediction(
         return MLPrediction(
             ticker=ticker,
             strategy_type=strategy_type,
-            predicted_direction=predicted_direction,
-            probability_up=float(dir_probs[DIRECTION_CLASSES.index("UP")]),
-            probability_down=float(dir_probs[DIRECTION_CLASSES.index("DOWN")]),
-            probability_flat=float(dir_probs[DIRECTION_CLASSES.index("FLAT")]),
+            predicted_direction=direction,
+            probability_up=probability_up,
+            probability_down=probability_down,
+            probability_flat=probability_flat,
+            probability_profitable=prob_profitable,
             predicted_return_pct=predicted_return,
-            prediction_set=prediction_set,
+            prediction_set=default_set,
             reliability_score=reliability,
             top_features=top_features,
             model_version=f"{model_version}{'(fallback)' if used_fallback else ''}",

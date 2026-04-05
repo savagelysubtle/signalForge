@@ -411,19 +411,28 @@ class DataAcquisitionPipeline:
 
         logger.info("Fetching TSX universe...")
         tsx_url = f"{FMP_STABLE_BASE}/company-screener"
-        tsx_params: dict[str, Any] = {
-            "exchange": "TSX",
-            "isActivelyTrading": "true",
-            "volumeMoreThan": "100000",
-            "limit": 200,
-        }
-        try:
-            data = await self._client._get(tsx_url, tsx_params)
-            if isinstance(data, list):
-                universe["tsx"] = [r["symbol"] for r in data if "symbol" in r]
-                logger.info("TSX: %d tickers", len(universe["tsx"]))
-        except Exception:
-            logger.exception("Failed to fetch TSX universe")
+        tsx_tickers: list[str] = []
+        page_limit = 1000
+        for offset in range(0, 5000, page_limit):
+            tsx_params: dict[str, Any] = {
+                "exchange": "TSX",
+                "isActivelyTrading": "true",
+                "volumeMoreThan": "100000",
+                "limit": page_limit,
+                "offset": offset,
+            }
+            try:
+                data = await self._client._get(tsx_url, tsx_params)
+                if not isinstance(data, list) or len(data) == 0:
+                    break
+                tsx_tickers.extend(r["symbol"] for r in data if "symbol" in r)
+                if len(data) < page_limit:
+                    break
+            except Exception:
+                logger.exception("Failed to fetch TSX universe (offset=%d)", offset)
+                break
+        universe["tsx"] = tsx_tickers
+        logger.info("TSX: %d tickers", len(universe["tsx"]))
 
         logger.info("Fetching US universe (S&P 500)...")
         sp500_url = f"{FMP_STABLE_BASE}/sp500-constituent"
@@ -438,20 +447,28 @@ class DataAcquisitionPipeline:
         if not universe["us"]:
             logger.info("S&P 500 endpoint failed, falling back to US screener...")
             us_url = f"{FMP_STABLE_BASE}/company-screener"
-            us_params: dict[str, Any] = {
-                "exchange": "NASDAQ,NYSE",
-                "isActivelyTrading": "true",
-                "marketCapMoreThan": "10000000000",
-                "volumeMoreThan": "500000",
-                "limit": 500,
-            }
-            try:
-                data = await self._client._get(us_url, us_params)
-                if isinstance(data, list):
-                    universe["us"] = [r["symbol"] for r in data if "symbol" in r]
-                    logger.info("US (screener fallback): %d tickers", len(universe["us"]))
-            except Exception:
-                logger.exception("Failed to fetch US universe via screener")
+            us_tickers: list[str] = []
+            for offset in range(0, 5000, page_limit):
+                us_params: dict[str, Any] = {
+                    "exchange": "NASDAQ,NYSE",
+                    "isActivelyTrading": "true",
+                    "marketCapMoreThan": "10000000000",
+                    "volumeMoreThan": "500000",
+                    "limit": page_limit,
+                    "offset": offset,
+                }
+                try:
+                    data = await self._client._get(us_url, us_params)
+                    if not isinstance(data, list) or len(data) == 0:
+                        break
+                    us_tickers.extend(r["symbol"] for r in data if "symbol" in r)
+                    if len(data) < page_limit:
+                        break
+                except Exception:
+                    logger.exception("Failed to fetch US universe (offset=%d)", offset)
+                    break
+            universe["us"] = us_tickers
+            logger.info("US (screener fallback): %d tickers", len(universe["us"]))
 
         from ml_training.data.binance_provider import TOP_CRYPTO_PAIRS
 
@@ -462,12 +479,13 @@ class DataAcquisitionPipeline:
 
     # -- Phase 1: Daily OHLCV via yfinance (free) ----------------------------
 
-    def _pull_daily_yfinance(
+    def _pull_yfinance_ohlcv(
         self,
         tickers: list[str],
         category: str,
+        timeframe: str = "D",
     ) -> None:
-        """Download daily OHLCV for a category via yfinance."""
+        """Download OHLCV for a category via yfinance (daily, weekly, or monthly)."""
         from ml_training.data.yfinance_provider import download_daily_ohlcv
 
         download_daily_ohlcv(
@@ -476,6 +494,7 @@ class DataAcquisitionPipeline:
             store=self._store,
             completed=self._checkpoint.completed,
             lookback_years=self._config.daily_lookback_days // 365 or 2,
+            timeframe=timeframe,
         )
         self._checkpoint.save()
 
@@ -487,7 +506,8 @@ class DataAcquisitionPipeline:
         timeframes: list[str],
     ) -> None:
         """Download intraday OHLCV for stocks via FMP Premium."""
-        intraday_tfs = [tf for tf in timeframes if tf != "D"]
+        yf_handled = {"D", "W", "M"}
+        intraday_tfs = [tf for tf in timeframes if tf not in yf_handled]
         if not intraday_tfs:
             return
 
@@ -542,29 +562,51 @@ class DataAcquisitionPipeline:
         tickers: list[str],
         timeframes: list[str],
     ) -> None:
-        """Compute technical indicators for all downloaded OHLCV data."""
-        logger.info("Computing technical indicators locally...")
+        """Compute technical indicators for all downloaded OHLCV data.
+
+        Parallelised across ticker x timeframe pairs when free-threading
+        is active.  Each pair is independent: load OHLCV → compute
+        indicators → save Parquet.
+        """
+        from ml_training.threading import parallel_map
+
+        tasks: list[tuple[str, str]] = [
+            (symbol, tf)
+            for symbol in tickers
+            for tf in timeframes
+            if not self._checkpoint.is_done(f"indicators:{symbol}:{tf}")
+        ]
+
+        if not tasks:
+            logger.info("All indicators already computed, skipping")
+            return
+
+        logger.info("Computing technical indicators for %d ticker-timeframe pairs...", len(tasks))
+
+        def _compute_one(pair: tuple[str, str]) -> bool:
+            symbol, tf = pair
+            prices_df = self._store.load_prices(symbol, tf)
+            if prices_df.empty:
+                return False
+
+            required = {"open", "high", "low", "close", "volume"}
+            if not required.issubset(prices_df.columns):
+                return False
+
+            indicators_df = compute_indicators_from_ohlcv(prices_df)
+            if not indicators_df.empty:
+                self._store.save_indicators_df(symbol, tf, indicators_df)
+                return True
+            return False
+
+        results = parallel_map(_compute_one, tasks, desc="indicators")
+
         computed = 0
-
-        for symbol in tickers:
-            for tf in timeframes:
-                key = f"indicators:{symbol}:{tf}"
-                if self._checkpoint.is_done(key):
-                    continue
-
-                prices_df = self._store.load_prices(symbol, tf)
-                if prices_df.empty:
-                    continue
-
-                required = {"open", "high", "low", "close", "volume"}
-                if not required.issubset(prices_df.columns):
-                    continue
-
-                indicators_df = compute_indicators_from_ohlcv(prices_df)
-                if not indicators_df.empty:
-                    self._store.save_indicators_df(symbol, tf, indicators_df)
-                    self._checkpoint.mark_done(key)
-                    computed += 1
+        for task, success in zip(tasks, results):
+            if success:
+                symbol, tf = task
+                self._checkpoint.mark_done(f"indicators:{symbol}:{tf}")
+                computed += 1
 
         self._checkpoint.save()
         logger.info("Computed indicators for %d ticker-timeframe combinations", computed)
@@ -672,15 +714,17 @@ class DataAcquisitionPipeline:
                 if cat != "crypto":
                     all_stock_tickers.extend(tickers)
 
-            # Phase 2: Daily OHLCV via yfinance (free -- all categories)
-            if "D" in timeframes:
+            # Phase 2: Daily/Weekly/Monthly OHLCV via yfinance (free)
+            yf_timeframes = [tf for tf in timeframes if tf in ("D", "W", "M")]
+            if yf_timeframes:
                 logger.info("=" * 60)
-                logger.info("Phase 2: Daily OHLCV (yfinance -- free)")
+                logger.info("Phase 2: OHLCV via yfinance -- free (%s)", ", ".join(yf_timeframes))
                 logger.info("=" * 60)
                 for cat in categories:
                     tickers = universe.get(cat, [])
                     if tickers:
-                        self._pull_daily_yfinance(tickers, cat)
+                        for tf in yf_timeframes:
+                            self._pull_yfinance_ohlcv(tickers, cat, timeframe=tf)
 
             # Phase 3: Crypto OHLCV via Binance (free -- all timeframes)
             if "crypto" in categories:
@@ -690,7 +734,8 @@ class DataAcquisitionPipeline:
                 self._pull_crypto_binance(timeframes)
 
             # Phase 4: Intraday stock OHLCV via FMP (paid)
-            intraday_tfs = [tf for tf in timeframes if tf != "D"]
+            yf_handled = {"D", "W", "M"}
+            intraday_tfs = [tf for tf in timeframes if tf not in yf_handled]
             if all_stock_tickers and intraday_tfs:
                 logger.info("=" * 60)
                 logger.info("Phase 4: Intraday stock OHLCV (FMP Premium)")

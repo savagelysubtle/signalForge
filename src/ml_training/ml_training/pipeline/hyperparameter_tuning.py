@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,7 @@ from ml_training.models.predictor import (
     _prepare_features,
     _purged_split,
 )
+from ml_training.threading import balanced_lgb_njobs, optimal_workers
 
 logger = logging.getLogger(__name__)
 
@@ -42,14 +44,69 @@ class HyperparameterSearchResult:
 
 
 PARAM_GRID: list[dict[str, Any]] = [
-    {"num_leaves": 31, "learning_rate": 0.1, "min_child_samples": 20},
-    {"num_leaves": 63, "learning_rate": 0.05, "min_child_samples": 20},
-    {"num_leaves": 63, "learning_rate": 0.05, "min_child_samples": 50},
-    {"num_leaves": 127, "learning_rate": 0.03, "min_child_samples": 30},
-    {"num_leaves": 31, "learning_rate": 0.05, "feature_fraction": 0.7},
-    {"num_leaves": 63, "learning_rate": 0.05, "feature_fraction": 0.6, "bagging_fraction": 0.7},
-    {"num_leaves": 31, "learning_rate": 0.1, "min_child_samples": 50, "reg_alpha": 0.1},
-    {"num_leaves": 63, "learning_rate": 0.03, "min_child_samples": 30, "reg_lambda": 0.1},
+    {
+        "num_leaves": 15,
+        "max_depth": 5,
+        "learning_rate": 0.05,
+        "min_child_samples": 50,
+        "reg_lambda": 1.0,
+    },
+    {
+        "num_leaves": 31,
+        "max_depth": 8,
+        "learning_rate": 0.05,
+        "min_child_samples": 30,
+        "reg_lambda": 1.0,
+    },
+    {
+        "num_leaves": 31,
+        "max_depth": 6,
+        "learning_rate": 0.1,
+        "min_child_samples": 50,
+        "reg_alpha": 0.1,
+        "reg_lambda": 1.0,
+    },
+    {
+        "num_leaves": 31,
+        "max_depth": 8,
+        "learning_rate": 0.03,
+        "min_child_samples": 30,
+        "reg_alpha": 0.5,
+        "reg_lambda": 2.0,
+    },
+    {
+        "num_leaves": 15,
+        "max_depth": 5,
+        "learning_rate": 0.05,
+        "min_child_samples": 80,
+        "feature_fraction": 0.6,
+        "reg_lambda": 2.0,
+    },
+    {
+        "num_leaves": 31,
+        "max_depth": 6,
+        "learning_rate": 0.05,
+        "min_child_samples": 50,
+        "feature_fraction": 0.6,
+        "bagging_fraction": 0.7,
+        "reg_lambda": 1.0,
+    },
+    {
+        "boosting_type": "dart",
+        "num_leaves": 15,
+        "max_depth": 4,
+        "learning_rate": 0.03,
+        "min_child_samples": 100,
+        "drop_rate": 0.1,
+        "reg_lambda": 5.0,
+    },
+    {
+        "num_leaves": 15,
+        "max_depth": 4,
+        "learning_rate": 0.05,
+        "min_child_samples": 100,
+        "reg_lambda": 5.0,
+    },
 ]
 
 
@@ -68,6 +125,7 @@ class HyperparameterTuner:
         param_grid: list[dict[str, Any]] | None = None,
         purge_window: int = DEFAULT_PURGE_WINDOW,
         embargo_window: int = DEFAULT_EMBARGO_WINDOW,
+        binary_mode: bool = False,
     ) -> None:
         self._target_col = target_col
         self._n_splits = n_cv_splits
@@ -75,9 +133,14 @@ class HyperparameterTuner:
         self._grid = param_grid or PARAM_GRID
         self._purge_window = purge_window
         self._embargo_window = embargo_window
+        self._binary_mode = binary_mode
 
     def search(self, dataset: pd.DataFrame) -> HyperparameterSearchResult:
         """Run hyperparameter search across the parameter grid.
+
+        Grid configs are evaluated in parallel when free-threading is
+        active.  Each config's ``n_jobs`` is balanced to avoid OpenMP
+        oversubscription.
 
         Args:
             dataset: Full training dataset with features and labels.
@@ -90,36 +153,48 @@ class HyperparameterTuner:
         feature_cols = _identify_feature_columns(df)
 
         X, _encoders = _prepare_features(df, feature_cols)
-        le = LabelEncoder()
-        le.fit(DIRECTION_CLASSES)
-        y = le.transform(df[self._target_col].values)
+        if self._binary_mode:
+            le = LabelEncoder()
+            le.fit([0, 1])
+            y = df[self._target_col].astype(int).values
+        else:
+            le = LabelEncoder()
+            le.fit(DIRECTION_CLASSES)
+            y = le.transform(df[self._target_col].values)
 
         categorical_indices = [X.columns.get_loc(c) for c in CATEGORICAL_FEATURES if c in X.columns]
 
-        tscv = TimeSeriesSplit(n_splits=self._n_splits)
         n_samples = len(X)
-        results: list[dict[str, Any]] = []
-        best_score = -1.0
-        best_params: dict[str, Any] = {}
+        workers = optimal_workers("cpu")
+        per_model_njobs = balanced_lgb_njobs(workers) if workers > 1 else -1
 
-        for i, params in enumerate(self._grid):
-            full_params = {
-                "objective": "multiclass",
-                "num_class": 3,
-                "metric": "multi_logloss",
+        if self._binary_mode:
+            base_obj, base_metric = "binary", "binary_logloss"
+        else:
+            base_obj, base_metric = "multiclass", "multi_logloss"
+
+        def _evaluate_config(params: dict[str, Any]) -> dict[str, Any]:
+            """Evaluate one hyperparameter config across CV folds."""
+            full_params: dict[str, Any] = {
+                "objective": base_obj,
+                "metric": base_metric,
                 "boosting_type": "gbdt",
                 "feature_fraction": 0.8,
                 "bagging_fraction": 0.8,
                 "bagging_freq": 5,
                 "is_unbalance": True,
                 "verbose": -1,
-                "n_jobs": -1,
+                "n_jobs": per_model_njobs,
                 "seed": 42,
                 **params,
             }
+            if not self._binary_mode:
+                full_params.setdefault("num_class", 3)
 
+            tscv = TimeSeriesSplit(n_splits=self._n_splits)
             fold_scores: list[float] = []
             fold_train_scores: list[float] = []
+
             for raw_train_idx, test_idx in tscv.split(X):
                 train_idx = _purged_split(
                     n_samples,
@@ -139,47 +214,76 @@ class HyperparameterTuner:
                     eval_set=[(X_test, y_test)],
                     callbacks=[lgb.log_evaluation(0), lgb.early_stopping(50, verbose=False)],
                 )
-                test_score = float(np.mean(clf.predict(X_test) == y_test))
-                train_score = float(np.mean(clf.predict(X_train) == y_train))
-                fold_scores.append(test_score)
-                fold_train_scores.append(train_score)
+                fold_scores.append(float(np.mean(clf.predict(X_test) == y_test)))
+                fold_train_scores.append(float(np.mean(clf.predict(X_train) == y_train)))
 
             mean_score = float(np.mean(fold_scores))
             std_score = float(np.std(fold_scores))
             mean_train = float(np.mean(fold_train_scores))
             overfit_gap = mean_train - mean_score
+            fold_variance = float(np.var(fold_scores))
+            consistency_penalty = fold_variance * 5.0
+            composite = mean_score - 2.0 * overfit_gap - consistency_penalty
 
-            composite = mean_score - 2 * overfit_gap
-
-            result = {
+            return {
                 "params": params,
+                "full_params": full_params,
                 "mean_accuracy": mean_score,
                 "std_accuracy": std_score,
                 "overfit_gap": overfit_gap,
+                "fold_variance": fold_variance,
                 "composite_score": composite,
                 "fold_scores": fold_scores,
             }
-            results.append(result)
 
+        if workers > 1:
             logger.info(
-                "Config %d/%d: accuracy=%.3f±%.3f gap=%.3f composite=%.3f | %s",
-                i + 1,
+                "Parallel grid search: %d configs across %d threads (n_jobs=%d per model)",
                 len(self._grid),
-                mean_score,
-                std_score,
-                overfit_gap,
-                composite,
-                params,
+                workers,
+                per_model_njobs,
             )
+            results: list[dict[str, Any]] = []
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                future_to_idx = {
+                    pool.submit(_evaluate_config, p): i for i, p in enumerate(self._grid)
+                }
+                for future in as_completed(future_to_idx):
+                    idx = future_to_idx[future]
+                    result = future.result()
+                    results.append(result)
+                    logger.info(
+                        "Config %d/%d: accuracy=%.3f±%.3f gap=%.3f composite=%.3f | %s",
+                        idx + 1,
+                        len(self._grid),
+                        result["mean_accuracy"],
+                        result["std_accuracy"],
+                        result["overfit_gap"],
+                        result["composite_score"],
+                        result["params"],
+                    )
+        else:
+            results = []
+            for i, params in enumerate(self._grid):
+                result = _evaluate_config(params)
+                results.append(result)
+                logger.info(
+                    "Config %d/%d: accuracy=%.3f±%.3f gap=%.3f composite=%.3f | %s",
+                    i + 1,
+                    len(self._grid),
+                    result["mean_accuracy"],
+                    result["std_accuracy"],
+                    result["overfit_gap"],
+                    result["composite_score"],
+                    result["params"],
+                )
 
-            if composite > best_score:
-                best_score = composite
-                best_params = full_params
+        best = max(results, key=lambda r: r["composite_score"])
 
         return HyperparameterSearchResult(
-            best_params=best_params,
-            best_score=best_score,
-            all_results=results,
+            best_params=best["full_params"],
+            best_score=best["composite_score"],
+            all_results=[{k: v for k, v in r.items() if k != "full_params"} for r in results],
             n_trials=len(self._grid),
         )
 
@@ -211,34 +315,49 @@ class HyperparameterTuner:
         feature_cols = _identify_feature_columns(df)
 
         X, _encoders = _prepare_features(df, feature_cols)
-        le = LabelEncoder()
-        le.fit(DIRECTION_CLASSES)
-        y = le.transform(df[self._target_col].values)
+        if self._binary_mode:
+            le = LabelEncoder()
+            le.fit([0, 1])
+            y = df[self._target_col].astype(int).values
+        else:
+            le = LabelEncoder()
+            le.fit(DIRECTION_CLASSES)
+            y = le.transform(df[self._target_col].values)
         categorical_indices = [X.columns.get_loc(c) for c in CATEGORICAL_FEATURES if c in X.columns]
         n_samples = len(X)
         tscv = TimeSeriesSplit(n_splits=self._n_splits)
 
+        if self._binary_mode:
+            obj_name, obj_metric = "binary", "binary_logloss"
+        else:
+            obj_name, obj_metric = "multiclass", "multi_logloss"
+
         def objective(trial: optuna.Trial) -> float:
-            params = {
-                "objective": "multiclass",
-                "num_class": 3,
-                "metric": "multi_logloss",
+            params: dict[str, Any] = {
+                "objective": obj_name,
+                "metric": obj_metric,
                 "boosting_type": "gbdt",
                 "is_unbalance": True,
                 "verbose": -1,
                 "n_jobs": -1,
                 "seed": 42,
-                "num_leaves": trial.suggest_int("num_leaves", 15, 127),
-                "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.15, log=True),
-                "min_child_samples": trial.suggest_int("min_child_samples", 20, 100),
-                "feature_fraction": trial.suggest_float("feature_fraction", 0.5, 0.9),
-                "bagging_fraction": trial.suggest_float("bagging_fraction", 0.5, 0.9),
-                "bagging_freq": 5,
-                "reg_alpha": trial.suggest_float("reg_alpha", 1e-8, 1.0, log=True),
-                "reg_lambda": trial.suggest_float("reg_lambda", 1e-8, 1.0, log=True),
-                "max_depth": trial.suggest_int("max_depth", 5, 15),
-                "min_gain_to_split": trial.suggest_float("min_gain_to_split", 0.0, 0.5),
             }
+            if not self._binary_mode:
+                params["num_class"] = 3
+            params.update(
+                {
+                    "num_leaves": trial.suggest_int("num_leaves", 7, 31),
+                    "learning_rate": trial.suggest_float("learning_rate", 0.005, 0.05, log=True),
+                    "min_child_samples": trial.suggest_int("min_child_samples", 50, 300),
+                    "feature_fraction": trial.suggest_float("feature_fraction", 0.3, 0.7),
+                    "bagging_fraction": trial.suggest_float("bagging_fraction", 0.5, 0.8),
+                    "bagging_freq": 1,
+                    "reg_alpha": trial.suggest_float("reg_alpha", 0.1, 10.0, log=True),
+                    "reg_lambda": trial.suggest_float("reg_lambda", 1.0, 50.0, log=True),
+                    "max_depth": trial.suggest_int("max_depth", 3, 6),
+                    "min_gain_to_split": trial.suggest_float("min_gain_to_split", 0.01, 1.0),
+                }
+            )
 
             fold_test_scores: list[float] = []
             fold_train_scores: list[float] = []
@@ -267,16 +386,17 @@ class HyperparameterTuner:
             mean_test = float(np.mean(fold_test_scores))
             mean_train = float(np.mean(fold_train_scores))
             gap = mean_train - mean_test
-            return mean_test - 2 * gap
+            fold_variance = float(np.var(fold_test_scores))
+            consistency_penalty = fold_variance * 5.0
+            return mean_test - 2.0 * gap - consistency_penalty
 
         study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler())
         study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
 
         best_trial = study.best_trial
-        best_full_params = {
-            "objective": "multiclass",
-            "num_class": 3,
-            "metric": "multi_logloss",
+        best_full_params: dict[str, Any] = {
+            "objective": obj_name,
+            "metric": obj_metric,
             "boosting_type": "gbdt",
             "is_unbalance": True,
             "verbose": -1,
@@ -285,6 +405,8 @@ class HyperparameterTuner:
             "bagging_freq": 5,
             **best_trial.params,
         }
+        if not self._binary_mode:
+            best_full_params["num_class"] = 3
 
         logger.info(
             "Optuna best: composite=%.4f after %d trials | %s",

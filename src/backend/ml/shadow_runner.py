@@ -40,8 +40,8 @@ async def run_ml_shadow(
     Returns:
         List of ML predictions for each recommendation.
     """
-    if not ml_model_available():
-        logger.debug("No ML model available, skipping shadow predictions")
+    if not ml_model_available(strategy_type):
+        logger.debug("No ML model available for %s, skipping shadow predictions", strategy_type)
         return []
 
     predictions: list[MLPrediction] = []
@@ -67,7 +67,34 @@ async def run_ml_shadow(
             "vix_level": regime_context.get("vix_estimate") if regime_context else None,
         }
 
-        features = build_feature_vector(ta_features, fund_features, context)
+        action = rec.get("action", "")
+        confidence = rec.get("confidence", 0)
+        entry_price = rec.get("entry_price")
+        stop_loss = rec.get("stop_loss")
+        take_profit = rec.get("take_profit")
+
+        action_map = {"BUY": 1, "SHORT": -1, "HOLD": 0, "NO_TRADE": 0, "WATCH": 0}
+        sl_dist = None
+        tp_dist = None
+        if entry_price and entry_price > 0:
+            if stop_loss and stop_loss > 0:
+                sl_dist = abs(entry_price - stop_loss) / entry_price * 100
+            if take_profit and take_profit > 0:
+                tp_dist = abs(take_profit - entry_price) / entry_price * 100
+
+        llm_feats: dict[str, float | None] = {
+            "llm_action_encoded": float(action_map.get(action, 0)),
+            "llm_confidence": float(confidence) if confidence else None,
+            "llm_rr_ratio": float(rec.get("risk_reward_ratio", 0))
+            if rec.get("risk_reward_ratio")
+            else None,
+            "llm_sl_distance_pct": sl_dist,
+            "llm_tp_distance_pct": tp_dist,
+            "llm_key_factor_count": float(len(rec.get("key_factors", []))),
+            "llm_warning_count": float(len(rec.get("warnings", []))),
+        }
+
+        features = build_feature_vector(ta_features, fund_features, context, llm_feats)
         prediction = run_prediction(ticker, strategy_type, features)
 
         if prediction is not None:
@@ -111,7 +138,9 @@ async def _store_shadow_prediction(
             "prediction_date": "now()",
             "ml_prediction": ml_prediction.model_dump(),
             "ml_direction": ml_prediction.predicted_direction,
-            "ml_confidence": ml_prediction.probability_up,
+            "ml_confidence": ml_prediction.probability_profitable
+            if ml_prediction.probability_profitable is not None
+            else ml_prediction.probability_up,
             "ml_reliability": ml_prediction.reliability_score,
             "gpt_prediction": {
                 "action": gpt_rec.get("action", ""),

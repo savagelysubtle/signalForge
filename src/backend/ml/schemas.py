@@ -20,6 +20,12 @@ class MLPrediction(BaseModel):
     probability_up: float = Field(ge=0.0, le=1.0)
     probability_down: float = Field(ge=0.0, le=1.0)
     probability_flat: float = Field(ge=0.0, le=1.0)
+    probability_profitable: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="P(trade hits TP before SL) — set for binary models, None for 3-class",
+    )
     probability_interval: tuple[float, float] | None = None
     predicted_return_pct: float = 0.0
     prediction_set: list[str] = Field(default_factory=list)
@@ -39,6 +45,20 @@ class MLModelInfo(BaseModel):
     judge_verdict: str = ""
     status: str = "inactive"
     feature_count: int = 0
+
+
+class GateResult(BaseModel):
+    """Result from the ML gate (independent model) for one recommendation."""
+
+    ticker: str
+    ml_probability: float = Field(ge=0.0, le=1.0)
+    predicted_direction: Literal["UP", "DOWN", "FLAT"]
+    size_multiplier: float = Field(ge=0.0, le=1.0, default=1.0)
+    blocked: bool = False
+    conformal_set: list[str] = Field(default_factory=list)
+    reliability_score: float = Field(ge=0.0, le=1.0, default=0.0)
+    model_version: str = ""
+    reason: str = ""
 
 
 class ShadowComparison(BaseModel):

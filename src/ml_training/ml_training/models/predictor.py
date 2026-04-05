@@ -27,12 +27,15 @@ CLASSIFIER_PARAMS: dict[str, Any] = {
     "num_class": 3,
     "metric": "multi_logloss",
     "boosting_type": "gbdt",
-    "num_leaves": 63,
+    "num_leaves": 15,
+    "max_depth": 5,
     "learning_rate": 0.05,
-    "feature_fraction": 0.8,
+    "feature_fraction": 0.6,
     "bagging_fraction": 0.8,
-    "bagging_freq": 5,
-    "min_child_samples": 20,
+    "bagging_freq": 1,
+    "min_child_samples": 100,
+    "reg_alpha": 0.1,
+    "reg_lambda": 5.0,
     "is_unbalance": True,
     "verbose": -1,
     "n_jobs": -1,
@@ -43,12 +46,15 @@ BINARY_CLASSIFIER_PARAMS: dict[str, Any] = {
     "objective": "binary",
     "metric": "binary_logloss",
     "boosting_type": "gbdt",
-    "num_leaves": 63,
+    "num_leaves": 15,
+    "max_depth": 5,
     "learning_rate": 0.05,
-    "feature_fraction": 0.8,
+    "feature_fraction": 0.6,
     "bagging_fraction": 0.8,
-    "bagging_freq": 5,
-    "min_child_samples": 20,
+    "bagging_freq": 1,
+    "min_child_samples": 100,
+    "reg_alpha": 0.1,
+    "reg_lambda": 5.0,
     "is_unbalance": True,
     "verbose": -1,
     "n_jobs": -1,
@@ -59,19 +65,24 @@ REGRESSOR_PARAMS: dict[str, Any] = {
     "objective": "regression",
     "metric": "rmse",
     "boosting_type": "gbdt",
-    "num_leaves": 63,
+    "num_leaves": 15,
+    "max_depth": 5,
     "learning_rate": 0.05,
-    "feature_fraction": 0.8,
+    "feature_fraction": 0.6,
     "bagging_fraction": 0.8,
-    "bagging_freq": 5,
-    "min_child_samples": 20,
+    "bagging_freq": 1,
+    "min_child_samples": 100,
+    "reg_alpha": 0.1,
+    "reg_lambda": 5.0,
     "verbose": -1,
     "n_jobs": -1,
     "seed": 42,
 }
 
-DEFAULT_PURGE_WINDOW = 200
-DEFAULT_EMBARGO_WINDOW = 5
+DEFAULT_PURGE_WINDOW = 25
+DEFAULT_EMBARGO_WINDOW = 10
+
+N_ENSEMBLE_SEEDS = 7
 
 
 @dataclass
@@ -82,6 +93,7 @@ class CPCVConfig:
     purge_window: int = DEFAULT_PURGE_WINDOW
     embargo_window: int = DEFAULT_EMBARGO_WINDOW
     min_train_size: int = 500
+    forward_horizon: int = 10
 
 
 @dataclass
@@ -99,6 +111,7 @@ class FoldResult:
     test_indices: np.ndarray
     test_true: np.ndarray
     feature_importances: np.ndarray
+    best_iteration: int = 0
 
 
 @dataclass
@@ -106,6 +119,7 @@ class TrainingResult:
     """Complete training results from all CPCV folds."""
 
     classifier: lgb.LGBMClassifier | None = None
+    classifiers: list[lgb.LGBMClassifier] = field(default_factory=list)
     regressor: lgb.LGBMRegressor | None = None
     label_encoder: LabelEncoder | None = None
     feature_names: list[str] = field(default_factory=list)
@@ -117,13 +131,23 @@ class TrainingResult:
     overfit_gap: float = 0.0
 
 
-def _identify_feature_columns(df: pd.DataFrame) -> list[str]:
+def _identify_feature_columns(
+    df: pd.DataFrame,
+    model_mode: str = "shadow",
+) -> list[str]:
     """Identify columns that should be used as features.
 
     Excludes metadata columns, target columns, and non-predictive columns.
     Uses prefix matching so any horizon (``return_Xd``, ``direction_Xd``)
     is automatically excluded.
+
+    Args:
+        df: Dataset DataFrame.
+        model_mode: ``"independent"`` excludes LLM-derived features (for the
+            gate model that runs before GPT).  ``"shadow"`` includes everything.
     """
+    from ml_training.features.engineering import LLM_FEATURES
+
     exclude = {
         "ticker",
         "date",
@@ -134,23 +158,41 @@ def _identify_feature_columns(df: pd.DataFrame) -> list[str]:
         "max_adverse_excursion",
         "stop_hit",
         "profitable",
+        "triple_barrier_label",
+        "barrier_type",
+        "bars_to_barrier",
+        "risk_reward_ratio",
     }
-    return [
+    if model_mode == "independent":
+        exclude |= LLM_FEATURES
+
+    cols = [
         c
         for c in df.columns
         if c not in exclude and not c.startswith("return_") and not c.startswith("direction_")
     ]
 
+    if model_mode == "independent":
+        leaked = frozenset(cols) & LLM_FEATURES
+        if leaked:
+            raise ValueError(f"Independent model must not use LLM features, found: {leaked}")
+
+    return cols
+
 
 def _prepare_features(
     df: pd.DataFrame,
     feature_cols: list[str],
+    fit_indices: np.ndarray | None = None,
 ) -> tuple[pd.DataFrame, dict[str, LabelEncoder]]:
     """Prepare feature matrix: encode categoricals, handle missing values.
 
     Args:
         df: Raw dataset DataFrame.
         feature_cols: Columns to include as features.
+        fit_indices: If provided, compute imputation medians only from these
+            rows to prevent look-ahead bias.  When ``None`` all rows are used
+            (backward-compatible for non-training callers).
 
     Returns:
         Tuple of (prepared feature DataFrame, dict of label encoders for categoricals).
@@ -169,9 +211,10 @@ def _prepare_features(
     for col in non_cat:
         X[col] = pd.to_numeric(X[col], errors="coerce")
 
+    fit_slice = X.iloc[fit_indices] if fit_indices is not None else X
     numeric_cols = X.select_dtypes(include=[np.number]).columns
     for col in numeric_cols:
-        median = X[col].median()
+        median = fit_slice[col].median()
         X[col] = X[col].fillna(median if pd.notna(median) else 0.0)
 
     return X, encoders
@@ -215,6 +258,22 @@ def _purged_split(
     return train_indices[mask]
 
 
+def compute_sample_weights(n_samples: int, horizon: int) -> np.ndarray:
+    """Weight samples by label uniqueness to correct for overlapping returns.
+
+    With *horizon*-bar forward returns, consecutive samples share most of
+    their forward window.  This assigns lower weight to samples surrounded
+    by many overlapping neighbours (Lopez de Prado, Ch. 4).
+    """
+    weights = np.empty(n_samples, dtype=np.float64)
+    for i in range(n_samples):
+        lo = max(0, i - horizon)
+        hi = min(n_samples, i + horizon + 1)
+        weights[i] = 1.0 / (hi - lo)
+    weights /= weights.mean()
+    return weights
+
+
 class PredictionModel:
     """LightGBM prediction model with CPCV training and evaluation.
 
@@ -230,11 +289,13 @@ class PredictionModel:
         classifier_params: dict[str, Any] | None = None,
         regressor_params: dict[str, Any] | None = None,
         binary_mode: bool = False,
+        model_mode: str = "shadow",
     ) -> None:
         self._target_col = target_col
         self._return_col = return_col
         self._cpcv = cpcv_config or CPCVConfig()
         self._binary_mode = binary_mode
+        self._model_mode = model_mode
         if binary_mode:
             self._clf_params = classifier_params or BINARY_CLASSIFIER_PARAMS.copy()
         else:
@@ -254,7 +315,7 @@ class PredictionModel:
         """
         df = df.dropna(subset=[self._target_col]).sort_values("date").reset_index(drop=True)
 
-        feature_cols = _identify_feature_columns(df)
+        feature_cols = _identify_feature_columns(df, model_mode=self._model_mode)
         X, _encoders = _prepare_features(df, feature_cols)
 
         if self._binary_mode:
@@ -269,18 +330,22 @@ class PredictionModel:
         return_col = self._return_col if self._return_col in df.columns else None
         y_reg = df[return_col].fillna(0).values if return_col else np.zeros(len(df))
 
+        sample_weights = compute_sample_weights(len(X), self._cpcv.forward_horizon)
+
         n_samples = len(X)
         effective_splits = self._cpcv.n_splits
-        effective_purge = self._cpcv.purge_window
+        effective_purge = max(self._cpcv.purge_window, self._cpcv.forward_horizon)
+        effective_embargo = max(self._cpcv.embargo_window, self._cpcv.forward_horizon // 2)
 
         if n_samples < 100_000:
             effective_splits = min(self._cpcv.n_splits, 3)
-            effective_purge = min(self._cpcv.purge_window, max(20, n_samples // 500))
+            effective_purge = min(effective_purge, max(20, n_samples // 500))
             logger.info(
-                "Small dataset (%d rows): using n_splits=%d, purge_window=%d",
+                "Small dataset (%d rows): n_splits=%d, purge=%d, embargo=%d",
                 n_samples,
                 effective_splits,
                 effective_purge,
+                effective_embargo,
             )
 
         tscv = TimeSeriesSplit(n_splits=effective_splits)
@@ -294,7 +359,7 @@ class PredictionModel:
                 train_idx,
                 test_idx,
                 effective_purge,
-                self._cpcv.embargo_window,
+                effective_embargo,
             )
 
             if len(train_idx_clean) < self._cpcv.min_train_size:
@@ -310,6 +375,7 @@ class PredictionModel:
             X_test = X.iloc[test_idx]
             y_train = y_cls[train_idx_clean]
             y_test = y_cls[test_idx]
+            w_train = sample_weights[train_idx_clean]
 
             categorical_indices = [
                 X.columns.get_loc(c) for c in CATEGORICAL_FEATURES if c in X.columns
@@ -319,6 +385,7 @@ class PredictionModel:
             clf.fit(
                 X_train,
                 y_train,
+                sample_weight=w_train,
                 categorical_feature=categorical_indices,
                 eval_set=[(X_test, y_test)],
                 callbacks=[lgb.log_evaluation(0), lgb.early_stopping(50, verbose=False)],
@@ -343,16 +410,18 @@ class PredictionModel:
                 test_indices=test_idx,
                 test_true=y_test,
                 feature_importances=clf.feature_importances_,
+                best_iteration=getattr(clf, "best_iteration_", n_rounds),
             )
             fold_results.append(fold_result)
             all_test_preds.append(test_preds)
             all_test_true.append(y_test)
 
             logger.info(
-                "Fold %d: train_acc=%.3f, test_acc=%.3f, train=%d, test=%d",
+                "Fold %d: train_acc=%.3f, test_acc=%.3f, best_iter=%d, train=%d, test=%d",
                 fold_idx,
                 train_acc,
                 test_acc,
+                fold_result.best_iteration,
                 len(train_idx_clean),
                 len(test_idx),
             )
@@ -361,15 +430,55 @@ class PredictionModel:
             logger.error("No valid CPCV folds completed")
             return TrainingResult()
 
-        logger.info("Training final model on full dataset...")
+        # --- Final model: early-stopped seed ensemble ---
+        best_iters = [fr.best_iteration for fr in fold_results if fr.best_iteration > 0]
+        final_n = int(np.median(best_iters)) if best_iters else n_rounds
+        logger.info(
+            "Training final ensemble (%d seeds, %d rounds from CV median)...",
+            N_ENSEMBLE_SEEDS,
+            final_n,
+        )
+
         categorical_indices = [X.columns.get_loc(c) for c in CATEGORICAL_FEATURES if c in X.columns]
 
-        final_clf = lgb.LGBMClassifier(**self._clf_params, n_estimators=n_rounds)
-        final_clf.fit(X, y_cls, categorical_feature=categorical_indices)
+        # Hold out last 10% for early stopping on the final fit
+        split_n = int(len(X) * 0.9)
+        X_fit, X_val = X.iloc[:split_n], X.iloc[split_n:]
+        y_fit, y_val = y_cls[:split_n], y_cls[split_n:]
+        w_fit = sample_weights[:split_n]
 
-        final_reg = lgb.LGBMRegressor(**self._reg_params, n_estimators=n_rounds)
-        final_reg.fit(X, y_reg, categorical_feature=categorical_indices)
+        final_classifiers: list[lgb.LGBMClassifier] = []
+        for seed in range(N_ENSEMBLE_SEEDS):
+            seed_params = {
+                **self._clf_params,
+                "seed": seed,
+                "feature_fraction_seed": seed,
+            }
+            clf = lgb.LGBMClassifier(**seed_params, n_estimators=final_n)
+            clf.fit(
+                X_fit,
+                y_fit,
+                sample_weight=w_fit,
+                categorical_feature=categorical_indices,
+                eval_set=[(X_val, y_val)],
+                callbacks=[lgb.log_evaluation(0), lgb.early_stopping(50, verbose=False)],
+            )
+            final_classifiers.append(clf)
 
+        primary_clf = final_classifiers[0]
+
+        reg_params = {**self._reg_params, "seed": 0}
+        final_reg = lgb.LGBMRegressor(**reg_params, n_estimators=final_n)
+        final_reg.fit(
+            X_fit,
+            y_reg[:split_n],
+            sample_weight=w_fit,
+            categorical_feature=categorical_indices,
+            eval_set=[(X_val, y_reg[split_n:])],
+            callbacks=[lgb.log_evaluation(0), lgb.early_stopping(50, verbose=False)],
+        )
+
+        # --- Aggregate metrics ---
         all_preds_concat = np.concatenate(all_test_preds)
         all_true_concat = np.concatenate(all_test_true)
         overall_acc = float(np.mean(all_preds_concat == all_true_concat))
@@ -388,17 +497,23 @@ class PredictionModel:
         if "strategy_type" in df.columns:
             strat_col = df["strategy_type"].values
             for fr in fold_results:
+                strat_counts: dict[str, list[float]] = {}
                 for strat in np.unique(strat_col[fr.test_indices]):
                     mask = strat_col[fr.test_indices] == strat
                     if mask.sum() > 0:
                         acc = float(np.mean(fr.test_predictions[mask] == fr.test_true[mask]))
-                        if strat not in accuracy_by_strategy:
-                            accuracy_by_strategy[strat] = acc
-                        else:
-                            accuracy_by_strategy[strat] = (accuracy_by_strategy[strat] + acc) / 2
+                        strat_counts.setdefault(strat, []).append(acc)
+                for strat, accs in strat_counts.items():
+                    if strat in accuracy_by_strategy:
+                        accuracy_by_strategy[strat] = (
+                            accuracy_by_strategy[strat] + float(np.mean(accs))
+                        ) / 2
+                    else:
+                        accuracy_by_strategy[strat] = float(np.mean(accs))
 
         result = TrainingResult(
-            classifier=final_clf,
+            classifier=primary_clf,
+            classifiers=final_classifiers,
             regressor=final_reg,
             label_encoder=label_encoder,
             feature_names=list(X.columns),
@@ -412,11 +527,14 @@ class PredictionModel:
 
         self._result = result
         logger.info(
-            "Training complete: accuracy=%.3f±%.3f, overfit_gap=%.3f, brier=%.3f",
+            "Training complete: accuracy=%.3f±%.3f, overfit_gap=%.3f, brier=%.3f, "
+            "ensemble=%d models, final_n=%d",
             overall_acc,
             result.accuracy_std,
             overfit_gap,
             result.mean_brier_score,
+            len(final_classifiers),
+            final_n,
         )
         return result
 
@@ -424,7 +542,11 @@ class PredictionModel:
         self,
         X: pd.DataFrame,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Generate predictions from the trained model.
+        """Generate predictions from the trained model ensemble.
+
+        Averages ``predict_proba`` across all seed models for more stable
+        probability estimates, then derives class predictions from the
+        averaged probabilities.
 
         Args:
             X: Feature DataFrame (same columns as training).
@@ -438,8 +560,11 @@ class PredictionModel:
         if self._result is None or self._result.classifier is None:
             raise RuntimeError("Model not trained. Call train() first.")
 
-        dir_preds = self._result.classifier.predict(X)
-        dir_probs = self._result.classifier.predict_proba(X)
+        classifiers = self._result.classifiers or [self._result.classifier]
+        probs_list = [clf.predict_proba(X) for clf in classifiers]
+        dir_probs = np.mean(probs_list, axis=0)
+        dir_preds = np.argmax(dir_probs, axis=1)
+
         ret_preds = (
             self._result.regressor.predict(X) if self._result.regressor else np.zeros(len(X))
         )
