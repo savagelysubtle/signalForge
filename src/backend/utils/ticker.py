@@ -126,6 +126,71 @@ def normalize_ticker(ticker: str) -> str:
     return upper
 
 
+TV_TO_FMP_SUFFIX: dict[str, str] = {
+    "TSX": ".TO",
+    "TSXV": ".V",
+    "LSE": ".L",
+    "ASX": ".AX",
+    "HKEX": ".HK",
+    "TSE": ".T",
+    "XETR": ".DE",
+    "EURONEXT": ".PA",
+    "MIL": ".MI",
+    "SIX": ".SW",
+    "BMFBOVESPA": ".SA",
+    "NSE": ".NS",
+    "BSE": ".BO",
+    "SSE": ".SS",
+    "SZSE": ".SZ",
+    "KRX": ".KS",
+}
+
+
+def to_fmp_symbol(ticker: str) -> str:
+    """Convert a TradingView ``EXCHANGE:SYMBOL`` ticker to FMP format.
+
+    International exchanges get a Yahoo-style suffix (e.g. ``TSX:AGI`` → ``AGI.TO``).
+    US exchanges (NASDAQ, NYSE, AMEX, etc.) and bare symbols pass through as-is.
+
+    Args:
+        ticker: Ticker string, optionally prefixed with exchange.
+
+    Returns:
+        FMP-compatible symbol string.
+
+    Examples:
+        >>> to_fmp_symbol("TSX:AGI")
+        'AGI.TO'
+        >>> to_fmp_symbol("TSXV:NVX")
+        'NVX.V'
+        >>> to_fmp_symbol("LSE:BP")
+        'BP.L'
+        >>> to_fmp_symbol("NASDAQ:AAPL")
+        'AAPL'
+        >>> to_fmp_symbol("AAPL")
+        'AAPL'
+        >>> to_fmp_symbol("BTCUSD")
+        'BTCUSD'
+    """
+    cleaned = _strip_wrapping(ticker)
+    cleaned = _WHITESPACE_RE.sub("", cleaned)
+    if not cleaned:
+        return ticker.strip()
+
+    if ":" not in cleaned:
+        return cleaned.upper()
+
+    exchange, symbol = cleaned.split(":", 1)
+    exchange = exchange.upper()
+    symbol = symbol.upper()
+    exchange = EXCHANGE_ALIASES.get(exchange, exchange)
+
+    suffix = TV_TO_FMP_SUFFIX.get(exchange)
+    if suffix:
+        return f"{symbol}{suffix}"
+    return symbol
+
+
 def normalize_tickers(tickers: list[str]) -> list[str]:
     """Normalize a list of ticker symbols, preserving order and removing duplicates.
 

@@ -278,13 +278,13 @@ function MLBlockedBanner({ rec }: { rec: Recommendation }) {
   const probPct = rec.ml_probability != null ? Math.round(rec.ml_probability * 100) : null;
 
   return (
-    <div className="mb-6 rounded-lg border border-accent-loss/40 bg-accent-loss/8 p-4 flex items-start gap-3">
+    <div className="mb-6 rounded-lg border border-accent-loss/60 bg-bg-concrete p-4 flex items-start gap-3">
       <ShieldOff className="w-5 h-5 text-accent-loss shrink-0 mt-0.5" />
       <div>
         <h3 className="text-sm font-display font-semibold text-accent-loss mb-1">
           ML Gate Blocked
         </h3>
-        <p className="text-xs text-accent-loss/80">
+        <p className="text-xs text-text-secondary">
           The independent LightGBM model assigned this trade a low probability of success
           {probPct != null && <> (<span className="font-display font-semibold tabular-nums">{probPct}%</span>)</>}.
           Position sizing has been zeroed. Consider skipping this trade or waiting for better conditions.
@@ -511,8 +511,8 @@ export function SynthesisTab({ recommendation }: SynthesisTabProps) {
         <div className={clsx(
           'mb-6 rounded-lg border p-4 flex items-start gap-3',
           recommendation.action === 'NO_TRADE'
-            ? 'bg-text-muted/10 border-text-muted/30'
-            : 'bg-accent-electric/10 border-accent-electric/30',
+            ? 'bg-bg-concrete border-text-muted/60'
+            : 'bg-bg-concrete border-accent-electric/60',
         )}>
           {recommendation.action === 'NO_TRADE' ? (
             <Ban className="w-5 h-5 text-text-muted shrink-0 mt-0.5" />

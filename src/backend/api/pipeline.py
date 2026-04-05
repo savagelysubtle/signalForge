@@ -348,6 +348,14 @@ async def _load_recommendations(
                 signal_generated_at=r.get("signal_generated_at"),
                 price_at_signal=r.get("price_at_signal"),
                 entry_valid_window=r.get("entry_valid_window"),
+                raw_gpt_position_size_pct=r.get("raw_gpt_position_size_pct"),
+                ml_probability=r.get("ml_probability"),
+                ml_size_multiplier=r.get("ml_size_multiplier"),
+                ml_blocked=r.get("ml_blocked", False),
+                ml_model_version=r.get("ml_model_version"),
+                ml_conformal_set=json.loads(r["ml_conformal_set"])
+                if r.get("ml_conformal_set")
+                else [],
             )
         )
     return recs

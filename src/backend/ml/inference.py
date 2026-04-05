@@ -7,6 +7,7 @@ when no strategy-specific artifact is available.
 from __future__ import annotations
 
 import logging
+import sys
 from pathlib import Path
 from typing import Any, Literal
 
@@ -14,6 +15,17 @@ import joblib
 import numpy as np
 
 from ml.schemas import MLPrediction
+
+# ---------------------------------------------------------------------------
+# Pickle compatibility: the .joblib artifacts were serialized by the
+# ml_training package which doesn't exist in the backend environment.
+# Add the ml_training source tree to sys.path so pickle can import
+# the original classes (ModelArtifact, ProbabilityCalibrator, etc.)
+# directly when deserializing .joblib files.
+# ---------------------------------------------------------------------------
+_ML_TRAINING_ROOT = Path(__file__).resolve().parents[2] / "ml_training"
+if _ML_TRAINING_ROOT.is_dir() and str(_ML_TRAINING_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ML_TRAINING_ROOT))
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +50,16 @@ _strategy_models: dict[str, dict[str, Any]] = {}
 _independent_models: dict[str, dict[str, Any]] = {}
 _fallback_model: dict[str, Any] | None = None
 _loaded = False
+
+
+def _to_float(val: Any) -> float:
+    """Coerce a feature value to float, returning 0.0 for non-numeric types."""
+    if val is None:
+        return 0.0
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _unpack_artifact(artifact: Any) -> dict[str, Any]:
@@ -284,9 +306,9 @@ def run_prediction(
     label_encoder = model.get("label_encoder")
     metadata = model.get("metadata")
 
-    feature_vector = np.array([features.get(name, 0.0) or 0.0 for name in feature_names]).reshape(
-        1, -1
-    )
+    feature_vector = np.array(
+        [_to_float(features.get(name)) for name in feature_names], dtype=np.float64
+    ).reshape(1, -1)
 
     try:
         raw_probs = classifier.predict_proba(feature_vector)[0]

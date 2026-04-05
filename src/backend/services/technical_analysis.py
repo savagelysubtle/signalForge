@@ -28,6 +28,7 @@ from pipeline.schemas import (
     VolumeSnapshot,
 )
 from services.keyring_service import get_api_key
+from utils.ticker import to_fmp_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +95,8 @@ async def _fetch_indicator_series(
         List of dicts sorted most-recent-first, or empty list on failure.
     """
     api_key = _get_api_key()
-    url = f"{FMP_V3_BASE}/technical_indicator/{timeframe}/{symbol}"
+    fmp_sym = to_fmp_symbol(symbol)
+    url = f"{FMP_V3_BASE}/technical_indicator/{timeframe}/{fmp_sym}"
     params: dict[str, Any] = {
         "type": indicator_type,
         "period": period,
@@ -133,11 +135,12 @@ async def _fetch_historical_prices(
         List of candle dicts sorted most-recent-first.
     """
     api_key = _get_api_key()
+    fmp_sym = to_fmp_symbol(symbol)
     if timeframe == "daily":
-        url = f"{FMP_V3_BASE}/historical-price-full/{symbol}"
+        url = f"{FMP_V3_BASE}/historical-price-full/{fmp_sym}"
         params: dict[str, Any] = {"apikey": api_key, "serietype": "line"}
     else:
-        url = f"{FMP_V3_BASE}/historical-chart/{timeframe}/{symbol}"
+        url = f"{FMP_V3_BASE}/historical-chart/{timeframe}/{fmp_sym}"
         params = {"apikey": api_key}
 
     try:

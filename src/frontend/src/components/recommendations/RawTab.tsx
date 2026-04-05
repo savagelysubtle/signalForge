@@ -174,7 +174,6 @@ export function RawTab({ data }: RawTabProps) {
           title="Stage 4 — GPT Synthesis"
           subtitle={`${data.recommendations.length} recommendations`}
           data={data.recommendations}
-          defaultOpen
         />
       )}
 
@@ -194,7 +193,6 @@ export function RawTab({ data }: RawTabProps) {
               raw_gpt_position_size_pct: r.raw_gpt_position_size_pct,
               adjusted_position_size_pct: r.position_size_pct,
             }))}
-          defaultOpen
         />
       )}
 
@@ -203,7 +201,6 @@ export function RawTab({ data }: RawTabProps) {
           title="Stage Errors"
           subtitle={`${data.stage_errors.length} error${data.stage_errors.length !== 1 ? 's' : ''}`}
           data={data.stage_errors}
-          defaultOpen
         />
       )}
 

@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 
 from pipeline.schemas import FmpScreenerConfig
 from services.keyring_service import get_api_key
+from utils.ticker import to_fmp_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -726,18 +727,28 @@ async def fetch_vix_quote() -> tuple[float | None, str]:
 async def fetch_quotes(symbols: list[str]) -> dict[str, FmpQuote]:
     """Fetch real-time quotes for multiple symbols via FMP ``/stable/quote``.
 
-    Requests all symbols in a single comma-separated API call.
+    Automatically converts TradingView-format tickers (``TSX:AGI``) to
+    FMP-compatible format (``AGI.TO``) and maps response keys back so
+    callers can look up results using the original TradingView keys.
 
     Args:
-        symbols: List of ticker symbols (e.g. ``["AAPL", "MSFT"]``).
+        symbols: List of ticker symbols in any format
+            (TradingView ``"TSX:AGI"`` or bare ``"AAPL"``).
 
     Returns:
-        Mapping of symbol → FmpQuote. Missing symbols are omitted.
+        Mapping of original symbol → FmpQuote. Missing symbols are omitted.
     """
     if not symbols:
         return {}
     try:
-        joined = ",".join(symbols)
+        fmp_to_original: dict[str, str] = {}
+        fmp_symbols: list[str] = []
+        for sym in symbols:
+            fmp_sym = to_fmp_symbol(sym)
+            fmp_symbols.append(fmp_sym)
+            fmp_to_original[fmp_sym.upper()] = sym
+
+        joined = ",".join(fmp_symbols)
         data = await _fmp_get("quote", {"symbol": joined})
         if not isinstance(data, list):
             return {}
@@ -746,7 +757,8 @@ async def fetch_quotes(symbols: list[str]) -> dict[str, FmpQuote]:
             try:
                 quote = FmpQuote.model_validate(item)
                 if quote.symbol:
-                    result[quote.symbol] = quote
+                    original_key = fmp_to_original.get(quote.symbol.upper(), quote.symbol)
+                    result[original_key] = quote
             except Exception:
                 logger.debug("Skipping unparseable quote item: %s", item)
         logger.info("Fetched live quotes for %d/%d symbols", len(result), len(symbols))
@@ -776,7 +788,8 @@ async def fetch_technical_indicator(
         Most recent indicator value, or ``None`` if unavailable.
     """
     api_key = _get_api_key()
-    url = f"https://financialmodelingprep.com/api/v3/technical_indicator/{timeframe}/{symbol}"
+    fmp_sym = to_fmp_symbol(symbol)
+    url = f"https://financialmodelingprep.com/api/v3/technical_indicator/{timeframe}/{fmp_sym}"
     params = {"type": indicator_type, "period": period, "apikey": api_key}
     try:
         async with _semaphore, httpx.AsyncClient(timeout=FMP_TIMEOUT) as client:
