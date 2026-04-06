@@ -165,7 +165,7 @@ class ModelRegistry:
         return versions
 
     def get_latest(self, strategy_type: str | None = None) -> Path | None:
-        """Get the path to the latest model artifact.
+        """Get the path to the latest (highest version) model artifact.
 
         Args:
             strategy_type: If provided, returns the latest per-strategy model.
@@ -175,24 +175,37 @@ class ModelRegistry:
             Path to the most recent .joblib file, or None if none exist.
         """
         pattern = f"model_{strategy_type}_v*.joblib" if strategy_type else "model_v*.joblib"
-        artifacts = sorted(self._artifacts_dir.glob(pattern))
-        return artifacts[-1] if artifacts else None
+        artifacts = list(self._artifacts_dir.glob(pattern))
+        if not artifacts:
+            return None
+
+        def _version_key(p: Path) -> int:
+            for part in p.stem.split("_"):
+                if part.startswith("v") and part[1:].isdigit():
+                    return int(part[1:])
+            return 0
+
+        return max(artifacts, key=_version_key)
 
     def list_strategy_models(self) -> dict[str, Path]:
-        """List the latest model artifact for each strategy type.
+        """List the latest (highest version) model artifact for each strategy type.
 
         Returns:
             Mapping of strategy_type → Path for each available per-strategy model.
         """
         models: dict[str, Path] = {}
-        for p in sorted(self._artifacts_dir.glob("model_*_v*.joblib")):
+        versions: dict[str, int] = {}
+        for p in self._artifacts_dir.glob("model_*_v*.joblib"):
             parts = p.stem.split("_")
             v_idx = next(
                 (i for i, x in enumerate(parts) if x.startswith("v") and x[1:].isdigit()), None
             )
             if v_idx is not None and v_idx > 1:
                 strategy = "_".join(parts[1:v_idx])
-                models[strategy] = p
+                version_num = int(parts[v_idx][1:])
+                if version_num > versions.get(strategy, -1):
+                    versions[strategy] = version_num
+                    models[strategy] = p
         return models
 
     def promote_to_shadow(

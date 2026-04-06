@@ -20,6 +20,10 @@ import type {
   PendingMatch,
   SyncResultResponse,
   TradeHistoryEntry,
+  ScannerLatestResponse,
+  ScannerFilters,
+  MarketStateResponse,
+  ScanRunStatus,
 } from "../types";
 
 const BASE_URL = import.meta.env.VITE_API_URL || "";
@@ -203,4 +207,23 @@ export const api = {
   // Settings
   getApiKeyStatus: () =>
     request<ApiKeyStatus>("/api/settings/api-keys/status"),
+
+  // Scanner / Prescreener
+  runScan: (filters?: ScannerFilters) =>
+    request<{ scan_run_id: string; status: string }>("/api/scanner/run", {
+      method: "POST",
+      ...(filters && Object.keys(filters).length > 0
+        ? { body: JSON.stringify(filters) }
+        : {}),
+    }),
+  getScanStatus: (scanRunId: string) =>
+    request<ScanRunStatus>(`/api/scanner/status/${scanRunId}`),
+  getScannerLatest: (strategyType?: string, minScore = 0.5, actionableOnly = false) => {
+    const params = new URLSearchParams({ min_score: String(minScore) });
+    if (strategyType) params.set("strategy_type", strategyType);
+    if (actionableOnly) params.set("actionable_only", "true");
+    return request<ScannerLatestResponse>(`/api/scanner/latest?${params}`);
+  },
+  getHeartbeat: () =>
+    request<MarketStateResponse>("/api/scanner/heartbeat"),
 };

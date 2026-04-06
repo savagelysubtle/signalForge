@@ -49,17 +49,22 @@ LLM_FEATURES: frozenset[str] = frozenset(
 _strategy_models: dict[str, dict[str, Any]] = {}
 _independent_models: dict[str, dict[str, Any]] = {}
 _fallback_model: dict[str, Any] | None = None
-_loaded = False
+_loaded: bool = False
 
 
 def _to_float(val: Any) -> float:
-    """Coerce a feature value to float, returning 0.0 for non-numeric types."""
+    """Coerce a feature value to float, returning NaN for missing/non-numeric.
+
+    LightGBM natively handles NaN — it routes missing values to the optimal
+    child at each split.  Returning 0.0 would instead force the value down a
+    potentially incorrect split path.
+    """
     if val is None:
-        return 0.0
+        return float("nan")
     try:
         return float(val)
-    except (TypeError, ValueError):
-        return 0.0
+    except TypeError, ValueError:
+        return float("nan")
 
 
 def _unpack_artifact(artifact: Any) -> dict[str, Any]:
@@ -79,9 +84,11 @@ def _load_all_models() -> None:
     """Discover and load all active models from the artifacts directory.
 
     Looks for:
-      - ``model_{strategy}_active.joblib`` → per-strategy shadow models
-      - ``model_{strategy}_independent_active.joblib`` → per-strategy gate models
+      - ``model_{strategy}_active.joblib`` → per-strategy models
       - ``model_active.joblib`` → combined fallback model
+
+    LLM-free models are auto-promoted to the independent registry so
+    they can serve as gate models without a separate artifact file.
     """
     global _strategy_models, _independent_models, _fallback_model, _loaded
     _strategy_models = {}
@@ -108,39 +115,37 @@ def _load_all_models() -> None:
         if p.name == ACTIVE_MODEL_NAME:
             continue
         parts = p.stem.split("_")
-        # model_{strategy_type}_independent_active → independent model
-        # model_{strategy_type}_active → shadow/default model
         strategy_key = "_".join(parts[1:-1])
-        is_independent = strategy_key.endswith("_independent")
-        if is_independent:
+        is_explicitly_independent = strategy_key.endswith("_independent")
+        if is_explicitly_independent:
             strategy_type = strategy_key.removesuffix("_independent")
-            target_dict = _independent_models
-            label = "independent"
         else:
             strategy_type = strategy_key
-            target_dict = _strategy_models
-            label = "shadow"
+
         try:
             artifact = joblib.load(p)
-            if is_independent:
-                feat_names = set(artifact.metadata.feature_names) if artifact.metadata else set()
-                llm_leak = feat_names & LLM_FEATURES
-                if llm_leak:
-                    logger.warning(
-                        "Independent model %s contains LLM features %s — refusing to load as gate",
-                        p.name,
-                        llm_leak,
-                    )
-                    continue
-            target_dict[strategy_type] = _unpack_artifact(artifact)
+            feat_names = set(artifact.metadata.feature_names) if artifact.metadata else set()
+            llm_leak = feat_names & LLM_FEATURES
+            unpacked = _unpack_artifact(artifact)
             version = artifact.metadata.model_version if artifact.metadata else "?"
-            logger.info("Loaded %s model [%s]: %s", label, strategy_type, version)
+
+            if llm_leak:
+                _strategy_models[strategy_type] = unpacked
+                logger.info(
+                    "Loaded model [%s]: %s (LLM features → gate-ineligible)", strategy_type, version
+                )
+            else:
+                _strategy_models[strategy_type] = unpacked
+                _independent_models[strategy_type] = unpacked
+                logger.info(
+                    "Loaded model [%s]: %s (LLM-free → gate-eligible)", strategy_type, version
+                )
         except Exception:
             logger.exception("Failed to load model: %s", p.name)
 
     _loaded = True
     logger.info(
-        "Model loading complete: %d shadow + %d independent + %s fallback",
+        "Model loading complete: %d strategy, %d gate-eligible, %s fallback",
         len(_strategy_models),
         len(_independent_models),
         "1" if _fallback_model else "no",
@@ -149,12 +154,12 @@ def _load_all_models() -> None:
 
 def _get_model(
     strategy_type: str | None = None,
-    mode: str = "shadow",
+    mode: str = "independent",
 ) -> dict[str, Any] | None:
     """Get the best available model for a given strategy type and mode.
 
-    For ``mode="independent"``: strategy independent → shadow model (if LLM-free) → None.
-    For ``mode="shadow"``: strategy shadow → combined fallback → None.
+    For ``mode="independent"``: strategy independent → fallback (if LLM-free) → None.
+    For ``mode="shadow"``: strategy model → combined fallback → None.
     """
     if not _loaded:
         _load_all_models()
@@ -162,20 +167,10 @@ def _get_model(
     if mode == "independent":
         if strategy_type and strategy_type in _independent_models:
             return _independent_models[strategy_type]
-        # Fall back to shadow model if it contains no LLM features
-        shadow = _strategy_models.get(strategy_type) if strategy_type else None
-        if shadow is not None:
-            feat_set = frozenset(shadow.get("feature_names", []))
+        if _fallback_model is not None:
+            feat_set = frozenset(_fallback_model.get("feature_names", []))
             if not (feat_set & LLM_FEATURES):
-                logger.info(
-                    "No independent model for %s — using LLM-free shadow model as gate",
-                    strategy_type,
-                )
-                return shadow
-            logger.debug(
-                "Shadow model for %s contains LLM features, cannot use as gate",
-                strategy_type,
-            )
+                return _fallback_model
         return None
 
     if strategy_type and strategy_type in _strategy_models:
@@ -239,9 +234,7 @@ def get_model_info() -> dict[str, Any]:
             "model_version": fallback_meta.model_version if fallback_meta else "none",
             "judge_verdict": fallback_meta.judge_verdict if fallback_meta else "none",
         },
-        "total_models": len(_strategy_models)
-        + len(_independent_models)
-        + (1 if _fallback_model else 0),
+        "total_models": len(_strategy_models) + (1 if _fallback_model else 0),
     }
 
 
@@ -306,9 +299,10 @@ def run_prediction(
     label_encoder = model.get("label_encoder")
     metadata = model.get("metadata")
 
-    feature_vector = np.array(
-        [_to_float(features.get(name)) for name in feature_names], dtype=np.float64
-    ).reshape(1, -1)
+    import pandas as pd
+
+    feature_values = [_to_float(features.get(name)) for name in feature_names]
+    feature_vector = pd.DataFrame([feature_values], columns=feature_names)
 
     try:
         raw_probs = classifier.predict_proba(feature_vector)[0]

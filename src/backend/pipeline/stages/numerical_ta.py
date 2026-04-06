@@ -15,8 +15,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from typing import Any
 
-from pipeline.schemas import MultiTimeframeTechnical, StrategyConfig
+from pipeline.schemas import MultiTimeframeTechnical, StrategyConfig, TechnicalSnapshot
 from services.technical_analysis import build_multi_timeframe
 
 logger = logging.getLogger(__name__)
@@ -94,6 +95,68 @@ async def run_numerical_ta(
     )
 
     return snapshots, all_metadata
+
+
+async def run_ta_for_scanner(
+    tickers: list[str],
+    timeframe: str = "D",
+) -> tuple[dict[str, TechnicalSnapshot], dict[str, list[dict[str, Any]]]]:
+    """Lightweight TA fetch for the strategy scanner.
+
+    Fetches OHLCV data from the FMP ``/stable/`` endpoint in batches and
+    computes all indicators locally using numpy.  Also returns raw daily
+    candles so the caller can derive weekly features without extra API calls.
+
+    Args:
+        tickers: Ticker symbols to fetch.
+        timeframe: Timeframe string (default ``"D"``).
+
+    Returns:
+        Tuple of (snapshots, raw_candles) where both are dicts keyed by ticker.
+    """
+    import httpx
+
+    from services.technical_analysis import build_snapshot_from_ohlcv, fetch_ohlcv_stable
+
+    batch_size = 20
+    batch_delay = 0.5
+    max_consecutive_fails = 15
+
+    out: dict[str, TechnicalSnapshot] = {}
+    raw_candles: dict[str, list[dict[str, Any]]] = {}
+    consecutive_fails = 0
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        for batch_start in range(0, len(tickers), batch_size):
+            batch = tickers[batch_start : batch_start + batch_size]
+            tasks = [fetch_ohlcv_stable(t, limit=300, client=client) for t in batch]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for ticker, result in zip(batch, results, strict=False):
+                if isinstance(result, Exception) or not result:
+                    consecutive_fails += 1
+                    if isinstance(result, Exception):
+                        logger.debug("Scanner OHLCV failed for %s: %s", ticker, result)
+                    continue
+
+                consecutive_fails = 0
+                raw_candles[ticker] = result
+                snap = build_snapshot_from_ohlcv(ticker, timeframe, result)
+                if snap:
+                    out[ticker] = snap
+
+            if consecutive_fails >= max_consecutive_fails:
+                logger.error(
+                    "Scanner TA: %d consecutive failures — aborting early",
+                    consecutive_fails,
+                )
+                break
+
+            if batch_start + batch_size < len(tickers):
+                await asyncio.sleep(batch_delay)
+
+    logger.info("Scanner TA: %d/%d tickers succeeded", len(out), len(tickers))
+    return out, raw_candles
 
 
 def format_ta_for_prompt(snapshot: MultiTimeframeTechnical) -> str:

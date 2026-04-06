@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 import httpx
+import numpy as np
 
 from pipeline.schemas import (
     EMACross,
@@ -33,6 +34,7 @@ from utils.ticker import to_fmp_symbol
 logger = logging.getLogger(__name__)
 
 FMP_V3_BASE = "https://financialmodelingprep.com/api/v3"
+FMP_STABLE_BASE = "https://financialmodelingprep.com/stable"
 FMP_TIMEOUT = 30
 _semaphore = asyncio.Semaphore(5)
 
@@ -121,14 +123,16 @@ async def _fetch_historical_prices(
     timeframe: str = "daily",
     limit: int = 30,
 ) -> list[dict[str, Any]]:
-    """Fetch historical OHLCV candles from FMP.
+    """Fetch historical OHLCV candles from FMP ``/stable/`` endpoints.
 
-    For daily data uses ``/api/v3/historical-price-full/{symbol}``.
-    For intraday uses ``/api/v3/historical-chart/{timeframe}/{symbol}``.
+    For daily data uses ``/stable/historical-price-eod/full``.
+    For intraday uses ``/stable/historical-chart/{timeframe}``.
+
+    Both legacy v3 equivalents were deprecated Aug 2025 (403).
 
     Args:
         symbol: Ticker symbol.
-        timeframe: FMP timeframe string.
+        timeframe: FMP timeframe string (``"daily"``, ``"4hour"``, etc.).
         limit: Number of candles.
 
     Returns:
@@ -137,11 +141,10 @@ async def _fetch_historical_prices(
     api_key = _get_api_key()
     fmp_sym = to_fmp_symbol(symbol)
     if timeframe == "daily":
-        url = f"{FMP_V3_BASE}/historical-price-full/{fmp_sym}"
-        params: dict[str, Any] = {"apikey": api_key, "serietype": "line"}
+        url = f"{FMP_STABLE_BASE}/historical-price-eod/full"
     else:
-        url = f"{FMP_V3_BASE}/historical-chart/{timeframe}/{fmp_sym}"
-        params = {"apikey": api_key}
+        url = f"{FMP_STABLE_BASE}/historical-chart/{timeframe}"
+    params: dict[str, Any] = {"symbol": fmp_sym, "apikey": api_key}
 
     try:
         async with _semaphore, httpx.AsyncClient(timeout=FMP_TIMEOUT) as client:
@@ -155,6 +158,49 @@ async def _fetch_historical_prices(
             return data[:limit]
     except Exception as exc:
         logger.debug("Failed to fetch historical prices for %s/%s: %s", symbol, timeframe, exc)
+    return []
+
+
+async def fetch_ohlcv_stable(
+    symbol: str,
+    limit: int = 300,
+    client: httpx.AsyncClient | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch OHLCV candles from the FMP ``/stable/`` endpoint.
+
+    Uses the new stable historical-price-eod endpoint which replaces
+    the deprecated v3 ``historical-price-full`` endpoint (403 since Aug 2025).
+
+    Args:
+        symbol: Ticker symbol.
+        limit: Maximum number of candles to return.
+        client: Optional shared ``httpx.AsyncClient`` for batched calls.
+
+    Returns:
+        List of candle dicts sorted most-recent-first, or empty on failure.
+    """
+    api_key = _get_api_key()
+    fmp_sym = to_fmp_symbol(symbol)
+    url = f"{FMP_STABLE_BASE}/historical-price-eod/full"
+    params: dict[str, Any] = {"symbol": fmp_sym, "apikey": api_key}
+
+    try:
+        async with _semaphore:
+            if client:
+                resp = await client.get(url, params=params)
+            else:
+                async with httpx.AsyncClient(timeout=FMP_TIMEOUT) as c:
+                    resp = await c.get(url, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        if isinstance(data, list):
+            return data[:limit]
+        if isinstance(data, dict) and "historical" in data:
+            return data["historical"][:limit]
+    except httpx.HTTPStatusError as exc:
+        logger.warning("OHLCV stable HTTP %d for %s: %s", exc.response.status_code, symbol, exc)
+    except Exception as exc:
+        logger.debug("Failed to fetch OHLCV (stable) for %s: %s", symbol, exc)
     return []
 
 
@@ -483,19 +529,546 @@ def _compute_atr(candles: list[dict], period: int = 14) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Local indicator computation (numpy — replaces deprecated FMP v3 endpoints)
+# ---------------------------------------------------------------------------
+
+
+def _np_ema(data: np.ndarray, period: int) -> np.ndarray:
+    """Exponential moving average over chronologically-ordered data.
+
+    Args:
+        data: 1-D array of prices in chronological order (oldest first).
+        period: EMA period.
+
+    Returns:
+        Array of same length with EMA values.
+    """
+    k = 2.0 / (period + 1)
+    ema = np.empty(len(data), dtype=np.float64)
+    ema[0] = float(data[0])
+    for i in range(1, len(data)):
+        ema[i] = float(data[i]) * k + ema[i - 1] * (1.0 - k)
+    return ema
+
+
+def _np_rsi(closes: np.ndarray, period: int = 14) -> tuple[float, float]:
+    """Wilder-smoothed RSI from chronologically-ordered closes.
+
+    Args:
+        closes: Close prices, oldest first.
+        period: RSI lookback (default 14).
+
+    Returns:
+        ``(current_rsi, previous_rsi)`` tuple.
+    """
+    if len(closes) < period + 2:
+        return 50.0, 50.0
+
+    deltas = np.diff(closes)
+    gains = np.maximum(deltas, 0.0)
+    losses = np.maximum(-deltas, 0.0)
+
+    avg_gain = float(np.mean(gains[:period]))
+    avg_loss = float(np.mean(losses[:period]))
+
+    prev_rsi = 50.0
+    current_rsi = 50.0
+
+    for i in range(period, len(gains)):
+        avg_gain = (avg_gain * (period - 1) + float(gains[i])) / period
+        avg_loss = (avg_loss * (period - 1) + float(losses[i])) / period
+
+        rsi_val = 100.0 if avg_loss == 0 else 100.0 - 100.0 / (1.0 + avg_gain / avg_loss)
+
+        if i == len(gains) - 2:
+            prev_rsi = rsi_val
+        if i == len(gains) - 1:
+            current_rsi = rsi_val
+
+    return current_rsi, prev_rsi
+
+
+def _np_macd(
+    closes: np.ndarray,
+    fast: int = 12,
+    slow: int = 26,
+    signal_period: int = 9,
+) -> tuple[float, float, float, float]:
+    """MACD from chronologically-ordered closes.
+
+    Args:
+        closes: Close prices, oldest first.
+        fast: Fast EMA period.
+        slow: Slow EMA period.
+        signal_period: Signal line EMA period.
+
+    Returns:
+        ``(macd_line, signal_line, histogram, prev_histogram)`` tuple.
+    """
+    if len(closes) < slow + signal_period:
+        return 0.0, 0.0, 0.0, 0.0
+
+    ema_fast = _np_ema(closes, fast)
+    ema_slow = _np_ema(closes, slow)
+    macd_line = ema_fast - ema_slow
+    signal_line = _np_ema(macd_line, signal_period)
+    histogram = macd_line - signal_line
+
+    return (
+        float(macd_line[-1]),
+        float(signal_line[-1]),
+        float(histogram[-1]),
+        float(histogram[-2]) if len(histogram) > 1 else 0.0,
+    )
+
+
+def _np_adx(
+    highs: np.ndarray,
+    lows: np.ndarray,
+    closes: np.ndarray,
+    period: int = 14,
+) -> float:
+    """Average Directional Index via Wilder smoothing.
+
+    Args:
+        highs: High prices, oldest first.
+        lows: Low prices, oldest first.
+        closes: Close prices, oldest first.
+        period: ADX period (default 14).
+
+    Returns:
+        Latest ADX value, or 0.0 if insufficient data.
+    """
+    n = len(closes)
+    if n < period + 2:
+        return 0.0
+
+    tr = np.empty(n - 1)
+    plus_dm = np.empty(n - 1)
+    minus_dm = np.empty(n - 1)
+
+    for i in range(1, n):
+        j = i - 1
+        hl = float(highs[i] - lows[i])
+        hpc = abs(float(highs[i] - closes[i - 1]))
+        lpc = abs(float(lows[i] - closes[i - 1]))
+        tr[j] = max(hl, hpc, lpc)
+
+        up = float(highs[i] - highs[i - 1])
+        down = float(lows[i - 1] - lows[i])
+        plus_dm[j] = up if up > down and up > 0 else 0.0
+        minus_dm[j] = down if down > up and down > 0 else 0.0
+
+    atr_s = float(np.mean(tr[:period]))
+    pdm_s = float(np.mean(plus_dm[:period]))
+    mdm_s = float(np.mean(minus_dm[:period]))
+
+    dx_values: list[float] = []
+    for i in range(period, len(tr)):
+        atr_s = (atr_s * (period - 1) + float(tr[i])) / period
+        pdm_s = (pdm_s * (period - 1) + float(plus_dm[i])) / period
+        mdm_s = (mdm_s * (period - 1) + float(minus_dm[i])) / period
+
+        if atr_s == 0:
+            continue
+        pdi = 100.0 * pdm_s / atr_s
+        mdi = 100.0 * mdm_s / atr_s
+        di_sum = pdi + mdi
+        dx = 100.0 * abs(pdi - mdi) / di_sum if di_sum > 0 else 0.0
+        dx_values.append(dx)
+
+    if not dx_values:
+        return 0.0
+
+    adx = (
+        float(np.mean(dx_values[:period]))
+        if len(dx_values) >= period
+        else float(np.mean(dx_values))
+    )
+    for i in range(period, len(dx_values)):
+        adx = (adx * (period - 1) + dx_values[i]) / period
+
+    return adx
+
+
+def build_snapshot_from_ohlcv(
+    symbol: str,
+    timeframe: str,
+    candles: list[dict[str, Any]],
+    *,
+    skip_first_bar: bool = False,
+) -> TechnicalSnapshot | None:
+    """Build a ``TechnicalSnapshot`` from raw OHLCV candles using local numpy computation.
+
+    Replaces the deprecated FMP v3 indicator API calls with local EMA, RSI,
+    MACD, and ADX calculation.  ATR and volume analysis reuse the existing
+    candle-based helpers.
+
+    Args:
+        symbol: Ticker symbol.
+        timeframe: Strategy-notation timeframe (e.g. ``"D"``).
+        candles: OHLCV candle dicts sorted **most-recent-first** (FMP order).
+        skip_first_bar: If ``True``, skip the first (currently forming)
+            intraday bar.
+
+    Returns:
+        Validated ``TechnicalSnapshot``, or ``None`` if data is insufficient.
+    """
+    if skip_first_bar and len(candles) > 1:
+        candles = candles[1:]
+
+    if len(candles) < 30:
+        logger.warning("Insufficient OHLCV data for %s (%d bars)", symbol, len(candles))
+        return None
+
+    chrono = list(reversed(candles))
+    closes = np.array(
+        [float(c.get("adjClose") or c.get("close") or 0) for c in chrono],
+        dtype=np.float64,
+    )
+    highs = np.array([float(c.get("high") or 0) for c in chrono], dtype=np.float64)
+    lows = np.array([float(c.get("low") or 0) for c in chrono], dtype=np.float64)
+
+    if closes[-1] == 0:
+        return None
+
+    latest = candles[0]
+    price_current = float(latest.get("adjClose") or latest.get("close") or 0)
+    if not price_current:
+        return None
+
+    # -- EMA --
+    ema_snapshots: list[EMASnapshot] = []
+    ema_series_by_period: dict[int, list[dict]] = {}
+    for period in EMA_PERIODS:
+        if len(closes) < period:
+            continue
+        ema_vals = _np_ema(closes, period)
+        ema_snapshots.append(
+            EMASnapshot(
+                period=period,
+                current_value=round(float(ema_vals[-1]), 4),
+                previous_value=round(float(ema_vals[-2]), 4),
+            )
+        )
+        n_cross = min(CROSS_LOOKBACK + 2, len(ema_vals))
+        ema_series_by_period[period] = [{"ema": float(ema_vals[-(i + 1)])} for i in range(n_cross)]
+
+    ema_crosses = _detect_ema_crosses(ema_series_by_period)
+
+    # -- RSI --
+    rsi_current, rsi_previous = _np_rsi(closes)
+    rsi_snap = RSISnapshot(
+        current=round(rsi_current, 2),
+        previous=round(rsi_previous, 2),
+        trend="flat",
+        zone="neutral",
+        divergence="none",
+    )
+
+    # -- MACD --
+    macd_line, signal_val, hist, prev_hist = _np_macd(closes)
+    hist_slope: Literal["expanding", "contracting"] = (
+        "expanding" if abs(hist) > abs(prev_hist) else "contracting"
+    )
+    sig_cross: Literal["above", "below"] = "above" if macd_line > signal_val else "below"
+    macd_snap = MACDSnapshot(
+        macd_line=round(macd_line, 4),
+        signal_line=round(signal_val, 4),
+        histogram=round(hist, 4),
+        histogram_slope=hist_slope,
+        signal_cross=sig_cross,
+    )
+
+    # -- ADX --
+    adx_val = _np_adx(highs, lows, closes)
+
+    # -- Volume & ATR (existing helpers, most-recent-first candles) --
+    volume = _build_volume_snapshot(candles)
+    atr = _compute_atr(candles)
+    atr_pct = round(atr / price_current * 100, 4) if price_current else 0.0
+
+    # -- Derived signals --
+    trend_alignment = _compute_trend_alignment(ema_snapshots)
+    momentum = compute_momentum_score(rsi_snap, macd_snap, ema_snapshots, adx_val)
+
+    return TechnicalSnapshot(
+        ticker=symbol,
+        timeframe=timeframe,
+        timestamp=datetime.now(tz=UTC),
+        price_current=round(price_current, 4),
+        price_open=round(float(latest.get("open") or price_current), 4),
+        price_high=round(float(latest.get("high") or price_current), 4),
+        price_low=round(float(latest.get("low") or price_current), 4),
+        emas=ema_snapshots,
+        ema_crosses=ema_crosses,
+        macd=macd_snap,
+        rsi=rsi_snap,
+        adx=round(adx_val, 2),
+        atr=atr,
+        atr_pct=atr_pct,
+        volume=volume,
+        trend_alignment=trend_alignment,
+        momentum_score=momentum,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Main orchestration — build a TechnicalSnapshot for one ticker+timeframe
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Multi-timeframe helpers for the scanner (weekly from daily, intraday fetch)
+# ---------------------------------------------------------------------------
+
+
+def aggregate_daily_to_weekly(candles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Aggregate daily candle dicts into weekly bars (ISO week grouping).
+
+    Args:
+        candles: Daily OHLCV dicts sorted most-recent-first.
+
+    Returns:
+        Weekly OHLCV dicts sorted most-recent-first.
+    """
+
+    weekly: dict[tuple[int, int], dict[str, Any]] = {}
+    order: list[tuple[int, int]] = []
+
+    for c in reversed(candles):
+        date_str = c.get("date", "")
+        if not date_str:
+            continue
+        try:
+            dt = datetime.fromisoformat(str(date_str)[:10])
+        except ValueError, TypeError:
+            continue
+
+        key = dt.isocalendar()[:2]
+        close = float(c.get("adjClose") or c.get("close") or 0)
+        high = float(c.get("high") or 0)
+        low = float(c.get("low") or 0)
+        opn = float(c.get("open") or 0)
+        vol = int(c.get("volume") or 0)
+
+        if key not in weekly:
+            weekly[key] = {
+                "date": date_str,
+                "open": opn,
+                "high": high,
+                "low": low,
+                "close": close,
+                "adjClose": close,
+                "volume": vol,
+            }
+            order.append(key)
+        else:
+            bar = weekly[key]
+            bar["high"] = max(bar["high"], high)
+            bar["low"] = min(bar["low"], low)
+            bar["close"] = close
+            bar["adjClose"] = close
+            bar["volume"] += vol
+            bar["date"] = date_str
+
+    return [weekly[k] for k in reversed(order)]
+
+
+def compute_tf_features(candles: list[dict[str, Any]], label: str) -> dict[str, float | None]:
+    """Compute the 4 timeframe-prefixed features from OHLCV candles.
+
+    Produces ``tf_{label}_rsi_14``, ``tf_{label}_price_vs_ema_200``,
+    ``tf_{label}_ema_stack_score``, and ``tf_{label}_momentum_score``.
+
+    Args:
+        candles: OHLCV dicts sorted most-recent-first (at least 30 bars).
+        label: Timeframe label (``"W"`` or ``"4H"``).
+
+    Returns:
+        Dict of 4 features keyed with ``tf_{label}_`` prefix.
+        Missing features are ``None``.
+    """
+    prefix = f"tf_{label}_"
+    result: dict[str, float | None] = {
+        f"{prefix}rsi_14": None,
+        f"{prefix}price_vs_ema_200": None,
+        f"{prefix}ema_stack_score": None,
+        f"{prefix}momentum_score": None,
+    }
+
+    if not candles or len(candles) < 20:
+        return result
+
+    chrono = list(reversed(candles))
+    closes = np.array(
+        [float(c.get("adjClose") or c.get("close") or 0) for c in chrono],
+        dtype=np.float64,
+    )
+
+    if closes[-1] == 0:
+        return result
+
+    rsi_cur, _ = _np_rsi(closes)
+    result[f"{prefix}rsi_14"] = round(rsi_cur, 2)
+
+    if len(closes) >= 200:
+        ema200 = _np_ema(closes, 200)
+        ema200_val = float(ema200[-1])
+        if ema200_val > 0:
+            result[f"{prefix}price_vs_ema_200"] = round(
+                (float(closes[-1]) - ema200_val) / ema200_val * 100, 4
+            )
+
+    ema_vals: dict[int, float] = {}
+    for period in EMA_PERIODS:
+        if len(closes) >= period:
+            ema_arr = _np_ema(closes, period)
+            ema_vals[period] = float(ema_arr[-1])
+
+    if len(ema_vals) >= 2:
+        sorted_periods = sorted(ema_vals.keys())
+        bullish_pairs = sum(
+            1
+            for i in range(len(sorted_periods) - 1)
+            if ema_vals[sorted_periods[i]] > ema_vals[sorted_periods[i + 1]]
+        )
+        total_pairs = max(len(sorted_periods) - 1, 1)
+        result[f"{prefix}ema_stack_score"] = round(bullish_pairs / total_pairs * 4.0, 2)
+
+    if len(closes) >= 20:
+        momentum = (float(closes[-1]) - float(closes[-20])) / float(closes[-20]) * 100
+        result[f"{prefix}momentum_score"] = round(momentum, 4)
+
+    return result
+
+
+def compute_extra_daily_features(candles: list[dict[str, Any]]) -> dict[str, float | None]:
+    """Compute daily features that the ML models expect but the scanner didn't previously supply.
+
+    Covers ``price_change_1d``, ``price_change_5d``, ``price_change_20d``,
+    ``bollinger_width``, ``volatility_20d``, ``high_low_range``, and ``gap_pct``.
+
+    Args:
+        candles: Daily OHLCV dicts sorted most-recent-first.
+
+    Returns:
+        Dict of extra feature values. Missing features are ``None``.
+    """
+    result: dict[str, float | None] = {
+        "price_change_1d": None,
+        "price_change_5d": None,
+        "price_change_20d": None,
+        "bollinger_width": None,
+        "volatility_20d": None,
+        "high_low_range": None,
+        "gap_pct": None,
+    }
+
+    if not candles or len(candles) < 2:
+        return result
+
+    latest = candles[0]
+    close = float(latest.get("adjClose") or latest.get("close") or 0)
+    high = float(latest.get("high") or 0)
+    low = float(latest.get("low") or 0)
+    opn = float(latest.get("open") or 0)
+
+    if close == 0:
+        return result
+
+    prev_close = float(candles[1].get("adjClose") or candles[1].get("close") or 0)
+    if prev_close > 0:
+        result["price_change_1d"] = round((close - prev_close) / prev_close * 100, 4)
+        result["gap_pct"] = round((opn - prev_close) / prev_close * 100, 4)
+
+    if high > 0 and low > 0:
+        result["high_low_range"] = round((high - low) / close * 100, 4)
+
+    if len(candles) >= 6:
+        close_5d = float(candles[5].get("adjClose") or candles[5].get("close") or 0)
+        if close_5d > 0:
+            result["price_change_5d"] = round((close - close_5d) / close_5d * 100, 4)
+
+    if len(candles) >= 21:
+        close_20d = float(candles[20].get("adjClose") or candles[20].get("close") or 0)
+        if close_20d > 0:
+            result["price_change_20d"] = round((close - close_20d) / close_20d * 100, 4)
+
+        chrono = list(reversed(candles[:21]))
+        closes_arr = np.array(
+            [float(c.get("adjClose") or c.get("close") or 0) for c in chrono],
+            dtype=np.float64,
+        )
+        sma20 = float(np.mean(closes_arr[-20:]))
+        std20 = float(np.std(closes_arr[-20:]))
+        if sma20 > 0:
+            result["bollinger_width"] = round((2 * std20 / sma20) * 100, 4)
+
+        daily_returns = np.diff(closes_arr) / closes_arr[:-1]
+        result["volatility_20d"] = round(float(np.std(daily_returns[-20:])) * 100, 4)
+
+    return result
+
+
+async def fetch_intraday_ohlcv(
+    symbol: str,
+    timeframe: str = "4hour",
+    limit: int = 200,
+    client: httpx.AsyncClient | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch intraday OHLCV candles from the FMP ``/stable/`` endpoint.
+
+    Uses ``/stable/historical-chart/{timeframe}`` with ``symbol`` as a query
+    parameter.  The legacy v3 path-based endpoint was deprecated Aug 2025.
+
+    Args:
+        symbol: Ticker symbol.
+        timeframe: FMP timeframe (``"4hour"``, ``"1hour"``, etc.).
+        limit: Maximum candles to return.
+        client: Optional shared ``httpx.AsyncClient``.
+
+    Returns:
+        List of candle dicts sorted most-recent-first, or empty on failure.
+    """
+    api_key = _get_api_key()
+    fmp_sym = to_fmp_symbol(symbol)
+    url = f"{FMP_STABLE_BASE}/historical-chart/{timeframe}"
+    params: dict[str, Any] = {"symbol": fmp_sym, "apikey": api_key}
+
+    try:
+        async with _semaphore:
+            if client:
+                resp = await client.get(url, params=params)
+            else:
+                async with httpx.AsyncClient(timeout=FMP_TIMEOUT) as c:
+                    resp = await c.get(url, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        if isinstance(data, list):
+            return data[:limit]
+    except httpx.HTTPStatusError as exc:
+        logger.warning(
+            "Intraday OHLCV HTTP %d for %s/%s: %s",
+            exc.response.status_code,
+            symbol,
+            timeframe,
+            exc,
+        )
+    except Exception as exc:
+        logger.debug("Failed to fetch intraday OHLCV for %s/%s: %s", symbol, timeframe, exc)
+    return []
 
 
 async def build_technical_snapshot(
     symbol: str,
     timeframe: str,
 ) -> TechnicalSnapshot | None:
-    """Fetch all indicators and build a TechnicalSnapshot for one ticker+timeframe.
+    """Fetch OHLCV and build a TechnicalSnapshot using local numpy computation.
 
-    Fetches EMA (4 periods), RSI, MACD, ADX, and historical prices concurrently.
-    Then computes derived signals: EMA crosses, trend alignment, momentum score,
-    ATR, and volume analysis.
+    Fetches historical candles (1 API call) from the FMP ``/stable/`` endpoint
+    for both daily and intraday data, then computes all indicators locally
+    (EMA, RSI, MACD, ADX, ATR, volume).
 
     Args:
         symbol: Ticker symbol (e.g. ``"AAPL"``).
@@ -505,88 +1078,18 @@ async def build_technical_snapshot(
         Validated TechnicalSnapshot, or None if critical data is missing.
     """
     fmp_tf = _map_timeframe(timeframe)
+    is_intraday = fmp_tf in _INTRADAY_FMP_TIMEFRAMES
 
-    ema_tasks = {
-        period: _fetch_indicator_series(
-            symbol, fmp_tf, "ema", period=period, limit=CROSS_LOOKBACK + 2
-        )
-        for period in EMA_PERIODS
-    }
-    tasks: dict[str, Any] = {
-        "rsi": _fetch_indicator_series(symbol, fmp_tf, "rsi", period=14, limit=5),
-        "macd": _fetch_indicator_series(symbol, fmp_tf, "macd", limit=5),
-        "adx": _fetch_indicator_series(symbol, fmp_tf, "adx", period=14, limit=3),
-        "candles": _fetch_historical_prices(symbol, fmp_tf, limit=25),
-    }
-    for period, coro in ema_tasks.items():
-        tasks[f"ema_{period}"] = coro
+    if is_intraday:
+        candles = await _fetch_historical_prices(symbol, fmp_tf, limit=300)
+    else:
+        candles = await fetch_ohlcv_stable(symbol, limit=300)
 
-    keys = list(tasks.keys())
-    results = await asyncio.gather(*tasks.values(), return_exceptions=True)
-    fetched: dict[str, list[dict]] = {}
-    for key, result in zip(keys, results, strict=False):
-        if isinstance(result, Exception):
-            logger.warning("Indicator fetch failed for %s/%s/%s: %s", symbol, fmp_tf, key, result)
-            fetched[key] = []
-        else:
-            fetched[key] = result
-
-    candles = fetched.get("candles", [])
     if not candles:
-        logger.warning("No price data for %s/%s — cannot build snapshot", symbol, timeframe)
+        logger.warning("No OHLCV data for %s/%s — cannot build snapshot", symbol, timeframe)
         return None
 
-    # For intraday timeframes, candles[0] is the currently forming (incomplete)
-    # bar whose partial close/high/low would contaminate indicators. Use the
-    # most recently *completed* bar instead.
-    latest = candles[1] if fmp_tf in _INTRADAY_FMP_TIMEFRAMES and len(candles) > 1 else candles[0]
-    # Prefer split/dividend-adjusted close for equities (daily FMP endpoint
-    # returns adjClose). This keeps inference aligned with training data which
-    # uses yfinance auto_adjust=True.  For intraday or when adjClose is absent
-    # (crypto), fall back to raw close.
-    price_current = latest.get("adjClose") or latest.get("close") or latest.get("price", 0)
-    if not price_current:
-        return None
-
-    ema_series_by_period: dict[int, list[dict]] = {
-        period: fetched.get(f"ema_{period}", []) for period in EMA_PERIODS
-    }
-    emas = _build_ema_snapshots(ema_series_by_period)
-    ema_crosses = _detect_ema_crosses(ema_series_by_period)
-    macd = _build_macd_snapshot(fetched.get("macd", []))
-    rsi = _build_rsi_snapshot(fetched.get("rsi", []))
-
-    adx_series = fetched.get("adx", [])
-    adx_val = 0.0
-    if adx_series:
-        adx_val = adx_series[0].get("adx", 0.0) or 0.0
-
-    volume = _build_volume_snapshot(candles)
-    atr = _compute_atr(candles)
-    atr_pct = round(atr / price_current * 100, 4) if price_current else 0.0
-
-    trend_alignment = _compute_trend_alignment(emas)
-    momentum = compute_momentum_score(rsi, macd, emas, adx_val)
-
-    return TechnicalSnapshot(
-        ticker=symbol,
-        timeframe=timeframe,
-        timestamp=datetime.now(tz=UTC),
-        price_current=round(price_current, 4),
-        price_open=round(latest.get("open", price_current), 4),
-        price_high=round(latest.get("high", price_current), 4),
-        price_low=round(latest.get("low", price_current), 4),
-        emas=emas,
-        ema_crosses=ema_crosses,
-        macd=macd,
-        rsi=rsi,
-        adx=round(adx_val, 2),
-        atr=atr,
-        atr_pct=atr_pct,
-        volume=volume,
-        trend_alignment=trend_alignment,
-        momentum_score=momentum,
-    )
+    return build_snapshot_from_ohlcv(symbol, timeframe, candles, skip_first_bar=is_intraday)
 
 
 # ---------------------------------------------------------------------------

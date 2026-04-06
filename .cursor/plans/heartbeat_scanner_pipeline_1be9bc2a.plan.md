@@ -11,57 +11,57 @@ todos:
     content:
       Write 020_heartbeat_scanner.sql — market_state, scanner_results, scan_runs
       tables + indexes + RLS
-    status: pending
+    status: completed
   - id: heartbeat-service
     content:
       Implement services/market_heartbeat.py — MarketHeartbeat class, fast loop
       (VIX+SPY+PC), slow loop (sectors+breadth), module singleton pattern,
       Supabase persistence
-    status: pending
+    status: completed
   - id: lifespan-wiring
     content:
       Wire heartbeat + scanner into main.py lifespan — init, create_task,
       graceful cancellation
-    status: pending
+    status: completed
   - id: scanner-ta-helper
     content:
       Add run_ta_for_scanner() to pipeline/stages/numerical_ta.py — lightweight
       wrapper for scanner use
-    status: pending
+    status: completed
   - id: ml-quick-score
     content: Add quick_score() thin wrapper to ml/gate.py
-    status: pending
+    status: completed
   - id: scanner-service
     content:
       Implement services/strategy_scanner.py — StrategyScanner class, rule
       engine, all strategy rules, FMP universe pull, ML scoring, DB persistence
-    status: pending
+    status: completed
   - id: scanner-api
     content:
       Create api/scanner.py router — POST /run, GET /latest, GET /heartbeat
-    status: pending
+    status: completed
   - id: orchestrator-stage05
     content:
       Replace Stage 0.5 Perplexity call with get_heartbeat() cached MarketState
       + Perplexity fallback
-    status: pending
+    status: completed
   - id: orchestrator-stage0
     content:
       Add use_scanner_results flag — Stage 0 consumes scanner results when
       available
-    status: pending
+    status: completed
   - id: fmp-economic-cal
     content:
       Add fetch_economic_calendar() to services/fmp_service.py for
       next_macro_event
-    status: pending
+    status: completed
   - id: frontend-scanner
     content:
       Add prescreener UI to dashboard — "Run Prescreener" button that triggers
       POST /api/scanner/run, polls progress, and displays scanner results cards
       grouped by strategy with scores. User clicks a strategy card to launch the
       full pipeline with those pre-confirmed tickers.
-    status: pending
+    status: completed
 isProject: false
 ---
 

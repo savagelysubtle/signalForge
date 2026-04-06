@@ -26,6 +26,23 @@ _SIZE_TIERS: list[tuple[float, float]] = [
 _BLOCK_THRESHOLD = 0.52
 
 
+async def quick_score(
+    ticker: str,
+    strategy_type: str,
+    ta_features: dict[str, float | None],
+    regime_context: dict[str, Any] | None = None,
+) -> float | None:
+    """Lightweight ML scoring for the strategy scanner.
+
+    Returns the model's probability estimate, or ``None`` if no model is
+    available or prediction fails.
+    """
+    result = await run_ml_gate(ticker, strategy_type, ta_features, regime_context=regime_context)
+    if result.reason in ("no_independent_model", "prediction_failed"):
+        return None
+    return result.ml_probability
+
+
 async def run_ml_gate(
     ticker: str,
     strategy_type: str,

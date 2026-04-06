@@ -612,3 +612,73 @@ export interface SyncResultResponse {
 export interface ApiKeyStatus {
   keys: Record<string, boolean>;
 }
+
+// ---------------------------------------------------------------------------
+// Scanner / Prescreener
+// ---------------------------------------------------------------------------
+
+export interface ScannerFilters {
+  country?: string;
+  exchange?: string;
+  sector?: string;
+  market_cap_min?: number;
+  market_cap_max?: number;
+  limit?: number;
+}
+
+export interface ScannerResultItem {
+  ticker: string;
+  combined_score: number;
+  ml_probability: number | null;
+  rule_score: number;
+  rsi: number | null;
+  volume_ratio: number | null;
+  momentum_score: number | null;
+  atr_pct: number | null;
+  ema_alignment: string | null;
+  matched_rules: string[];
+  earnings_within_5d: boolean;
+  is_actionable: boolean;
+}
+
+export interface ScannerLatestResponse {
+  strategies: Record<string, ScannerResultItem[]>;
+  total_setups: number;
+  strategies_with_setups: string[];
+  regime_type: string | null;
+  last_scan_at: string | null;
+}
+
+export interface MarketStateResponse {
+  regime_type: string;
+  regime_confidence: number;
+  vix_spot: number | null;
+  vix_structure: string;
+  vix_estimate: string;
+  pc_ratio: number | null;
+  pc_signal: string;
+  spy_price: number | null;
+  spy_above_50ma: boolean | null;
+  spy_5d_return: number | null;
+  spy_20d_return: number | null;
+  breadth_score: number | null;
+  breadth_estimate: string;
+  leading_sectors: string[];
+  lagging_sectors: string[];
+  market_session: string;
+  next_macro_event: string | null;
+  last_updated: string | null;
+}
+
+export interface ScanRunStatus {
+  id: string;
+  status: string;
+  triggered_by?: string;
+  started_at?: string;
+  completed_at?: string;
+  duration_seconds?: number;
+  universe_size?: number;
+  setups_found?: number;
+  strategies_with_setups?: Record<string, number>;
+  regime_type?: string;
+}

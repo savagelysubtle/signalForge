@@ -14,6 +14,7 @@ import type { RunMode } from '../../lib/classifyInput';
 import type { ScreenerOverrides } from '../../types';
 import logoIcon from '../../assets/signalforge-logo-icon.svg';
 import { PipelineProgressBar } from './PipelineProgressBar';
+import { PrescreenerPanel } from './PrescreenerPanel';
 
 const STRATEGY_TYPE_LABELS: Record<string, string> = {
   intraday: 'Intraday', crypto_intraday: 'Intraday',
@@ -175,6 +176,14 @@ export function SearchScreen() {
   };
 
   const activeFilterCount = [filterCountry, filterExchange, filterSector, filterMarketCap].filter(Boolean).length;
+
+  const handleScannerSelect = (strategyType: string, tickers: string[]) => {
+    const match = allStrategies.find(
+      (s) => s.strategy_type === strategyType || s.name.toLowerCase().includes(strategyType.replace(/_/g, ' ')),
+    );
+    if (match) setSelectedStrategy(match.id);
+    setInputText(tickers.join(', '));
+  };
 
   const handleRun = async () => {
     if (runMode === 'none') return;
@@ -347,6 +356,24 @@ export function SearchScreen() {
             </motion.div>
           )}
         </motion.div>
+
+        {/* Prescreener */}
+        <PrescreenerPanel
+          onSelectStrategy={handleScannerSelect}
+          disabled={isRunning}
+          filters={(() => {
+            const o = buildOverrides();
+            if (!o) return undefined;
+            const f: import('../../types').ScannerFilters = {};
+            if (o.country) f.country = o.country;
+            if (o.exchange) f.exchange = o.exchange;
+            if (o.sector) f.sector = o.sector;
+            if (o.market_cap_min != null) f.market_cap_min = o.market_cap_min;
+            if (o.market_cap_max != null) f.market_cap_max = o.market_cap_max;
+            return Object.keys(f).length > 0 ? f : undefined;
+          })()}
+          activeFilterCount={activeFilterCount}
+        />
 
         {/* Strategy cards grouped by type */}
         <motion.div

@@ -327,51 +327,73 @@ async def run_pipeline(
     if fmp_candidates:
         fmp_map = {s.symbol: s for s in fmp_candidates}
 
-    # Stage 0.5: Regime classification (Perplexity web search + FMP ground truth)
+    # Stage 0.5: Regime classification — heartbeat cache first, Perplexity fallback
     regime: RegimeOutput | None = None
-    sector_data: list[dict] | None = None
-    vix_value: float | None = None
-    vix_label: str | None = None
-
-    fmp_key = get_api_key("fmp")
-    if fmp_key:
-        try:
-            sector_perf, (vix_value, vix_label) = await asyncio.gather(
-                fetch_sector_performance(),
-                fetch_vix_quote(),
-            )
-            sector_data = [sp.model_dump() for sp in sector_perf] if sector_perf else None
-            logger.info(
-                "FMP regime ground truth: VIX=%.2f (%s), %d sectors",
-                vix_value or 0,
-                vix_label,
-                len(sector_perf) if sector_perf else 0,
-            )
-        except Exception as exc:
-            logger.warning("FMP regime ground truth fetch failed, proceeding without: %s", exc)
 
     try:
-        regime, regime_metadata = await asyncio.wait_for(
-            classify_regime(
-                run_id,
-                sector_data=sector_data,
-                vix_value=vix_value,
-                vix_label=vix_label,
-            ),
-            timeout=STAGE_TIMEOUTS.get("regime", 30),
-        )
-        if regime_metadata:
-            await _save_stage_output(run_id, regime_metadata)
-    except TimeoutError:
-        result.stage_errors.append(
-            {"stage": "regime", "error": "Stage timed out", "type": "TimeoutError"}
-        )
-        logger.error("Regime classifier timed out")
+        from services.market_heartbeat import get_heartbeat
+
+        heartbeat = get_heartbeat()
+        state = await heartbeat.get_current_state()
+        if state.is_fresh():
+            regime = RegimeOutput(**state.to_regime_output_dict())
+            await _save_stage_output(run_id, {
+                "stage": "regime",
+                "status": "success",
+                "model": "heartbeat-cache",
+                "duration_ms": 0,
+                "raw_response": f"Cached regime: {regime.regime_type}",
+            })
+            logger.info("v1: Stage 0.5 using cached heartbeat: %s", regime.regime_type)
     except Exception as exc:
-        result.stage_errors.append(
-            {"stage": "regime", "error": str(exc), "type": type(exc).__name__}
-        )
-        logger.warning("Regime classifier failed, continuing without: %s", exc)
+        logger.info("v1: Heartbeat unavailable, falling back to Perplexity: %s", exc)
+
+    if regime is None:
+        sector_data: list[dict] | None = None
+        vix_value: float | None = None
+        vix_label: str | None = None
+
+        fmp_key = get_api_key("fmp")
+        if fmp_key:
+            try:
+                sector_perf, (vix_value, vix_label) = await asyncio.gather(
+                    fetch_sector_performance(),
+                    fetch_vix_quote(),
+                )
+                sector_data = [sp.model_dump() for sp in sector_perf] if sector_perf else None
+                logger.info(
+                    "FMP regime ground truth: VIX=%.2f (%s), %d sectors",
+                    vix_value or 0,
+                    vix_label,
+                    len(sector_perf) if sector_perf else 0,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "FMP regime ground truth fetch failed, proceeding without: %s", exc,
+                )
+
+        try:
+            regime, regime_metadata = await asyncio.wait_for(
+                classify_regime(
+                    run_id,
+                    sector_data=sector_data,
+                    vix_value=vix_value,
+                    vix_label=vix_label,
+                ),
+                timeout=STAGE_TIMEOUTS.get("regime", 30),
+            )
+            if regime_metadata:
+                await _save_stage_output(run_id, regime_metadata)
+        except TimeoutError:
+            result.stage_errors.append(
+                {"stage": "regime", "error": "Stage timed out", "type": "TimeoutError"}
+            )
+            logger.error("Regime classifier timed out")
+        except Exception as exc:
+            result.stage_errors.append(
+                {"stage": "regime", "error": str(exc), "type": type(exc).__name__}
+            )
+            logger.warning("Regime classifier failed, continuing without: %s", exc)
 
     regime_context = format_regime_header(regime) if regime else ""
 
@@ -990,7 +1012,28 @@ async def _run_pipeline_v2(
         return candidates
 
     async def _regime_classification() -> tuple[RegimeOutput | None, dict]:
-        """Regime data fetch + classification (independent of FMP screening)."""
+        """Regime classification — uses cached heartbeat first, Perplexity fallback."""
+        try:
+            from services.market_heartbeat import get_heartbeat
+
+            heartbeat = get_heartbeat()
+            state = await heartbeat.get_current_state()
+            if state.is_fresh():
+                regime_dict = state.to_regime_output_dict()
+                regime_out = RegimeOutput(**regime_dict)
+                meta = {
+                    "stage": "regime",
+                    "status": "success",
+                    "model": "heartbeat-cache",
+                    "duration_ms": 0,
+                    "raw_response": f"Cached regime: {regime_out.regime_type}",
+                }
+                await _save_stage_output(run_id, meta)
+                logger.info("v2: Stage 0.5 using cached heartbeat: %s", regime_out.regime_type)
+                return regime_out, meta
+        except Exception as exc:
+            logger.info("v2: Heartbeat unavailable, falling back to Perplexity: %s", exc)
+
         sector_data = None
         vix_value: float | None = None
         vix_label: str | None = None
@@ -1117,6 +1160,33 @@ async def _run_pipeline_v2(
         if screening and screening.tickers
         else list(manual_tickers or [])
     )
+
+    # Merge scanner-confirmed tickers when available (pre-pipeline discovery)
+    if not manual_tickers:
+        try:
+            from services.strategy_scanner import get_scanner
+
+            scanner = get_scanner()
+            strategy_type = config.strategy_type if hasattr(config, "strategy_type") else None
+            scan_results = await scanner.get_latest_results(
+                strategy_type=strategy_type,
+                min_combined_score=0.52,
+                max_age_minutes=90,
+            )
+            if scan_results:
+                scanner_tickers = [r.ticker for r in scan_results]
+                existing = set(ticker_symbols)
+                added = [t for t in scanner_tickers if t not in existing]
+                if added:
+                    ticker_symbols.extend(added)
+                    result.meta["scanner_tickers_added"] = added
+                    logger.info(
+                        "v2: Scanner added %d pre-confirmed tickers: %s",
+                        len(added),
+                        added[:10],
+                    )
+        except Exception as exc:
+            logger.debug("v2: Scanner results unavailable: %s", exc)
 
     if not ticker_symbols:
         return await _finalize_v2(run_id, result, start, client, regime_context)

@@ -873,6 +873,54 @@ async def fetch_sector_performance() -> list[FmpSectorPerformance]:
 
 
 # ---------------------------------------------------------------------------
+# Economic calendar
+# ---------------------------------------------------------------------------
+
+
+async def fetch_economic_calendar(days_ahead: int = 7) -> list[dict]:
+    """Fetch upcoming economic events from FMP.
+
+    Args:
+        days_ahead: Number of days to look ahead.
+
+    Returns:
+        List of event dicts with ``date``, ``event``, ``country``, ``impact``,
+        sorted by date ascending. Empty list on failure.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    try:
+        today = datetime.now(UTC).date()
+        end = today + timedelta(days=days_ahead)
+        data = await _fmp_get(
+            "economic-calendar",
+            {"from": today.isoformat(), "to": end.isoformat()},
+        )
+        if not isinstance(data, list):
+            return []
+        events: list[dict] = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            events.append(
+                {
+                    "date": item.get("date", ""),
+                    "event": item.get("event", ""),
+                    "country": item.get("country", ""),
+                    "impact": item.get("impact", ""),
+                    "estimate": item.get("estimate"),
+                    "actual": item.get("actual"),
+                    "previous": item.get("previous"),
+                }
+            )
+        events.sort(key=lambda e: e.get("date", ""))
+        return events
+    except Exception as exc:
+        logger.warning("Failed to fetch economic calendar: %s", exc)
+        return []
+
+
+# ---------------------------------------------------------------------------
 # Bulk endpoint wrappers (Premium tier — single call for all symbols)
 # ---------------------------------------------------------------------------
 
