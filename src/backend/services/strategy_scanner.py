@@ -508,7 +508,7 @@ class StrategyScanner:
         sector: str | None = None,
         market_cap_min: int | None = None,
         market_cap_max: int | None = None,
-        limit: int = 400,
+        limit: int = 600,
     ) -> list[str]:
         """Pull ~200-400 tickers from FMP screener with optional filters."""
         try:
