@@ -128,8 +128,8 @@ export function PrescreenerPanel({ onSelectStrategy, disabled, filters, activeFi
             className={clsx(
               'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-display font-bold transition-all duration-200',
               isScanning
-                ? 'bg-accent-electric/20 text-accent-electric cursor-wait'
-                : 'bg-accent-electric/15 text-accent-electric hover:bg-accent-electric/25 border border-accent-electric/30',
+                ? 'bg-accent-electric text-white cursor-wait'
+                : 'bg-accent-electric text-white hover:brightness-110 border border-accent-electric',
               (disabled) && 'opacity-40 cursor-not-allowed',
             )}
           >
