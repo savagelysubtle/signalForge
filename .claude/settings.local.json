@@ -66,7 +66,9 @@
       "Bash(do)",
       "Bash(git commit:*)",
       "Bash(python:*)",
-      "Bash(find D:/Coding/signalForge -name *.joblib -o -name *model* -type f)"
+      "Bash(find D:/Coding/signalForge -name *.joblib -o -name *model* -type f)",
+      "Bash(git fetch:*)",
+      "Bash(git merge:*)"
     ]
   }
 }

@@ -101,6 +101,11 @@ _CANADIAN_EXCHANGE_FALLBACKS = ["TSX", "TSXV"]
 
 _TRUST_UNIT_SUFFIXES = ("-UN", "-U", "-DB", "-PR", "-WT", "-RT")
 
+# Cache: raw ticker -> resolved TradingView symbol (e.g. "FM" -> "AMEX:FM").
+# Avoids burning API calls re-discovering the correct exchange on subsequent
+# requests for the same ticker (annotated charts, additional timeframes).
+_exchange_cache: dict[str, str] = {}
+
 
 def _fix_canadian_symbol(symbol: str) -> str:
     """Convert FMP/LLM hyphenated suffixes to TradingView dot format.
@@ -261,8 +266,15 @@ async def fetch_chart_image(
 
     interval = TIMEFRAME_MAP.get(timeframe, "1D")
     studies = _map_indicators(indicators)
-    tv_symbols = _to_tradingview_symbols(ticker)
-    logger.info("Chart-Img candidates for '%s': %s", ticker, tv_symbols)
+
+    # Use cached exchange if we already resolved this ticker successfully.
+    cached = _exchange_cache.get(ticker)
+    if cached:
+        tv_symbols = [cached]
+        logger.info("Chart-Img using cached exchange for '%s': %s", ticker, cached)
+    else:
+        tv_symbols = _to_tradingview_symbols(ticker)
+        logger.info("Chart-Img candidates for '%s': %s", ticker, tv_symbols)
 
     headers = {
         "x-api-key": api_key,
@@ -287,6 +299,10 @@ async def fetch_chart_image(
             logger.info("Chart-Img request: %s", {k: v for k, v in body.items() if k != "studies"})
             response = await client.post(CHART_IMG_V2_URL, json=body, headers=headers)
             if response.status_code < 400:
+                _exchange_cache[ticker] = tv_symbol
+                break
+            if response.status_code == 429:
+                logger.error("Chart-Img rate limited (429) — aborting remaining candidates")
                 break
             logger.warning(
                 "Chart-Img %s failed (HTTP %s): %s",
@@ -433,7 +449,14 @@ async def fetch_annotated_chart(
         return ""
 
     interval = TIMEFRAME_MAP.get(timeframe, "1D")
-    tv_symbols = _to_tradingview_symbols(ticker)
+
+    # Use cached exchange if we already resolved this ticker successfully.
+    cached = _exchange_cache.get(ticker)
+    if cached:
+        tv_symbols = [cached]
+        logger.info("Annotated chart using cached exchange for '%s': %s", ticker, cached)
+    else:
+        tv_symbols = _to_tradingview_symbols(ticker)
 
     headers = {
         "x-api-key": api_key,
@@ -453,6 +476,10 @@ async def fetch_annotated_chart(
             }
             response = await client.post(CHART_IMG_V2_URL, json=body, headers=headers)
             if response.status_code < 400:
+                _exchange_cache[ticker] = tv_symbol
+                break
+            if response.status_code == 429:
+                logger.error("Chart-Img rate limited (429) — aborting remaining candidates")
                 break
             logger.warning(
                 "Annotated chart %s failed (HTTP %s): %s",
