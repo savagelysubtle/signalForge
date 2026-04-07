@@ -28,6 +28,7 @@ from ml_training.models.predictor import (
     _identify_feature_columns,
     _prepare_features,
     _purged_split,
+    compute_sample_weights,
 )
 from ml_training.threading import balanced_lgb_njobs, optimal_workers
 
@@ -366,6 +367,7 @@ class HyperparameterTuner:
                 }
             )
             decay_lambda = trial.suggest_float("decay_lambda", 0.0, 0.15)
+            sample_weights = compute_sample_weights(n_samples, horizon=10, decay_lambda=decay_lambda)
 
             fold_test_scores: list[float] = []
             fold_train_scores: list[float] = []
@@ -379,11 +381,13 @@ class HyperparameterTuner:
                 )
                 X_tr, X_te = X.iloc[train_idx], X.iloc[test_idx]
                 y_tr, y_te = y[train_idx], y[test_idx]
+                w_tr = sample_weights[train_idx]
 
                 clf = lgb.LGBMClassifier(**params, n_estimators=self._n_rounds)
                 clf.fit(
                     X_tr,
                     y_tr,
+                    sample_weight=w_tr,
                     categorical_feature=categorical_indices,
                     eval_set=[(X_te, y_te)],
                     callbacks=[lgb.log_evaluation(0), lgb.early_stopping(50, verbose=False)],
@@ -408,6 +412,7 @@ class HyperparameterTuner:
         study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
 
         best_trial = study.best_trial
+        lgb_params = {k: v for k, v in best_trial.params.items() if k != "decay_lambda"}
         best_full_params: dict[str, Any] = {
             "objective": obj_name,
             "metric": obj_metric,
@@ -417,7 +422,7 @@ class HyperparameterTuner:
             "n_jobs": -1,
             "seed": 42,
             "bagging_freq": 5,
-            **best_trial.params,
+            **lgb_params,
         }
         if not self._binary_mode:
             best_full_params["num_class"] = 3
@@ -429,6 +434,8 @@ class HyperparameterTuner:
             best_trial.params.get("decay_lambda", 0.0),
             best_trial.params,
         )
+
+        best_full_params["_decay_lambda"] = best_trial.params.get("decay_lambda", 0.0)
 
         return HyperparameterSearchResult(
             best_params=best_full_params,

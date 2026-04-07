@@ -2,8 +2,8 @@
 
 Uses a LightGBM model trained without any LLM-derived features so its
 probability estimate is truly independent of GPT.  The gate adjusts
-position sizing and can block recommendations that the model assigns
-low probability to.
+position sizing via Kelly criterion and can block recommendations that
+the model assigns low probability to.
 """
 
 from __future__ import annotations
@@ -11,19 +11,60 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from ml.inference import build_feature_vector, ml_model_available, run_prediction
+from ml.inference import (
+    build_feature_vector,
+    ml_model_available,
+    run_meta_prediction,
+    run_prediction,
+)
 from ml.schemas import GateResult
 
 logger = logging.getLogger(__name__)
 
-# Probability thresholds → position size multipliers.
-# These should be tuned once 50+ resolved outcomes are available.
-_SIZE_TIERS: list[tuple[float, float]] = [
-    (0.65, 1.00),
-    (0.58, 0.75),
-    (0.52, 0.50),
-]
-_BLOCK_THRESHOLD = 0.52
+# Per-strategy reward-to-risk ratios derived from training barrier configs.
+# profit_mult / stop_mult — determines Kelly breakeven and optimal sizing.
+_STRATEGY_RR: dict[str, float] = {
+    "mean_reversion": 1.0 / 1.5,
+    "momentum_breakout": 3.0 / 1.0,
+    "swing": 2.0 / 1.0,
+    "earnings_play": 2.5 / 1.0,
+    "value_accumulation": 2.0 / 1.5,
+    "bollinger_band_squeeze_breakout": 1.5 / 1.0,
+    "intraday_scalp": 1.2 / 1.0,
+    "vwap_reversal_scalp": 1.0 / 1.0,
+    "ema_21_pullback": 2.0 / 1.0,
+    "ema_50_200_golden_cross": 2.5 / 1.0,
+    "ema_stack_momentum": 2.0 / 1.0,
+    "crypto_swing": 2.0 / 1.0,
+    "crypto_intraday": 1.5 / 1.0,
+    "crypto_intraday_scalp": 1.2 / 1.0,
+    "intraday": 1.5 / 1.0,
+}
+_DEFAULT_RR = 2.0
+_MIN_KELLY = 0.05
+_MAX_SIZE = 1.0
+
+_REGIME_KELLY_MULT: dict[str, float] = {
+    "bear": 0.5,
+    "neutral": 1.0,
+    "bull": 1.25,
+    "unknown": 0.8,
+}
+
+
+def _kelly_size(prob: float, rr: float = _DEFAULT_RR) -> float:
+    """Kelly criterion position sizing: f* = (b*p - q) / b.
+
+    Args:
+        prob: Predicted probability of a profitable trade.
+        rr: Reward-to-risk ratio (profit_mult / stop_mult).
+
+    Returns:
+        Optimal fraction of capital to allocate, clamped to [0, _MAX_SIZE].
+    """
+    q = 1.0 - prob
+    f_star = (rr * prob - q) / rr
+    return max(0.0, min(f_star, _MAX_SIZE))
 
 
 async def quick_score(
@@ -53,7 +94,8 @@ async def run_ml_gate(
     """Run the independent ML gate for a single ticker.
 
     Builds a feature vector from market-observable data only (no LLM
-    outputs) and returns a sizing/block decision.
+    outputs) and returns a sizing/block decision using Kelly criterion
+    with regime-conditional modifiers and optional meta-labeler blending.
 
     Args:
         ticker: Ticker symbol.
@@ -107,13 +149,24 @@ async def run_ml_gate(
         else prediction.probability_up
     )
 
-    size_mult = 0.0
-    for threshold, mult in _SIZE_TIERS:
-        if prob >= threshold:
-            size_mult = mult
-            break
+    # --- Meta-labeler conviction blending ---
+    meta_conviction: float | None = None
+    meta_conv = run_meta_prediction(ticker, strategy_type, features)
+    if meta_conv is not None:
+        meta_conviction = meta_conv
+        prob = 0.6 * prob + 0.4 * meta_conviction
 
-    blocked = prob < _BLOCK_THRESHOLD
+    # --- Kelly criterion sizing ---
+    strategy_rr = _STRATEGY_RR.get(strategy_type, _DEFAULT_RR)
+    kelly = _kelly_size(prob, rr=strategy_rr)
+
+    # --- Regime-conditional modifier ---
+    regime = regime_context.get("regime_type", "unknown") if regime_context else "unknown"
+    regime_mult = _REGIME_KELLY_MULT.get(regime, 0.8)
+    adjusted_kelly = kelly * regime_mult
+
+    blocked = adjusted_kelly < _MIN_KELLY
+    size_mult = min(adjusted_kelly, _MAX_SIZE) if not blocked else 0.0
 
     return GateResult(
         ticker=ticker,
@@ -124,5 +177,6 @@ async def run_ml_gate(
         conformal_set=prediction.prediction_set,
         reliability_score=prediction.reliability_score,
         model_version=prediction.model_version,
+        meta_conviction=meta_conviction,
         reason="blocked" if blocked else "sized",
     )

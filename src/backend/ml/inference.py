@@ -48,6 +48,7 @@ LLM_FEATURES: frozenset[str] = frozenset(
 
 _strategy_models: dict[str, dict[str, Any]] = {}
 _independent_models: dict[str, dict[str, Any]] = {}
+_meta_labeler_models: dict[str, Any] = {}
 _fallback_model: dict[str, Any] | None = None
 _loaded: bool = False
 
@@ -90,9 +91,10 @@ def _load_all_models() -> None:
     LLM-free models are auto-promoted to the independent registry so
     they can serve as gate models without a separate artifact file.
     """
-    global _strategy_models, _independent_models, _fallback_model, _loaded
+    global _strategy_models, _independent_models, _meta_labeler_models, _fallback_model, _loaded
     _strategy_models = {}
     _independent_models = {}
+    _meta_labeler_models = {}
     _fallback_model = None
 
     if not ARTIFACTS_DIR.exists():
@@ -143,11 +145,23 @@ def _load_all_models() -> None:
         except Exception:
             logger.exception("Failed to load model: %s", p.name)
 
+    for p in sorted(ARTIFACTS_DIR.glob("model_*_meta_active.joblib")):
+        parts = p.stem.split("_")
+        meta_idx = parts.index("meta")
+        strategy_type = "_".join(parts[1:meta_idx])
+        try:
+            artifact = joblib.load(p)
+            _meta_labeler_models[strategy_type] = artifact
+            logger.info("Loaded meta-labeler [%s] from %s", strategy_type, p.name)
+        except Exception:
+            logger.exception("Failed to load meta-labeler: %s", p.name)
+
     _loaded = True
     logger.info(
-        "Model loading complete: %d strategy, %d gate-eligible, %s fallback",
+        "Model loading complete: %d strategy, %d gate-eligible, %d meta-labeler, %s fallback",
         len(_strategy_models),
         len(_independent_models),
+        len(_meta_labeler_models),
         "1" if _fallback_model else "no",
     )
 
@@ -374,3 +388,69 @@ def run_prediction(
     except Exception:
         logger.exception("ML prediction failed for %s", ticker)
         return None
+
+
+def run_meta_prediction(
+    ticker: str,
+    strategy_type: str,
+    features: dict[str, Any],
+) -> float | None:
+    """Run meta-labeler prediction to get conviction score.
+
+    Returns P(signal is profitable) from the meta-labeler, or ``None``
+    if no meta-labeler exists for this strategy.
+
+    Args:
+        ticker: Ticker symbol.
+        strategy_type: Strategy template type.
+        features: Complete feature dict.
+
+    Returns:
+        Conviction score in [0, 1], or None.
+    """
+    if not _loaded:
+        _load_all_models()
+
+    meta_model = _meta_labeler_models.get(strategy_type)
+    if meta_model is None:
+        return None
+
+    try:
+        import pandas as pd
+
+        if hasattr(meta_model, "predict_conviction"):
+            feat_names = (
+                meta_model._model.result.feature_names
+                if meta_model._model and meta_model._model.result
+                else []
+            )
+            if not feat_names:
+                return None
+            feature_values = [_to_float(features.get(name)) for name in feat_names]
+            feature_vector = pd.DataFrame([feature_values], columns=feat_names)
+            conviction = float(meta_model.predict_conviction(feature_vector)[0])
+            logger.debug(
+                "Meta-labeler [%s] conviction for %s: %.3f", strategy_type, ticker, conviction
+            )
+            return conviction
+
+        if hasattr(meta_model, "meta_labeler") and meta_model.meta_labeler is not None:
+            labeler = meta_model.meta_labeler
+            feat_names = (
+                labeler._model.result.feature_names
+                if labeler._model and labeler._model.result
+                else []
+            )
+            if not feat_names:
+                return None
+            feature_values = [_to_float(features.get(name)) for name in feat_names]
+            feature_vector = pd.DataFrame([feature_values], columns=feat_names)
+            conviction = float(labeler.predict_conviction(feature_vector)[0])
+            logger.debug(
+                "Meta-labeler [%s] conviction for %s: %.3f", strategy_type, ticker, conviction
+            )
+            return conviction
+    except Exception:
+        logger.exception("Meta-labeler prediction failed for %s/%s", strategy_type, ticker)
+
+    return None

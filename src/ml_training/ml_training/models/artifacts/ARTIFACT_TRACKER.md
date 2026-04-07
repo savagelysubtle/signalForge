@@ -1,7 +1,87 @@
 # SignalForge ML Artifact Tracker
 
-> Auto-generated 2026-04-07. This document tracks all model training runs,
-> production deployments, and analysis findings across the ML pipeline.
+> Auto-generated 2026-04-07. Last log update: 2026-04-08 (Optuna v4 snapshot). This document tracks
+> model training runs, production deployments, and analysis findings across the
+> ML pipeline.
+
+---
+
+## Changelog: pipeline optimization (code) vs latest on-disk artifacts
+
+**What changed in the codebase (ML pipeline optimization — implemented in repo):**
+
+| Area | Change | Files (high level) |
+|---|---|---|
+| Tuning objective | GT-Score / Optuna now maximizes **(1 − Brier)** on binary folds, **−log loss** on multiclass; grid search logging uses `mean_brier_skill` | `hyperparameter_tuning.py` |
+| Sample weights | **Exponential temporal decay** layered on uniqueness weights; `CPCVConfig.decay_lambda` (default 0.05); Optuna searches `decay_lambda`, passes `sample_weight` in CV; tuned value stored as `_decay_lambda` (not a LightGBM arg) | `predictor.py`, `hyperparameter_tuning.py` |
+| Cross-validation | Default **8** splits; tiers: n &lt; 5k → cap 3 folds; 5k–100k → cap 5; **purge cap** `n_samples // (effective_splits * 4)` | `predictor.py` |
+| Production gate | **Kelly** sizing from per-strategy R:R; **regime** Kelly multiplier; optional **meta-labeler** blend (60/40) when `model_{strategy}_meta_active.joblib` exists | `gate.py`, `inference.py`, `schemas.py` |
+| Meta-labeler artifacts | `ModelArtifact.meta_labeler`; training loop persists MetaLabeler when `meta_label=True` | `registry.py`, `training_loop.py` |
+
+**Where the new tuning shows up in artifacts**
+
+| Signal | Meaning |
+|---|---|
+| `training_config.classifier_params._decay_lambda` | Optuna-selected temporal decay (saved JSON / joblib). **Absent on older runs** (e.g. independent v3 tier). |
+| `training_config.n_folds` | **Reported** fold count from the training round (often **5** for 5k–100k row datasets after the small/medium cap; **8** when the full split count is used). |
+
+**Latest batch on disk** — highest `v*` per strategy, suffix `20260407` (same calendar date; newer files supersede v3 / v21–v37 tier). **Optuna + Brier-style objective + decay in CV** apply to artifacts that include `_decay_lambda`.
+
+### Shadow models (2026-04-07, max version — post–Optuna refresh)
+
+| Strategy | Ver | Acc | Brier | OFGap | Judge | n | Folds | decay_λ |
+|---|---|---|---|---|---|---|---|---|
+| bollinger_band_squeeze_breakout_swing | v30 | 0.5766 | 0.2413 | -0.0063 | CONDITIONAL_PASS | 57,141 | 5 | 0.0503 |
+| crypto_intraday_scalp | v22 | 0.5626 | 0.2476 | -0.0090 | CONDITIONAL_PASS | 148,409 | 8 | 0.0131 |
+| crypto_swing | v22 | 0.5480 | 0.2508 | -0.0191 | CONDITIONAL_PASS | 763,328 | 8 | 0.0081 |
+| earnings_play | v27 | 0.6433 | 0.2293 | -0.0199 | CONDITIONAL_PASS | 84,888 | 5 | 0.0237 |
+| ema_21_pullback_swing | v26 | 0.5797 | 0.2420 | -0.0136 | CONDITIONAL_PASS | 63,031 | 5 | 0.0398 |
+| ema_50_200_golden_cross_swing | v35 | 0.5904 | 0.2381 | -0.0005 | CONDITIONAL_PASS | 49,685 | 5 | 0.0607 |
+| ema_stack_momentum_intraday | v22 | 0.5728 | 0.2433 | 0.0255 | CONDITIONAL_PASS | 13,634 | 5 | 0.0581 |
+| intraday | v22 | 0.5667 | 0.2458 | -0.0163 | CONDITIONAL_PASS | 45,093 | 5 | 0.1495 |
+| intraday_scalp | v24 | 0.5499 | 0.2477 | -0.0051 | CONDITIONAL_PASS | 21,307 | 5 | 0.1270 |
+| mean_reversion | v30 | 0.5611 | 0.2464 | 0.0150 | CONDITIONAL_PASS | 84,888 | 5 | 0.0582 |
+| momentum_breakout | v33 | 0.5834 | 0.2435 | -0.0074 | CONDITIONAL_PASS | 40,354 | 5 | 0.1395 |
+| swing | v38 | 0.5468 | 0.2477 | -0.0176 | CONDITIONAL_PASS | 210,211 | 8 | 0.0158 |
+| value_accumulation | v25 | 0.6719 | 0.2218 | -0.0163 | CONDITIONAL_PASS | 128,329 | 8 | 0.0067 |
+| vwap_reversal_scalp | v19 | 0.5732 | 0.2436 | 0.0165 | CONDITIONAL_PASS | 10,152 | 5 | 0.0059 |
+
+### Independent / gate models (2026-04-07, **v4** tier)
+
+| Strategy | Ver | Acc | Brier | OFGap | Judge | n | Folds | decay_λ |
+|---|---|---|---|---|---|---|---|---|
+| bollinger_band_squeeze_breakout_swing | v4 | 0.5766 | 0.2413 | -0.0063 | CONDITIONAL_PASS | 57,141 | 5 | 0.0503 |
+| crypto_intraday_scalp | v4 | 0.5626 | 0.2476 | -0.0090 | CONDITIONAL_PASS | 148,409 | 8 | 0.0131 |
+| crypto_swing | v4 | 0.5480 | 0.2508 | -0.0191 | CONDITIONAL_PASS | 763,328 | 8 | 0.0081 |
+| earnings_play | v4 | 0.6433 | 0.2293 | -0.0199 | CONDITIONAL_PASS | 84,888 | 5 | 0.0237 |
+| ema_21_pullback_swing | v4 | 0.5797 | 0.2420 | -0.0136 | CONDITIONAL_PASS | 63,031 | 5 | 0.0398 |
+| ema_50_200_golden_cross_swing | v4 | 0.5904 | 0.2381 | -0.0005 | CONDITIONAL_PASS | 49,685 | 5 | 0.0607 |
+| ema_stack_momentum_intraday | v4 | 0.5728 | 0.2433 | 0.0255 | CONDITIONAL_PASS | 13,634 | 5 | 0.0581 |
+| intraday | v4 | 0.5667 | 0.2458 | -0.0163 | CONDITIONAL_PASS | 45,093 | 5 | 0.1495 |
+| intraday_scalp | v4 | 0.5499 | 0.2477 | -0.0051 | CONDITIONAL_PASS | 21,307 | 5 | 0.1270 |
+| mean_reversion | v4 | 0.5611 | 0.2464 | 0.0150 | CONDITIONAL_PASS | 84,888 | 5 | 0.0582 |
+| momentum_breakout | v4 | 0.5834 | 0.2435 | -0.0074 | CONDITIONAL_PASS | 40,354 | 5 | 0.1395 |
+| swing | v4 | 0.5468 | 0.2477 | -0.0176 | CONDITIONAL_PASS | 210,211 | 8 | 0.0158 |
+| value_accumulation | v4 | 0.6719 | 0.2218 | -0.0163 | CONDITIONAL_PASS | 128,329 | 8 | 0.0067 |
+| vwap_reversal_scalp | v4 | 0.5732 | 0.2436 | 0.0165 | CONDITIONAL_PASS | 10,152 | 5 | 0.0059 |
+
+### Independent **v3 → v4** (same date folder; new Optuna + `_decay_lambda`)
+
+| Strategy | Acc v3 | Acc v4 | Δ Acc | Brier v3 | Brier v4 | Δ Brier |
+|---|---|---|---|---|---|---|
+| bollinger_band_squeeze_breakout_swing | 0.5741 | 0.5766 | +0.0025 | 0.2437 | 0.2413 | -0.0024 |
+| ema_21_pullback_swing | 0.5775 | 0.5797 | +0.0022 | 0.2421 | 0.2420 | -0.0001 |
+| ema_50_200_golden_cross_swing | 0.5786 | 0.5904 | +0.0118 | 0.2429 | 0.2381 | -0.0048 |
+| ema_stack_momentum_intraday | 0.5754 | 0.5728 | -0.0026 | 0.2428 | 0.2433 | +0.0004 |
+| intraday_scalp | 0.5484 | 0.5499 | +0.0015 | 0.2477 | 0.2477 | ~0 |
+| momentum_breakout | 0.5810 | 0.5834 | +0.0025 | 0.2437 | 0.2435 | -0.0002 |
+| swing | 0.5433 | 0.5468 | +0.0035 | 0.2479 | 0.2477 | -0.0002 |
+| vwap_reversal_scalp | 0.5746 | 0.5732 | -0.0014 | 0.2441 | 0.2436 | -0.0005 |
+| crypto_intraday_scalp, crypto_swing, earnings_play, intraday, mean_reversion, value_accumulation | (unchanged acc to 4dp) | — | — | — | — |
+
+**Readout:** Largest lift **ema_50_200_golden_cross_swing** (+1.18pp acc, -0.0048 Brier). Several strategies **unchanged** at 4 decimal places (Optuna may have landed near prior hyperparams). **Gate / Kelly** changes remain **out of band** for these tables — they affect live sizing only.
+
+**Action:** Promote v4 independent + matching shadow after judge review; update production table above after `promote`.
 
 ---
 
@@ -106,6 +186,8 @@ for removal or investigation.
 | 2026-04-05 | Full train (7yr data) | Multiple rounds per strategy, 3-5 fold CPCV | Current production models promoted |
 | 2026-04-07 (run 1) | Optuna tune | Attempted 15yr lookback expansion | Mixed results, NOT promoted |
 | 2026-04-07 (run 2) | Optuna tune | Same data, different trial count | Feature collapse on several strategies |
+| 2026-04-07 | Train + Optuna (late) | Shadow **v30–v38**, independent **v4**; `_decay_lambda` in `classifier_params`; Brier-oriented Optuna CV | See “Latest batch” + v3→v4 delta tables |
+| 2026-04-08 | Code + artifacts | Repo gate/training changes; training artifacts on `20260407` now include tuned decay | Compare v4 vs production before promote |
 
 ---
 

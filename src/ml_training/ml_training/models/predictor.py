@@ -278,7 +278,7 @@ def compute_sample_weights(
         n_samples: Total number of samples.
         horizon: Forward-return horizon in bars.
         decay_lambda: Exponential decay rate.  ``0.0`` disables decay
-            (backward-compatible default).  Typical range: 0.01–0.15.
+            (backward-compatible default).  Typical range: 0.01-0.15.
     """
     weights = np.empty(n_samples, dtype=np.float64)
     for i in range(n_samples):
@@ -351,14 +351,16 @@ class PredictionModel:
         return_col = self._return_col if self._return_col in df.columns else None
         y_reg = df[return_col].fillna(0).values if return_col else np.zeros(len(df))
 
-        sample_weights = compute_sample_weights(len(X), self._cpcv.forward_horizon)
+        sample_weights = compute_sample_weights(
+            len(X), self._cpcv.forward_horizon, decay_lambda=self._cpcv.decay_lambda
+        )
 
         n_samples = len(X)
         effective_splits = self._cpcv.n_splits
         effective_purge = max(self._cpcv.purge_window, self._cpcv.forward_horizon)
         effective_embargo = max(self._cpcv.embargo_window, self._cpcv.forward_horizon // 2)
 
-        if n_samples < 100_000:
+        if n_samples < 5_000:
             effective_splits = min(self._cpcv.n_splits, 3)
             effective_purge = min(effective_purge, max(20, n_samples // 500))
             logger.info(
@@ -368,6 +370,18 @@ class PredictionModel:
                 effective_purge,
                 effective_embargo,
             )
+        elif n_samples < 100_000:
+            effective_splits = min(self._cpcv.n_splits, 5)
+            logger.info(
+                "Medium dataset (%d rows): n_splits=%d, purge=%d, embargo=%d",
+                n_samples,
+                effective_splits,
+                effective_purge,
+                effective_embargo,
+            )
+
+        max_purge = n_samples // (effective_splits * 4)
+        effective_purge = min(effective_purge, max_purge)
 
         tscv = TimeSeriesSplit(n_splits=effective_splits)
         fold_results: list[FoldResult] = []

@@ -11,42 +11,42 @@ todos:
     content:
       Replace accuracy with Brier score in GT-Score objective
       (hyperparameter_tuning.py grid search + Optuna)
-    status: in_progress
+    status: completed
   - id: 1b-temporal-decay
     content:
       Add exponential temporal decay to compute_sample_weights() in
       predictor.py, add decay_lambda to CPCVConfig and Optuna search space
-    status: pending
+    status: completed
   - id: 1c-cv-folds
     content:
       Increase default CV folds from 5 to 8 in CPCVConfig, adjust small-dataset
       cap and purge guard
-    status: pending
+    status: completed
   - id: 2a-kelly-thresholds
     content:
       Replace fixed gate tiers with Kelly criterion sizing in gate.py, add
       per-strategy R:R lookup
-    status: pending
+    status: completed
   - id: 2b-regime-modifier
     content:
       Add regime-conditional Kelly multiplier in gate.py using existing
       regime_context parameter
-    status: pending
+    status: completed
   - id: 3a-meta-artifacts
     content:
       Add meta_labeler field to ModelArtifact, ensure training_loop saves
       meta-labeler when meta_label=True
-    status: pending
+    status: completed
   - id: 3b-meta-inference
     content:
       Add meta-labeler model loading in inference.py alongside existing model
       dicts
-    status: pending
+    status: completed
   - id: 3c-meta-gate
     content:
       Wire meta-labeler conviction into gate.py with probability blending, add
       meta_conviction to GateResult schema
-    status: pending
+    status: completed
 isProject: false
 ---
 

@@ -58,6 +58,12 @@ class GateResult(BaseModel):
     conformal_set: list[str] = Field(default_factory=list)
     reliability_score: float = Field(ge=0.0, le=1.0, default=0.0)
     model_version: str = ""
+    meta_conviction: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Meta-labeler conviction P(signal is profitable), None if no meta-labeler",
+    )
     reason: str = ""
 
 

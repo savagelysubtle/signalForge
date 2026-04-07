@@ -49,6 +49,7 @@ class ModelArtifact:
     conformal: Any | None = None
     feature_encoders: dict[str, Any] = field(default_factory=dict)
     metadata: ModelMetadata | None = None
+    meta_labeler: Any | None = None
 
 
 class ModelRegistry:

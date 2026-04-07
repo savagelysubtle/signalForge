@@ -451,6 +451,7 @@ class TrainingLoop:
             label_encoder=training_result.label_encoder,
             calibrator=calibrator,
             conformal=conformal,
+            meta_labeler=model if self._config.meta_label else None,
             metadata=ModelMetadata(
                 model_version=f"v{round_num}",
                 training_date="",
