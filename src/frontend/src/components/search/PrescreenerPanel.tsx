@@ -16,13 +16,13 @@ const REGIME_CONFIG: Record<string, { label: string; color: string; icon: React.
 };
 
 interface PrescreenerPanelProps {
-  onSelectStrategy: (strategyType: string, tickers: string[]) => void;
+  onRunScannerStrategy: (strategyType: string, tickers: string[]) => void | Promise<void>;
   disabled?: boolean;
   filters?: ScannerFilters;
   activeFilterCount?: number;
 }
 
-export function PrescreenerPanel({ onSelectStrategy, disabled, filters, activeFilterCount = 0 }: PrescreenerPanelProps) {
+export function PrescreenerPanel({ onRunScannerStrategy, disabled, filters, activeFilterCount = 0 }: PrescreenerPanelProps) {
   const {
     isScanning, scanStatus, latestResults, marketState, error, runScan, fetchLatest,
   } = useScanner();
@@ -183,7 +183,7 @@ export function PrescreenerPanel({ onSelectStrategy, disabled, filters, activeFi
       {latestResults && totalSetups > 0 && (
         <ScannerResultsGrid
           results={latestResults}
-          onSelectStrategy={onSelectStrategy}
+          onRunScannerStrategy={onRunScannerStrategy}
           disabled={disabled || isScanning}
         />
       )}

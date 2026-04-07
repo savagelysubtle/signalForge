@@ -89,11 +89,12 @@ N_ENSEMBLE_SEEDS = 7
 class CPCVConfig:
     """Configuration for Combinatorial Purged Cross-Validation."""
 
-    n_splits: int = 5
+    n_splits: int = 8
     purge_window: int = DEFAULT_PURGE_WINDOW
     embargo_window: int = DEFAULT_EMBARGO_WINDOW
     min_train_size: int = 500
     forward_horizon: int = 10
+    decay_lambda: float = 0.05
 
 
 @dataclass
@@ -258,18 +259,38 @@ def _purged_split(
     return train_indices[mask]
 
 
-def compute_sample_weights(n_samples: int, horizon: int) -> np.ndarray:
-    """Weight samples by label uniqueness to correct for overlapping returns.
+def compute_sample_weights(
+    n_samples: int,
+    horizon: int,
+    decay_lambda: float = 0.0,
+) -> np.ndarray:
+    """Weight samples by label uniqueness and optional temporal decay.
 
     With *horizon*-bar forward returns, consecutive samples share most of
     their forward window.  This assigns lower weight to samples surrounded
     by many overlapping neighbours (Lopez de Prado, Ch. 4).
+
+    When ``decay_lambda > 0``, an exponential decay is applied so that
+    recent samples receive higher weight — biasing the model toward
+    current market structure while preserving older data for rare events.
+
+    Args:
+        n_samples: Total number of samples.
+        horizon: Forward-return horizon in bars.
+        decay_lambda: Exponential decay rate.  ``0.0`` disables decay
+            (backward-compatible default).  Typical range: 0.01–0.15.
     """
     weights = np.empty(n_samples, dtype=np.float64)
     for i in range(n_samples):
         lo = max(0, i - horizon)
         hi = min(n_samples, i + horizon + 1)
         weights[i] = 1.0 / (hi - lo)
+
+    if decay_lambda > 0.0:
+        age = np.linspace(1.0, 0.0, n_samples)  # 1.0 = oldest, 0.0 = newest
+        decay = np.exp(-decay_lambda * age * n_samples / 252)
+        weights *= decay
+
     weights /= weights.mean()
     return weights
 

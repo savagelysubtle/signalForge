@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Play, Loader2, XCircle,
@@ -10,6 +10,7 @@ import clsx from 'clsx';
 import { useStrategies } from '../../hooks/useStrategies';
 import { usePipeline } from '../../hooks/usePipeline';
 import { classifyInput, deriveRunMode } from '../../lib/classifyInput';
+import { resolveStrategyConfigForScannerRule } from '../../lib/resolveScannerStrategy';
 import type { RunMode } from '../../lib/classifyInput';
 import type { ScreenerOverrides } from '../../types';
 import logoIcon from '../../assets/signalforge-logo-icon.svg';
@@ -110,9 +111,14 @@ export function SearchScreen() {
   const { templates, strategies } = useStrategies();
   const { runPipeline, isRunning, error, history, fetchHistory, isLoadingHistory, progress } = usePipeline();
 
+  const pipelineSectionRef = useRef<HTMLDivElement>(null);
+
+  const scrollToPipelineSection = useCallback(() => {
+    pipelineSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, []);
+
   const [selectedStrategy, setSelectedStrategy] = useState<string>('');
   const [inputText, setInputText] = useState<string>('');
-  const [showFilters, setShowFilters] = useState(false);
   const [filterCountry, setFilterCountry] = useState('');
   const [filterExchange, setFilterExchange] = useState('');
   const [filterSector, setFilterSector] = useState('');
@@ -177,16 +183,33 @@ export function SearchScreen() {
 
   const activeFilterCount = [filterCountry, filterExchange, filterSector, filterMarketCap].filter(Boolean).length;
 
-  const handleScannerSelect = (strategyType: string, tickers: string[]) => {
-    const match = allStrategies.find(
-      (s) => s.strategy_type === strategyType || s.name.toLowerCase().includes(strategyType.replace(/_/g, ' ')),
-    );
-    if (match) setSelectedStrategy(match.id);
+  const handleScannerRun = async (scannerRuleKey: string, tickers: string[]) => {
+    const match = resolveStrategyConfigForScannerRule(scannerRuleKey, allStrategies);
+    if (!match) {
+      console.error('No strategy template matched prescanner rule:', scannerRuleKey);
+      return;
+    }
+    scrollToPipelineSection();
+    setSelectedStrategy(match.id);
     setInputText(tickers.join(', '));
+    const overrides = buildOverrides();
+    try {
+      const result = await runPipeline(
+        match.id,
+        tickers.length > 0 ? tickers : undefined,
+        undefined,
+        overrides,
+      );
+      if (result?.run_id) navigate(`/?run=${result.run_id}`);
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   const handleRun = async () => {
     if (runMode === 'none') return;
+
+    scrollToPipelineSection();
 
     const strategyId = selectedStrategy || undefined;
     const tickers = parsedTickers.length > 0 ? parsedTickers : undefined;
@@ -195,7 +218,7 @@ export function SearchScreen() {
 
     try {
       const result = await runPipeline(strategyId, tickers, userPrompt, overrides);
-      navigate(`/?run=${result.run_id}`);
+      if (result?.run_id) navigate(`/?run=${result.run_id}`);
     } catch (err) {
       console.error(err);
     }
@@ -289,10 +312,7 @@ export function SearchScreen() {
           transition={{ duration: 0.4, delay: 0.15, ease: 'easeOut' }}
           className="w-full mb-4"
         >
-          <button
-            onClick={() => setShowFilters(!showFilters)}
-            className="flex items-center gap-1.5 text-[11px] font-display text-text-secondary uppercase tracking-wider mb-2 hover:text-text-primary transition-colors"
-          >
+          <div className="flex items-center gap-1.5 text-[11px] font-display text-text-secondary uppercase tracking-wider mb-2">
             <SlidersHorizontal className="w-3 h-3" />
             Screener Filters
             {activeFilterCount > 0 && (
@@ -300,66 +320,58 @@ export function SearchScreen() {
                 {activeFilterCount}
               </span>
             )}
-          </button>
+          </div>
 
-          {showFilters && (
-            <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              exit={{ opacity: 0, height: 0 }}
-              transition={{ duration: 0.2, ease: 'easeOut' }}
-              className="grid grid-cols-2 lg:grid-cols-4 gap-2 mb-2"
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 mb-2">
+            <select
+              value={filterCountry}
+              onChange={(e) => setFilterCountry(e.target.value)}
+              disabled={isRunning}
+              className="bg-bg-concrete border border-border-gutter rounded-md px-2.5 py-2 text-xs text-text-primary font-body focus:outline-none focus:border-accent-signal transition-colors appearance-none cursor-pointer"
             >
-              <select
-                value={filterCountry}
-                onChange={(e) => setFilterCountry(e.target.value)}
-                disabled={isRunning}
-                className="bg-bg-concrete border border-border-gutter rounded-md px-2.5 py-2 text-xs text-text-primary font-body focus:outline-none focus:border-accent-signal transition-colors appearance-none cursor-pointer"
-              >
-                {COUNTRY_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
+              {COUNTRY_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
 
-              <select
-                value={filterExchange}
-                onChange={(e) => setFilterExchange(e.target.value)}
-                disabled={isRunning}
-                className="bg-bg-concrete border border-border-gutter rounded-md px-2.5 py-2 text-xs text-text-primary font-body focus:outline-none focus:border-accent-signal transition-colors appearance-none cursor-pointer"
-              >
-                {EXCHANGE_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
+            <select
+              value={filterExchange}
+              onChange={(e) => setFilterExchange(e.target.value)}
+              disabled={isRunning}
+              className="bg-bg-concrete border border-border-gutter rounded-md px-2.5 py-2 text-xs text-text-primary font-body focus:outline-none focus:border-accent-signal transition-colors appearance-none cursor-pointer"
+            >
+              {EXCHANGE_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
 
-              <select
-                value={filterSector}
-                onChange={(e) => setFilterSector(e.target.value)}
-                disabled={isRunning}
-                className="bg-bg-concrete border border-border-gutter rounded-md px-2.5 py-2 text-xs text-text-primary font-body focus:outline-none focus:border-accent-signal transition-colors appearance-none cursor-pointer"
-              >
-                {SECTOR_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
+            <select
+              value={filterSector}
+              onChange={(e) => setFilterSector(e.target.value)}
+              disabled={isRunning}
+              className="bg-bg-concrete border border-border-gutter rounded-md px-2.5 py-2 text-xs text-text-primary font-body focus:outline-none focus:border-accent-signal transition-colors appearance-none cursor-pointer"
+            >
+              {SECTOR_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
 
-              <select
-                value={filterMarketCap}
-                onChange={(e) => setFilterMarketCap(e.target.value)}
-                disabled={isRunning}
-                className="bg-bg-concrete border border-border-gutter rounded-md px-2.5 py-2 text-xs text-text-primary font-body focus:outline-none focus:border-accent-signal transition-colors appearance-none cursor-pointer"
-              >
-                {MARKET_CAP_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
-            </motion.div>
-          )}
+            <select
+              value={filterMarketCap}
+              onChange={(e) => setFilterMarketCap(e.target.value)}
+              disabled={isRunning}
+              className="bg-bg-concrete border border-border-gutter rounded-md px-2.5 py-2 text-xs text-text-primary font-body focus:outline-none focus:border-accent-signal transition-colors appearance-none cursor-pointer"
+            >
+              {MARKET_CAP_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          </div>
         </motion.div>
 
         {/* Prescreener */}
         <PrescreenerPanel
-          onSelectStrategy={handleScannerSelect}
+          onRunScannerStrategy={handleScannerRun}
           disabled={isRunning}
           filters={(() => {
             const o = buildOverrides();
@@ -388,7 +400,11 @@ export function SearchScreen() {
 
           {/* No strategy card */}
           <button
-            onClick={() => setSelectedStrategy('')}
+            type="button"
+            onClick={() => {
+              setSelectedStrategy('');
+              scrollToPipelineSection();
+            }}
             disabled={isRunning}
             className={clsx(
               "text-left rounded-lg p-3 border transition-all duration-200 w-full mb-3",
@@ -414,8 +430,12 @@ export function SearchScreen() {
               <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
                 {items.map((strategy) => (
                   <button
+                    type="button"
                     key={strategy.id}
-                    onClick={() => setSelectedStrategy(strategy.id)}
+                    onClick={() => {
+                      setSelectedStrategy(strategy.id);
+                      scrollToPipelineSection();
+                    }}
                     disabled={isRunning}
                     className={clsx(
                       "text-left rounded-lg p-3 border transition-all duration-200",
@@ -487,14 +507,16 @@ export function SearchScreen() {
           </motion.div>
         )}
 
-        {/* Run button + status */}
+        {/* Run + pipeline progress — scroll target for strategy / run actions */}
         <motion.div
+          ref={pipelineSectionRef}
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4, delay: 0.3, ease: 'easeOut' }}
-          className="flex flex-col items-center gap-3"
+          className="flex flex-col items-center gap-3 w-full scroll-mt-6 pb-8"
         >
           <button
+            type="button"
             onClick={handleRun}
             disabled={isRunning || runMode === 'none'}
             className="flex items-center gap-2 bg-accent-signal text-bg-void px-6 py-2.5 rounded-lg text-sm font-bold hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200 font-display"

@@ -60,7 +60,7 @@ class AcquisitionConfig:
     api_key: str
     data_dir: Path = Path("data/raw")
     timeframes: list[str] = field(default_factory=lambda: ["D", "4H", "1H"])
-    daily_lookback_days: int = 730
+    daily_lookback_days: int = 5475
     intraday_lookback_days: int = 180
     checkpoint_file: str = "acquisition_checkpoint.json"
     max_concurrent: int = MAX_CONCURRENT_REQUESTS

@@ -12,8 +12,12 @@ const STRATEGY_LABELS: Record<string, string> = {
   earnings_play: 'Earnings Play',
   ema_stack_momentum: 'EMA Stack',
   ema_21_pullback: 'EMA 21 Pullback',
+  ema_50_200_golden_cross: '50/200 Golden',
+  opening_range_breakout: 'ORB',
   value_accumulation: 'Value Accum.',
   intraday_scalp: 'Intraday Scalp',
+  crypto_swing: 'Crypto Swing',
+  crypto_intraday: 'Crypto Intraday',
 };
 
 const STRATEGY_COLORS: Record<string, string> = {
@@ -25,8 +29,12 @@ const STRATEGY_COLORS: Record<string, string> = {
   earnings_play: 'border-accent-alert/30 bg-accent-alert/5',
   ema_stack_momentum: 'border-accent-profit/30 bg-accent-profit/5',
   ema_21_pullback: 'border-accent-signal/30 bg-accent-signal/5',
+  ema_50_200_golden_cross: 'border-accent-profit/30 bg-accent-profit/5',
+  opening_range_breakout: 'border-accent-electric/30 bg-accent-electric/5',
   value_accumulation: 'border-accent-electric/30 bg-accent-electric/5',
   intraday_scalp: 'border-accent-alert/30 bg-accent-alert/5',
+  crypto_swing: 'border-accent-electric/30 bg-accent-electric/5',
+  crypto_intraday: 'border-accent-alert/30 bg-accent-alert/5',
 };
 
 function ScoreBar({ value, max = 1 }: { value: number; max?: number }) {
@@ -81,11 +89,12 @@ function TickerRow({ item }: { item: ScannerResultItem }) {
 
 interface ScannerResultsGridProps {
   results: ScannerLatestResponse;
-  onSelectStrategy: (strategyType: string, tickers: string[]) => void;
+  /** Run full analysis for this scanner bucket (same as picking the template + Run Analysis). */
+  onRunScannerStrategy: (strategyType: string, tickers: string[]) => void | Promise<void>;
   disabled?: boolean;
 }
 
-export function ScannerResultsGrid({ results, onSelectStrategy, disabled }: ScannerResultsGridProps) {
+export function ScannerResultsGrid({ results, onRunScannerStrategy, disabled }: ScannerResultsGridProps) {
   const strategies = Object.entries(results.strategies);
   if (strategies.length === 0) return null;
 
@@ -114,7 +123,8 @@ export function ScannerResultsGrid({ results, onSelectStrategy, disabled }: Scan
               </span>
             </div>
             <button
-              onClick={() => onSelectStrategy(strategyType, items.map(i => i.ticker))}
+              type="button"
+              onClick={() => void onRunScannerStrategy(strategyType, items.map((i) => i.ticker))}
               disabled={disabled}
               className="flex items-center gap-1 text-[10px] font-display text-accent-signal hover:text-accent-signal/80 transition-colors disabled:opacity-40"
             >
@@ -123,16 +133,17 @@ export function ScannerResultsGrid({ results, onSelectStrategy, disabled }: Scan
             </button>
           </div>
 
-          {/* Ticker list */}
-          <div className="space-y-0.5">
-            {items.slice(0, 5).map((item) => (
-              <TickerRow key={item.ticker} item={item} />
-            ))}
-            {items.length > 5 && (
-              <div className="text-[9px] text-text-muted font-body text-center pt-1">
-                +{items.length - 5} more
-              </div>
+          {/* Ticker list — fixed viewport, scroll for full list */}
+          <div
+            className={clsx(
+              'max-h-40 overflow-y-auto overflow-x-hidden overscroll-y-contain space-y-0.5',
+              'pr-1 -mr-1 [scrollbar-width:thin]',
+              '[scrollbar-color:var(--border-gutter)_transparent]',
             )}
+          >
+            {items.map((item) => (
+              <TickerRow key={`${item.ticker}-${strategyType}`} item={item} />
+            ))}
           </div>
 
           {/* Matched rules summary */}

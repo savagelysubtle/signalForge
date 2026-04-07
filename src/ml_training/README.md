@@ -43,7 +43,7 @@ cd src/ml_training
 uv sync --all-groups --prerelease=allow
 
 # 1. Pull historical data from FMP (requires FMP_API_KEY in .env)
-uv run ml-train acquire --category all --lookback-days 730 --timeframes D,4H,1H,15m,1m
+uv run ml-train acquire --category all --lookback-days 5475 --timeframes D,4H,1H,15m,1m
 
 # 2. Build strategy-aware feature datasets (--augment adds synthetic data for small strategies)
 uv run ml-train build-dataset --augment
@@ -74,7 +74,7 @@ uv python install 3.14t
 uv sync --all-groups --python 3.14t --prerelease=allow
 
 # 1. Acquire data (parallel Binance/yfinance downloads)
-uv run --python 3.14t python -X gil=0 -m ml_training.pipeline.cli acquire --category all --lookback-days 730 --timeframes D,4H,1H,15m,1m
+uv run --python 3.14t python -X gil=0 -m ml_training.pipeline.cli acquire --category all --lookback-days 5475 --timeframes W,D,4H,1H,15m,1m
 
 # 2. Build datasets (parallel per-ticker feature engineering + augmentation)
 uv run --python 3.14t python -X gil=0 -m ml_training.pipeline.cli build-dataset --augment
@@ -97,17 +97,17 @@ uv run --python 3.14t python -X gil=0 -m ml_training.pipeline.cli promote
 All commands are invoked via `uv run ml-train <command>` or
 `uv run python -m ml_training.pipeline.cli <command>`.
 
-| Command | Description | Key Flags |
-|---------|-------------|-----------|
-| `acquire` | Pull OHLCV + indicators + fundamentals from FMP, yfinance, Binance | `--category {all,tsx,us,crypto}`, `--timeframes D,4H,1H,15m,1m`, `--lookback-days 730` |
-| `build-dataset` | Strategy-aware feature extraction, labeling, FFD, triple barrier, TSFresh | `--data-dir`, `--augment` |
-| `validate` | Dataset quality checks (leakage, balance, counts) | `--data-dir` |
-| `tune` | Hyperparameter search (GT-Score objective via grid or Optuna) | `--n-trials N`, `--per-strategy`, `--strategy <key>`, `--method {grid,optuna}` |
-| `train` | Train-judge loop until quality bar is met | `--rounds N`, `--per-strategy`, `--three-class`, `--model {lgbm,tabpfn,ensemble}`, `--meta-label`, `--regime-split` |
-| `verify` | Verify acquired raw data quality (gaps, issues) | `--data-dir` |
-| `promote` | Copy latest passing artifacts to backend inference path | — |
-| `resolve-outcomes` | Match pending predictions against actual prices | `--horizon N` |
-| `report-outcomes` | Print rolling accuracy dashboard | `--data-dir` |
+| Command            | Description                                                               | Key Flags                                                                                                           |
+| ------------------ | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `acquire`          | Pull OHLCV + indicators + fundamentals from FMP, yfinance, Binance        | `--category {all,tsx,us,crypto}`, `--timeframes D,4H,1H,15m,1m`, `--lookback-days 5475`                             |
+| `build-dataset`    | Strategy-aware feature extraction, labeling, FFD, triple barrier, TSFresh | `--data-dir`, `--augment`                                                                                           |
+| `validate`         | Dataset quality checks (leakage, balance, counts)                         | `--data-dir`                                                                                                        |
+| `tune`             | Hyperparameter search (GT-Score objective via grid or Optuna)             | `--n-trials N`, `--per-strategy`, `--strategy <key>`, `--method {grid,optuna}`                                      |
+| `train`            | Train-judge loop until quality bar is met                                 | `--rounds N`, `--per-strategy`, `--three-class`, `--model {lgbm,tabpfn,ensemble}`, `--meta-label`, `--regime-split` |
+| `verify`           | Verify acquired raw data quality (gaps, issues)                           | `--data-dir`                                                                                                        |
+| `promote`          | Copy latest passing artifacts to backend inference path                   | —                                                                                                                   |
+| `resolve-outcomes` | Match pending predictions against actual prices                           | `--horizon N`                                                                                                       |
+| `report-outcomes`  | Print rolling accuracy dashboard                                          | `--data-dir`                                                                                                        |
 
 Global flags: `-v` / `--verbose` for debug logging.
 
@@ -196,11 +196,12 @@ finite-sample guarantees, Platt scaling and Isotonic Regression also available.
 Mondrian conformal prediction provides per-strategy conditional coverage.
 
 **Training modes:**
+
 - `--per-strategy` trains separate models per strategy type (swing, momentum,
   earnings_play, etc.)
 - Default trains a combined model with `strategy_type` as a categorical feature
-- Binary `profitable` target is now the default (use `--three-class` for the
-  old UP/DOWN/FLAT direction classification)
+- Binary `profitable` target is now the default (use `--three-class` for the old
+  UP/DOWN/FLAT direction classification)
 - `--model tabpfn` uses TabPFN v2 (zero-tuning transformer, requires `tabpfn`)
 - `--model ensemble` uses a stacked ensemble of LightGBM + CatBoost + XGBoost
   (requires `catboost` and `xgboost`)
@@ -212,22 +213,22 @@ Mondrian conformal prediction provides per-strategy conditional coverage.
 Six independent validation layers, each deliberately simpler than what it
 judges:
 
-| Layer | What It Checks | Tool |
-|-------|---------------|------|
-| Calibrator | Probability calibration quality (ECE, Brier) | Platt / Venn-Abers |
-| Conformal | Prediction set coverage guarantees | MAPIE |
-| Drift Monitor | Feature distribution shift, concept drift | PSI, KS, SHAP importance, ADWIN |
-| WFO Validator | CPCV integrity, purge/embargo, overfit detection | Pure statistics + DSR |
-| Strategy Audit | Per-strategy accuracy with sample thresholds | Accuracy checks |
-| Reliability | Meta-learner predicting "will this prediction be correct?" | Logistic Regression |
+| Layer          | What It Checks                                             | Tool                            |
+| -------------- | ---------------------------------------------------------- | ------------------------------- |
+| Calibrator     | Probability calibration quality (ECE, Brier)               | Platt / Venn-Abers              |
+| Conformal      | Prediction set coverage guarantees                         | MAPIE                           |
+| Drift Monitor  | Feature distribution shift, concept drift                  | PSI, KS, SHAP importance, ADWIN |
+| WFO Validator  | CPCV integrity, purge/embargo, overfit detection           | Pure statistics + DSR           |
+| Strategy Audit | Per-strategy accuracy with sample thresholds               | Accuracy checks                 |
+| Reliability    | Meta-learner predicting "will this prediction be correct?" | Logistic Regression             |
 
 **Verdicts:** `PASS` (promote to shadow), `CONDITIONAL_PASS` (approve subset of
 strategies), `FAIL` (retrain with adjustments).
 
 ## Environment Variables
 
-| Variable | Required | Description |
-|----------|----------|-------------|
+| Variable      | Required            | Description                     |
+| ------------- | ------------------- | ------------------------------- |
 | `FMP_API_KEY` | Yes (for `acquire`) | Financial Modeling Prep API key |
 
 The CLI automatically loads `.env` from the project root or parent directories.
@@ -241,6 +242,7 @@ Core: `lightgbm`, `scikit-learn`, `joblib`, `pandas`, `numpy`, `pyarrow`,
 
 Optional (no pre-built wheels for Python 3.14t yet — code has graceful
 `ImportError` fallbacks):
+
 - `catboost`, `xgboost` — needed for `--model ensemble`
 - `tabpfn` — needed for `--model tabpfn`
 - `river` — needed for ADWIN drift-triggered retraining
@@ -249,33 +251,33 @@ Dev: `ruff`, `ty`
 
 ## Free-Threading (Python 3.14+)
 
-The pipeline exploits Python 3.14's free-threading (PEP 703 / PEP 779)
-to parallelise CPU-bound work via `ThreadPoolExecutor`. When the GIL is
-disabled, threads achieve true multi-core parallelism with zero
-serialisation overhead — DataFrames and model objects stay in shared
-memory instead of being pickled across process boundaries.
+The pipeline exploits Python 3.14's free-threading (PEP 703 / PEP 779) to
+parallelise CPU-bound work via `ThreadPoolExecutor`. When the GIL is disabled,
+threads achieve true multi-core parallelism with zero serialisation overhead —
+DataFrames and model objects stay in shared memory instead of being pickled
+across process boundaries.
 
-**All parallelism is opt-in and gracefully degrades.** When the GIL is
-active (default build), CPU-bound code paths fall back to sequential
-execution. I/O-bound paths (Binance downloads) always use threads since
-the GIL is released during I/O anyway.
+**All parallelism is opt-in and gracefully degrades.** When the GIL is active
+(default build), CPU-bound code paths fall back to sequential execution.
+I/O-bound paths (Binance downloads) always use threads since the GIL is released
+during I/O anyway.
 
 ### Where it helps
 
-| Area | Mechanism | Est. Speedup |
-|------|-----------|--------------|
-| Dataset building (tickers) | `ThreadPoolExecutor` per ticker | 4-8x |
-| Hyperparameter grid search | Parallel grid configs | 3-6x |
-| Per-strategy training | Concurrent strategy models | 3-4x |
-| SHAP analysis | Two parallel `shap_values` calls | ~2x |
-| Indicator computation | Parallel ticker x timeframe pairs | 3-5x |
-| Binance downloads | Parallel HTTP downloads (I/O) | 5-10x |
+| Area                       | Mechanism                         | Est. Speedup |
+| -------------------------- | --------------------------------- | ------------ |
+| Dataset building (tickers) | `ThreadPoolExecutor` per ticker   | 4-8x         |
+| Hyperparameter grid search | Parallel grid configs             | 3-6x         |
+| Per-strategy training      | Concurrent strategy models        | 3-4x         |
+| SHAP analysis              | Two parallel `shap_values` calls  | ~2x          |
+| Indicator computation      | Parallel ticker x timeframe pairs | 3-5x         |
+| Binance downloads          | Parallel HTTP downloads (I/O)     | 5-10x        |
 
 ### How to enable
 
-**Important:** The standard `python 3.14` build has the GIL compiled in
-and cannot disable it at runtime.  You need the separate free-threaded
-build, identified by the `t` suffix (`3.14t`):
+**Important:** The standard `python 3.14` build has the GIL compiled in and
+cannot disable it at runtime. You need the separate free-threaded build,
+identified by the `t` suffix (`3.14t`):
 
 ```bash
 # Install the free-threaded interpreter variant (note the 't' suffix)
@@ -290,25 +292,27 @@ uv run --python 3.14t python -X gil=0 -m ml_training.pipeline.cli train
 PYTHON_GIL=0 uv run --python 3.14t ml-train train
 ```
 
-Without the `t` suffix, you're on the standard build and the CLI will
-report:
+Without the `t` suffix, you're on the standard build and the CLI will report:
+
 ```
 Python 3.14.0 — GIL enabled (run with PYTHON_GIL=0 to enable free-threading)
 ```
 
 With the free-threaded build and `-X gil=0`:
+
 ```
 Python 3.14.0 — free-threading ACTIVE (GIL disabled)
 ```
 
-The pipeline works correctly in both modes — it simply falls back to
-sequential execution for CPU-bound work when the GIL is active.
-I/O-bound parallelism (Binance downloads) uses threads regardless since
-the GIL is released during I/O.
+The pipeline works correctly in both modes — it simply falls back to sequential
+execution for CPU-bound work when the GIL is active. I/O-bound parallelism
+(Binance downloads) uses threads regardless since the GIL is released during
+I/O.
 
 ### Module
 
 See `ml_training/threading.py` for the utility functions:
+
 - `is_free_threaded()` — check if the GIL is disabled
 - `optimal_workers(task_type)` — auto-detect worker count
 - `parallel_map(fn, items)` — parallel map with sequential fallback
@@ -332,11 +336,11 @@ that `promote` copies to `src/backend/ml/artifacts/`.
 
 ## References
 
-- Lopez de Prado -- *Advances in Financial Machine Learning* (2018) -- CPCV,
+- Lopez de Prado -- _Advances in Financial Machine Learning_ (2018) -- CPCV,
   purging, embargo, Deflated Sharpe Ratio
-- van der Laan et al. (2025) -- *Generalized Venn and Venn-Abers Calibration*
+- van der Laan et al. (2025) -- _Generalized Venn and Venn-Abers Calibration_
   (ICML 2025)
-- Kaya et al. (2025) -- *Conformal Prediction for Reliable Stock Selections*
+- Kaya et al. (2025) -- _Conformal Prediction for Reliable Stock Selections_
   (ICML Workshop)
 
 ## License

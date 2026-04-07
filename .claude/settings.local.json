@@ -64,7 +64,9 @@
       "Bash(bunx tsc:*)",
       "Bash(for f:*)",
       "Bash(do)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(python:*)",
+      "Bash(find D:/Coding/signalForge -name *.joblib -o -name *model* -type f)"
     ]
   }
 }

@@ -60,7 +60,7 @@ def download_daily_ohlcv(
     category: str,
     store: ParquetStore,
     completed: set[str],
-    lookback_years: int = 2,
+    lookback_years: int = 15,
     timeframe: str = "D",
 ) -> dict[str, int]:
     """Batch-download OHLCV for all tickers via yfinance.

@@ -337,13 +337,16 @@ async def run_pipeline(
         state = await heartbeat.get_current_state()
         if state.is_fresh():
             regime = RegimeOutput(**state.to_regime_output_dict())
-            await _save_stage_output(run_id, {
-                "stage": "regime",
-                "status": "success",
-                "model": "heartbeat-cache",
-                "duration_ms": 0,
-                "raw_response": f"Cached regime: {regime.regime_type}",
-            })
+            await _save_stage_output(
+                run_id,
+                {
+                    "stage": "regime",
+                    "status": "success",
+                    "model": "heartbeat-cache",
+                    "duration_ms": 0,
+                    "raw_response": f"Cached regime: {regime.regime_type}",
+                },
+            )
             logger.info("v1: Stage 0.5 using cached heartbeat: %s", regime.regime_type)
     except Exception as exc:
         logger.info("v1: Heartbeat unavailable, falling back to Perplexity: %s", exc)
@@ -369,7 +372,8 @@ async def run_pipeline(
                 )
             except Exception as exc:
                 logger.warning(
-                    "FMP regime ground truth fetch failed, proceeding without: %s", exc,
+                    "FMP regime ground truth fetch failed, proceeding without: %s",
+                    exc,
                 )
 
         try:
@@ -1170,7 +1174,7 @@ async def _run_pipeline_v2(
             strategy_type = config.strategy_type if hasattr(config, "strategy_type") else None
             scan_results = await scanner.get_latest_results(
                 strategy_type=strategy_type,
-                min_combined_score=0.52,
+                min_combined_score=0.45,
                 max_age_minutes=90,
             )
             if scan_results:

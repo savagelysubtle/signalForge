@@ -16,6 +16,7 @@ from typing import Any
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
+from sklearn.metrics import brier_score_loss, log_loss
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.preprocessing import LabelEncoder
 
@@ -120,7 +121,7 @@ class HyperparameterTuner:
     def __init__(
         self,
         target_col: str = "direction_10d",
-        n_cv_splits: int = 5,
+        n_cv_splits: int = 8,
         n_boost_rounds: int = 300,
         param_grid: list[dict[str, Any]] | None = None,
         purge_window: int = DEFAULT_PURGE_WINDOW,
@@ -214,8 +215,14 @@ class HyperparameterTuner:
                     eval_set=[(X_test, y_test)],
                     callbacks=[lgb.log_evaluation(0), lgb.early_stopping(50, verbose=False)],
                 )
-                fold_scores.append(float(np.mean(clf.predict(X_test) == y_test)))
-                fold_train_scores.append(float(np.mean(clf.predict(X_train) == y_train)))
+                if self._binary_mode:
+                    test_probs = clf.predict_proba(X_test)[:, 1]
+                    train_probs = clf.predict_proba(X_train)[:, 1]
+                    fold_scores.append(1.0 - float(brier_score_loss(y_test, test_probs)))
+                    fold_train_scores.append(1.0 - float(brier_score_loss(y_train, train_probs)))
+                else:
+                    fold_scores.append(-float(log_loss(y_test, clf.predict_proba(X_test))))
+                    fold_train_scores.append(-float(log_loss(y_train, clf.predict_proba(X_train))))
 
             mean_score = float(np.mean(fold_scores))
             std_score = float(np.std(fold_scores))
@@ -228,8 +235,8 @@ class HyperparameterTuner:
             return {
                 "params": params,
                 "full_params": full_params,
-                "mean_accuracy": mean_score,
-                "std_accuracy": std_score,
+                "mean_brier_skill": mean_score,
+                "std_brier_skill": std_score,
                 "overfit_gap": overfit_gap,
                 "fold_variance": fold_variance,
                 "composite_score": composite,
@@ -253,11 +260,11 @@ class HyperparameterTuner:
                     result = future.result()
                     results.append(result)
                     logger.info(
-                        "Config %d/%d: accuracy=%.3f±%.3f gap=%.3f composite=%.3f | %s",
+                        "Config %d/%d: brier_skill=%.3f±%.3f gap=%.3f composite=%.3f | %s",
                         idx + 1,
                         len(self._grid),
-                        result["mean_accuracy"],
-                        result["std_accuracy"],
+                        result["mean_brier_skill"],
+                        result["std_brier_skill"],
                         result["overfit_gap"],
                         result["composite_score"],
                         result["params"],
@@ -268,11 +275,11 @@ class HyperparameterTuner:
                 result = _evaluate_config(params)
                 results.append(result)
                 logger.info(
-                    "Config %d/%d: accuracy=%.3f±%.3f gap=%.3f composite=%.3f | %s",
+                    "Config %d/%d: brier_skill=%.3f±%.3f gap=%.3f composite=%.3f | %s",
                     i + 1,
                     len(self._grid),
-                    result["mean_accuracy"],
-                    result["std_accuracy"],
+                    result["mean_brier_skill"],
+                    result["std_brier_skill"],
                     result["overfit_gap"],
                     result["composite_score"],
                     result["params"],
@@ -358,6 +365,7 @@ class HyperparameterTuner:
                     "min_gain_to_split": trial.suggest_float("min_gain_to_split", 0.01, 1.0),
                 }
             )
+            decay_lambda = trial.suggest_float("decay_lambda", 0.0, 0.15)
 
             fold_test_scores: list[float] = []
             fold_train_scores: list[float] = []
@@ -380,8 +388,14 @@ class HyperparameterTuner:
                     eval_set=[(X_te, y_te)],
                     callbacks=[lgb.log_evaluation(0), lgb.early_stopping(50, verbose=False)],
                 )
-                fold_test_scores.append(float(np.mean(clf.predict(X_te) == y_te)))
-                fold_train_scores.append(float(np.mean(clf.predict(X_tr) == y_tr)))
+                if self._binary_mode:
+                    te_probs = clf.predict_proba(X_te)[:, 1]
+                    tr_probs = clf.predict_proba(X_tr)[:, 1]
+                    fold_test_scores.append(1.0 - float(brier_score_loss(y_te, te_probs)))
+                    fold_train_scores.append(1.0 - float(brier_score_loss(y_tr, tr_probs)))
+                else:
+                    fold_test_scores.append(-float(log_loss(y_te, clf.predict_proba(X_te))))
+                    fold_train_scores.append(-float(log_loss(y_tr, clf.predict_proba(X_tr))))
 
             mean_test = float(np.mean(fold_test_scores))
             mean_train = float(np.mean(fold_train_scores))
@@ -409,9 +423,10 @@ class HyperparameterTuner:
             best_full_params["num_class"] = 3
 
         logger.info(
-            "Optuna best: composite=%.4f after %d trials | %s",
+            "Optuna best: composite=%.4f after %d trials (decay_lambda=%.3f) | %s",
             best_trial.value,
             n_trials,
+            best_trial.params.get("decay_lambda", 0.0),
             best_trial.params,
         )
 

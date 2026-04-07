@@ -108,7 +108,7 @@ def _to_internal_symbol(binance_pair: str) -> str:
 def _generate_monthly_urls(
     pair: str,
     interval: str,
-    months_back: int = 24,
+    months_back: int = 180,
 ) -> list[tuple[str, str]]:
     """Generate monthly archive URLs for a pair/interval.
 
@@ -202,7 +202,7 @@ def download_crypto_ohlcv(
     store: ParquetStore,
     completed: set[str],
     pairs: list[str] | None = None,
-    months_back: int = 24,
+    months_back: int = 180,
 ) -> dict[str, int]:
     """Download crypto OHLCV from Binance public data (free, no auth).
 

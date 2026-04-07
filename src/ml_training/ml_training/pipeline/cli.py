@@ -511,7 +511,7 @@ def cmd_acquire_missing(args: argparse.Namespace) -> None:
 
     from ml_training.data.yfinance_provider import download_daily_ohlcv
 
-    lookback = getattr(args, "lookback_years", 2)
+    lookback = getattr(args, "lookback_years", 15)
 
     if tsx_missing:
         print(f"\nAcquiring {len(tsx_missing)} TSX tickers via yfinance...")
@@ -535,7 +535,7 @@ def cmd_acquire_missing(args: argparse.Namespace) -> None:
             store=store,
             completed=set(),
             pairs=binance_pairs,
-            months_back=24,
+            months_back=lookback * 12,
         )
 
     new_existing = set(store.list_tickers("prices", "D"))
@@ -784,7 +784,7 @@ def main() -> None:
     )
     p_acquire.add_argument("--data-dir", default="data/raw", help="Output directory")
     p_acquire.add_argument("--timeframes", default="D,4H,1H", help="Comma-separated timeframes")
-    p_acquire.add_argument("--lookback-days", type=int, default=730, help="Daily lookback (days)")
+    p_acquire.add_argument("--lookback-days", type=int, default=5475, help="Daily lookback (days)")
     p_acquire.add_argument("--category", choices=["all", "tsx", "us", "crypto"], default="all")
     p_acquire.set_defaults(func=cmd_acquire)
 
@@ -902,7 +902,7 @@ def main() -> None:
     )
     p_acq_miss.add_argument("--data-dir", default="data/raw")
     p_acq_miss.add_argument(
-        "--lookback-years", type=int, default=2, help="Years of history to fetch"
+        "--lookback-years", type=int, default=15, help="Years of history to fetch"
     )
     p_acq_miss.set_defaults(func=cmd_acquire_missing)
 
