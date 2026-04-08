@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "signalforge": {
+      "command": "uv",
+      "args": ["--directory", "src/mcp_server", "run", "--python", "3.14.3", "signalforge-mcp"],
+      "env": {
+        "SIGNALFORGE_BACKEND_URL": "http://localhost:8420",
+        "IBKR_HOST": "127.0.0.1",
+        "IBKR_PORT": "7497",
+        "IBKR_PAPER": "true"
+      }
+    }
+  }
+}
