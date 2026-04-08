@@ -462,6 +462,14 @@ class ChartError(BaseModel):
     error: str = ""
 
 
+class StageError(BaseModel):
+    """Structured error from a failed pipeline stage."""
+
+    stage: str
+    error: str
+    type: str = ""
+
+
 class PipelineResult(BaseModel):
     """Complete output from a full pipeline run."""
 
@@ -475,7 +483,7 @@ class PipelineResult(BaseModel):
     chart_errors: list[ChartError] = Field(default_factory=list)
     sentiment_analyses: list[SentimentAnalysis] = Field(default_factory=list)
     recommendations: list[Recommendation] = Field(default_factory=list)
-    stage_errors: list[dict] = Field(default_factory=list)
+    stage_errors: list[StageError] = Field(default_factory=list)
     total_duration_seconds: float = 0.0
     prompt_versions: dict[str, str] = Field(default_factory=dict)
     chart_indicators: list[str] = Field(
@@ -716,8 +724,8 @@ class StrategyConfig(BaseModel):
     recommended: bool = False
     strategy_type: str = "swing"
 
-    # Pipeline version (v1 = legacy sequential, v2 = parallel independent tracks)
-    pipeline_version: Literal["v1", "v2"] = "v2"
+    # Pipeline version (v2 = parallel independent tracks, v1 removed)
+    pipeline_version: Literal["v2"] = "v2"
 
 
 # ---------------------------------------------------------------------------
@@ -771,6 +779,53 @@ class DecisionResponse(BaseModel):
     ticker: str = ""
     action: str = ""
     confidence: float = 0.0
+
+
+class BrokerageOpenRequest(BaseModel):
+    """Record an open position from IBKR execution (MCP automation)."""
+
+    recommendation_id: str
+    shares: int = Field(ge=1)
+    entry_price: float = Field(gt=0)
+    brokerage_order_id: str = Field(min_length=1)
+    stop_loss: float | None = None
+    take_profit: float | None = None
+    currency: str = "USD"
+    entry_timestamp: str | None = None
+    notes: str = ""
+
+
+class SectorConcentrationRequest(BaseModel):
+    """Portfolio sector concentration check for a proposed US equity trade."""
+
+    open_position_symbols: list[str] = Field(default_factory=list)
+    proposed_symbol: str = Field(min_length=1)
+    max_positions_per_sector: int = Field(default=2, ge=1, le=20)
+
+
+class SectorConcentrationResponse(BaseModel):
+    """Result of sector concentration analysis."""
+
+    passed: bool
+    message: str
+    proposed_symbol: str
+    proposed_sector: str
+    positions_in_sector_after_trade: int
+    max_positions_per_sector: int
+    skipped: bool = False
+
+
+class DailyOutcomeSummary(BaseModel):
+    """Aggregated logged outcomes for the current US market calendar day (ET)."""
+
+    trading_date_et: str
+    closed_trades: int
+    winning_trades: int
+    losing_trades: int
+    breakeven_trades: int
+    realized_pnl_dollars: float
+    opened_trades: int
+    open_tracked_positions: int
 
 
 class OutcomeCreate(BaseModel):

@@ -47,6 +47,7 @@ class BackendClient:
         strategy_id: str | None = None,
         manual_tickers: list[str] | None = None,
         user_prompt: str | None = None,
+        screener_overrides: dict[str, Any] | None = None,
     ) -> str:
         """Trigger a pipeline run. Returns the run_id.
 
@@ -54,6 +55,7 @@ class BackendClient:
             strategy_id: Strategy ID to use for the run.
             manual_tickers: Explicit tickers to analyze.
             user_prompt: Free-form prompt for discovery mode.
+            screener_overrides: FMP screener overrides (sector, industry, exchange, etc.).
 
         Returns:
             The run_id string for polling progress.
@@ -68,6 +70,8 @@ class BackendClient:
             body["manual_tickers"] = manual_tickers
         if user_prompt:
             body["user_prompt"] = user_prompt
+        if screener_overrides:
+            body["screener_overrides"] = screener_overrides
 
         resp = await self._client.post("/api/pipeline/run", json=body)
         resp.raise_for_status()
@@ -145,6 +149,36 @@ class BackendClient:
             Recommendation dict with all fields.
         """
         resp = await self._client.get(f"/api/recommendations/{rec_id}")
+        resp.raise_for_status()
+        return resp.json()
+
+    async def post_sector_concentration(
+        self,
+        open_symbols: list[str],
+        proposed_symbol: str,
+        max_positions_per_sector: int,
+    ) -> dict[str, Any]:
+        """Check GICS sector concentration via backend + FMP."""
+        resp = await self._client.post(
+            "/api/execution/sector-concentration",
+            json={
+                "open_position_symbols": open_symbols,
+                "proposed_symbol": proposed_symbol,
+                "max_positions_per_sector": max_positions_per_sector,
+            },
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def post_brokerage_open(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Record an open position after IBKR execution."""
+        resp = await self._client.post("/api/outcomes/brokerage-open", json=payload)
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_daily_outcome_summary(self) -> dict[str, Any]:
+        """Aggregated Supabase outcomes for the current US Eastern trading day."""
+        resp = await self._client.get("/api/outcomes/daily-summary")
         resp.raise_for_status()
         return resp.json()
 

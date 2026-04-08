@@ -83,7 +83,7 @@ def _get_client() -> AsyncAnthropic:
     return AsyncAnthropic(api_key=api_key)
 
 
-@with_validation_retry(schema=ChartAnalysis, max_retries=2)
+@with_validation_retry(schema=ChartAnalysis, max_retries=2, provider="anthropic")
 async def _call_claude_vision(
     system_prompt: str,
     user_prompt: str,

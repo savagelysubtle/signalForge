@@ -165,6 +165,7 @@ async def health_check() -> dict[str, str]:
 
 # --- Route registration (imported after app creation) ---
 from api.charts import router as charts_router  # noqa: E402
+from api.concentration import router as concentration_router  # noqa: E402
 from api.decisions import router as decisions_router  # noqa: E402
 from api.ml_predictions import router as ml_router  # noqa: E402
 from api.outcomes import router as outcomes_router  # noqa: E402
@@ -177,6 +178,7 @@ from api.settings import router as settings_router  # noqa: E402
 from api.strategies import router as strategies_router  # noqa: E402
 
 app.include_router(charts_router, prefix="/api")
+app.include_router(concentration_router, prefix="/api")
 app.include_router(decisions_router, prefix="/api")
 app.include_router(outcomes_router, prefix="/api")
 app.include_router(pipeline_router, prefix="/api")

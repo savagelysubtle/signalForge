@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
 from mcp_server.backend.client import get_backend_client
@@ -98,29 +99,54 @@ async def preview_order(rec_id: str, size_override_pct: float | None = None) -> 
 
 
 async def place_order(
-    rec_id: str, confirmed: bool = False, size_override_pct: float | None = None
+    rec_id: str,
+    confirmed: bool = False,
+    auto: bool = False,
+    size_override_pct: float | None = None,
 ) -> str:
     """Place a bracket order for a recommendation on IBKR.
 
-    REQUIRES confirmed=true. Call preview_order first to review the trade,
-    then call this with confirmed=true after user approval.
+    Default: ``confirmed=true`` after human approval. Optional automation: set
+    environment ``AUTO_EXECUTE_ENABLED=true`` and call with ``auto=true``; the
+    order proceeds only if confidence is at least ``AUTO_EXECUTE_MIN_CONFIDENCE``
+    (default 0.75) and every risk gate passes.
 
     Args:
         rec_id: The recommendation ID from a pipeline result.
-        confirmed: Must be true to actually place the order. Safety gate.
+        confirmed: Must be true unless auto-execute path applies.
+        auto: Request auto-execute (requires env opt-in + confidence threshold).
         size_override_pct: Override position size percent (optional, max 5%).
     """
-    if not confirmed:
-        return json.dumps(
-            {
-                "error": "Order not confirmed. Call preview_order first, then place_order with confirmed=true after user approval.",
-                "hint": "This is a safety gate — orders require explicit confirmation.",
-            }
-        )
-
     rec = await _fetch_recommendation(rec_id)
     if "error" in rec:
         return json.dumps(rec)
+
+    conf = float(rec.get("confidence") or 0.0)
+    allow_auto = (
+        settings.auto_execute_enabled and auto and conf >= settings.auto_execute_min_confidence
+    )
+    if not confirmed and not allow_auto:
+        if auto and not settings.auto_execute_enabled:
+            return json.dumps(
+                {
+                    "error": "Auto-execute is disabled. Set AUTO_EXECUTE_ENABLED=true in the MCP environment.",
+                }
+            )
+        if auto and conf < settings.auto_execute_min_confidence:
+            return json.dumps(
+                {
+                    "error": (
+                        f"Confidence {conf:.2f} is below auto-execute minimum "
+                        f"{settings.auto_execute_min_confidence:.2f}"
+                    ),
+                }
+            )
+        return json.dumps(
+            {
+                "error": "Order not confirmed. Call preview_order first, then place_order with confirmed=true after user approval.",
+                "hint": "This is a safety gate — orders require explicit confirmation (or auto=true with AUTO_EXECUTE_ENABLED).",
+            }
+        )
 
     ib_action = map_action_to_ib(rec.get("action", ""))
     if not ib_action:
@@ -156,7 +182,11 @@ async def place_order(
         )
 
     # Build order components
-    contract = build_contract(rec.get("ticker", ""))
+    try:
+        contract = build_contract(rec.get("ticker", ""))
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
+
     bracket = build_bracket_order(
         action=ib_action,
         quantity=quantity,
@@ -186,6 +216,27 @@ async def place_order(
         rec["take_profit"],
     )
 
+    outcome_note = ""
+    try:
+        bc = get_backend_client()
+        await bc.post_brokerage_open(
+            {
+                "recommendation_id": rec_id,
+                "shares": quantity,
+                "entry_price": entry_price,
+                "brokerage_order_id": str(parent_trade.order.orderId),
+                "stop_loss": rec.get("stop_loss"),
+                "take_profit": rec.get("take_profit"),
+                "currency": "USD",
+                "entry_timestamp": datetime.now(UTC).isoformat(),
+                "notes": "MCP IBKR bracket submission",
+            }
+        )
+        outcome_note = "Recorded open outcome in SignalForge (brokerage-open)."
+    except Exception as exc:
+        logger.warning("Brokerage outcome logging failed (order still placed): %s", exc)
+        outcome_note = f"Outcome logging failed: {exc}"
+
     return json.dumps(
         {
             "status": "submitted",
@@ -198,6 +249,8 @@ async def place_order(
             "stop_loss": rec["stop_loss"],
             "take_profit": rec["take_profit"],
             "order_status": parent_trade.orderStatus.status,
+            "auto_executed": allow_auto,
+            "outcome_log": outcome_note,
         },
         indent=2,
     )
@@ -248,7 +301,11 @@ async def close_position(ticker: str) -> str:
     if action is None:
         return json.dumps({"error": f"Position for {symbol} is flat (quantity=0)"})
 
-    contract = build_contract(ticker)
+    try:
+        contract = build_contract(ticker)
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
+
     order = build_close_order(action, int(abs(quantity)))
 
     ib = await get_ibkr_client().ensure_connected()

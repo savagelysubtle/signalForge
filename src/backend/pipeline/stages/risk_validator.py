@@ -14,9 +14,55 @@ from typing import TYPE_CHECKING
 from pipeline.schemas import ChartAnalysis, Recommendation, StrategyConfig
 
 if TYPE_CHECKING:
-    from services.fmp_service import FmpEnrichedStock
+    from services.fmp_service import FmpEnrichedStock, FmpQuote
 
 logger = logging.getLogger(__name__)
+
+# Maximum allowed deviation from live quote price (as a fraction)
+_MAX_PRICE_DEVIATION = 0.10  # 10%
+
+
+def _check_price_sanity(
+    rec: Recommendation,
+    live_quotes: dict[str, FmpQuote] | None,
+) -> list[str]:
+    """Validate that LLM-generated prices are sane relative to the live quote.
+
+    Checks entry, stop loss, and take profit against the last traded price.
+    Flags any price that deviates more than 10% from the live quote.
+
+    Args:
+        rec: Recommendation with price fields.
+        live_quotes: Live quotes keyed by ticker.
+
+    Returns:
+        List of violation strings (empty if all prices are sane).
+    """
+    if not live_quotes:
+        return []
+
+    quote = live_quotes.get(rec.ticker)
+    if not quote or not quote.price or quote.price <= 0:
+        return []
+
+    violations: list[str] = []
+    last_price = quote.price
+
+    for field_name, field_value in [
+        ("entry_price", rec.entry_price),
+        ("stop_loss", rec.stop_loss),
+        ("take_profit", rec.take_profit),
+    ]:
+        if field_value is None or field_value <= 0:
+            continue
+        deviation = abs(field_value - last_price) / last_price
+        if deviation > _MAX_PRICE_DEVIATION:
+            violations.append(
+                f"Possibly hallucinated {field_name}: ${field_value:.2f} is "
+                f"{deviation:.0%} from live price ${last_price:.2f}"
+            )
+
+    return violations
 
 
 def _parse_atr_from_charts(
@@ -43,6 +89,7 @@ def validate_risks(
     config: StrategyConfig,
     charts: list[ChartAnalysis],
     fmp_context: dict[str, FmpEnrichedStock] | None = None,
+    live_quotes: dict[str, FmpQuote] | None = None,
 ) -> list[Recommendation]:
     """Run deterministic risk checks on each recommendation.
 
@@ -55,6 +102,7 @@ def validate_risks(
         config: Strategy configuration with risk params.
         charts: Claude chart analyses (used for ATR extraction).
         fmp_context: FMP enriched stock data keyed by ticker.
+        live_quotes: Live price quotes keyed by ticker for price sanity checks.
 
     Returns:
         The same list with risk fields populated in-place.
@@ -68,6 +116,9 @@ def validate_risks(
             rec.risk_violations = violations
             rec.risk_approved = True
             continue
+
+        # Price sanity check against live quotes
+        violations.extend(_check_price_sanity(rec, live_quotes))
 
         if rec.risk_reward_ratio is not None and rec.risk_reward_ratio < rp.min_risk_reward:
             violations.append(

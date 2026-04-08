@@ -43,7 +43,7 @@ def _get_client() -> genai.Client:
     return genai.Client(api_key=api_key)
 
 
-@with_validation_retry(schema=SentimentAnalysis, max_retries=2)
+@with_validation_retry(schema=SentimentAnalysis, max_retries=2, provider="google")
 async def _call_gemini(
     system_prompt: str,
     user_prompt: str,

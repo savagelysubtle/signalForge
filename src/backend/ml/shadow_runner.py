@@ -41,7 +41,7 @@ async def run_ml_shadow(
         List of ML predictions for each recommendation.
     """
     if not ml_model_available(strategy_type):
-        logger.debug("No ML model available for %s, skipping shadow predictions", strategy_type)
+        logger.warning("No ML model available for %s, skipping shadow predictions", strategy_type)
         return []
 
     predictions: list[MLPrediction] = []

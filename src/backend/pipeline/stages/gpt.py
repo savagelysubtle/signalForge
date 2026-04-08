@@ -67,7 +67,7 @@ def _get_client() -> AsyncOpenAI:
     return AsyncOpenAI(api_key=api_key)
 
 
-@with_validation_retry(schema=DebateCaseList, max_retries=2)
+@with_validation_retry(schema=DebateCaseList, max_retries=2, provider="openai")
 async def _call_gpt_bull(
     system_prompt: str,
     user_prompt: str,
@@ -87,7 +87,7 @@ async def _call_gpt_bull(
     return await _call_gpt(system_prompt, user_prompt, error_context=error_context)
 
 
-@with_validation_retry(schema=DebateCaseList, max_retries=2)
+@with_validation_retry(schema=DebateCaseList, max_retries=2, provider="openai")
 async def _call_gpt_bear(
     system_prompt: str,
     user_prompt: str,
@@ -107,7 +107,7 @@ async def _call_gpt_bear(
     return await _call_gpt(system_prompt, user_prompt, error_context=error_context)
 
 
-@with_validation_retry(schema=RecommendationList, max_retries=2)
+@with_validation_retry(schema=RecommendationList, max_retries=2, provider="openai")
 async def _call_gpt_judge(
     system_prompt: str,
     user_prompt: str,

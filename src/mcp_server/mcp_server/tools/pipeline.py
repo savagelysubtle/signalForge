@@ -16,23 +16,51 @@ async def run_pipeline(
     strategy_id: str | None = None,
     tickers: str | None = None,
     prompt: str | None = None,
+    sector: str | None = None,
+    industry: str | None = None,
+    market_cap_min: int | None = None,
+    market_cap_max: int | None = None,
 ) -> str:
     """Run the SignalForge analysis pipeline.
 
     Triggers a new pipeline run and returns the run_id for polling progress.
     Provide either a strategy_id, explicit tickers, or a free-form prompt.
+    Use sector/industry/market_cap filters to control the FMP pre-screener.
 
     Args:
         strategy_id: Strategy ID to use (call list_strategies to see available).
         tickers: Comma-separated ticker symbols to analyze (e.g. "AAPL,MSFT,NVDA").
         prompt: Free-form prompt for discovery mode (e.g. "find undervalued tech stocks").
+        sector: FMP sector filter (e.g. "Technology", "Healthcare", "Energy",
+            "Consumer Cyclical", "Industrials", "Financial Services",
+            "Basic Materials", "Communication Services", "Consumer Defensive",
+            "Real Estate", "Utilities").
+        industry: FMP industry filter (e.g. "Semiconductors", "Software—Application",
+            "Biotechnology", "Oil & Gas E&P", "Banks—Regional").
+        market_cap_min: Minimum market cap in dollars (e.g. 1000000000 for $1B).
+        market_cap_max: Maximum market cap in dollars.
     """
     client = get_backend_client()
     ticker_list = [t.strip() for t in tickers.split(",") if t.strip()] if tickers else None
+
+    overrides: dict[str, Any] = {"country": "US", "exchange": "NASDAQ"}
+    if sector:
+        overrides["sector"] = sector
+    if industry:
+        overrides["industry"] = industry
+    if market_cap_min is not None:
+        overrides["market_cap_min"] = market_cap_min
+    if market_cap_max is not None:
+        overrides["market_cap_max"] = market_cap_max
+
+    # Only send overrides if we have filters beyond the US default
+    screener_overrides = overrides if len(overrides) > 2 or not tickers else None
+
     run_id = await client.trigger_pipeline(
         strategy_id=strategy_id,
         manual_tickers=ticker_list,
         user_prompt=prompt,
+        screener_overrides=screener_overrides,
     )
     return json.dumps({"run_id": run_id, "status": "running"})
 

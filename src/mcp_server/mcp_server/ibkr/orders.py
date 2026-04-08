@@ -10,15 +10,18 @@ from ib_async import Contract, LimitOrder, MarketOrder, Order, Stock, StopOrder
 def build_contract(ticker: str) -> Contract:
     """Build an IB Contract from a TradingView-style ticker.
 
-    Handles formats like "NASDAQ:AAPL", "NYSE:IBM", "TSX:RY", or bare "AAPL".
-    US stocks route through SMART. Canadian stocks (TSX/TSXV) route through
-    their respective exchanges.
+    Only US exchanges are supported. Canadian and other non-US exchanges are
+    rejected to comply with CIRO regulations (DMR 3200 A.1.(b)(i)) that prohibit
+    Canadian residents from programmatic trading of Canadian-listed products.
 
     Args:
         ticker: TradingView-format ticker (e.g. "NASDAQ:AAPL" or "AAPL").
 
     Returns:
         An IB Stock contract ready for order submission.
+
+    Raises:
+        ValueError: If the ticker references a blocked (non-US) exchange.
     """
     if ":" in ticker:
         exchange_prefix, symbol = ticker.split(":", 1)
@@ -29,11 +32,19 @@ def build_contract(ticker: str) -> Contract:
     symbol = symbol.strip().upper()
     exchange_prefix = exchange_prefix.strip().upper()
 
-    # Canadian exchanges
-    if exchange_prefix in ("TSX", "TSXV"):
-        return Stock(symbol, exchange_prefix, "CAD")
+    if exchange_prefix in _BLOCKED_EXCHANGES:
+        raise ValueError(
+            f"Exchange '{exchange_prefix}' is blocked — only US exchanges are supported. "
+            f"Canadian products cannot be traded programmatically (CIRO DMR 3200)."
+        )
 
-    # Default: US stock via SMART routing
+    if exchange_prefix and exchange_prefix not in _TV_TO_IB_PRIMARY:
+        raise ValueError(
+            f"Unrecognized exchange '{exchange_prefix}' — only US exchanges are supported: "
+            f"{', '.join(sorted(_TV_TO_IB_PRIMARY.keys()))}"
+        )
+
+    # US stock via SMART routing
     primary = _TV_TO_IB_PRIMARY.get(exchange_prefix, "")
     contract = Stock(symbol, "SMART", "USD")
     if primary:
@@ -161,7 +172,10 @@ def close_action_for_position(quantity: float) -> str | None:
     return None
 
 
-# TradingView exchange prefix → IB primaryExchange
+# Non-US exchanges that must be rejected
+_BLOCKED_EXCHANGES: set[str] = {"TSX", "TSXV", "CSE", "NEO", "CNSX", "LSE", "HKEX", "ASX"}
+
+# TradingView exchange prefix → IB primaryExchange (US only)
 _TV_TO_IB_PRIMARY: dict[str, str] = {
     "NASDAQ": "NASDAQ",
     "NYSE": "NYSE",

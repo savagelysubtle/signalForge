@@ -58,7 +58,10 @@ def pre_filter_tickers(
     for ticker in tickers:
         stock = fmp_map.get(ticker)
         if not stock:
-            passed.append(ticker)
+            logger.warning(
+                "Pre-filter: dropping %s (not found in FMP data — possible hallucinated ticker)",
+                ticker,
+            )
             continue
 
         if (

@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from mcp_server.backend.client import get_backend_client
 from mcp_server.config import settings
+
+logger = logging.getLogger(__name__)
 
 ET = ZoneInfo("America/New_York")
 
@@ -99,6 +103,8 @@ async def run_risk_gates(
     result = RiskCheckResult()
     equity = account_summary.get("net_liquidation", 0.0)
 
+    result.add(_check_us_exchange(recommendation))
+    result.add(_check_cash_account(recommendation))
     result.add(_check_required_fields(recommendation))
     result.add(_check_confidence(recommendation))
     result.add(_check_ml_blocked(recommendation))
@@ -106,6 +112,8 @@ async def run_risk_gates(
     result.add(_check_portfolio_exposure(positions, equity))
     result.add(_check_market_hours())
     result.add(_check_rate_limit())
+    if settings.sector_concentration_enabled:
+        result.add(await _check_sector_concentration(recommendation, positions))
 
     return result
 
@@ -118,6 +126,50 @@ def record_order_placed() -> None:
 # ------------------------------------------------------------------
 # Individual risk checks
 # ------------------------------------------------------------------
+
+
+_US_EXCHANGES: set[str] = {"NASDAQ", "NYSE", "AMEX", "ARCA", "BATS", ""}
+
+
+def _check_us_exchange(rec: dict[str, Any]) -> RiskCheck:
+    ticker = rec.get("ticker", "")
+    exchange = ticker.split(":", 1)[0].strip().upper() if ":" in ticker else ""
+
+    if exchange and exchange not in _US_EXCHANGES:
+        return RiskCheck(
+            name="us_exchange",
+            passed=False,
+            message=f"Non-US exchange '{exchange}' blocked — only US products are supported",
+            value=exchange,
+        )
+    return RiskCheck(
+        name="us_exchange",
+        passed=True,
+        message=f"US exchange ({exchange or 'SMART'})",
+        value=exchange or "SMART",
+    )
+
+
+def _check_cash_account(rec: dict[str, Any]) -> RiskCheck:
+    if not settings.cash_account:
+        return RiskCheck(
+            name="cash_account", passed=True, message="Margin account — no restriction"
+        )
+
+    action = rec.get("action", "").upper()
+    if action == "SHORT":
+        return RiskCheck(
+            name="cash_account",
+            passed=False,
+            message="SHORT orders are not allowed on a cash account — long only",
+            value=action,
+        )
+    return RiskCheck(
+        name="cash_account",
+        passed=True,
+        message=f"Action '{action}' permitted on cash account",
+        value=action,
+    )
 
 
 def _check_required_fields(rec: dict[str, Any]) -> RiskCheck:
@@ -256,6 +308,60 @@ def _check_market_hours() -> RiskCheck:
         passed=True,
         message=f"Within market hours ({now_et.strftime('%H:%M ET')})",
         value=now_et.strftime("%H:%M ET"),
+    )
+
+
+async def _check_sector_concentration(
+    rec: dict[str, Any],
+    positions: list[dict[str, Any]],
+) -> RiskCheck:
+    """Limit how many open stock positions share the same GICS sector (FMP)."""
+    open_syms = [
+        str(p["ticker"])
+        for p in positions
+        if p.get("sec_type") == "STK" and abs(float(p.get("quantity") or 0)) > 0
+    ]
+    proposed = rec.get("ticker") or ""
+    if not proposed.strip():
+        return RiskCheck(
+            name="sector_concentration",
+            passed=False,
+            message="Missing ticker for sector concentration check",
+        )
+    try:
+        client = get_backend_client()
+        data = await client.post_sector_concentration(
+            open_syms,
+            proposed,
+            settings.max_positions_per_sector,
+        )
+    except Exception as exc:
+        logger.warning("Sector concentration backend call failed: %s", exc)
+        return RiskCheck(
+            name="sector_concentration",
+            passed=True,
+            message=f"Sector check skipped (backend unreachable: {exc})",
+        )
+
+    skipped = bool(data.get("skipped"))
+    passed = bool(data.get("passed", True))
+    msg = str(data.get("message", ""))
+    after = data.get("positions_in_sector_after_trade")
+    limit = data.get("max_positions_per_sector")
+    if skipped:
+        return RiskCheck(
+            name="sector_concentration",
+            passed=True,
+            message=msg or "Sector concentration skipped",
+            value=after,
+            limit=limit,
+        )
+    return RiskCheck(
+        name="sector_concentration",
+        passed=passed,
+        message=msg,
+        value=after,
+        limit=limit,
     )
 
 

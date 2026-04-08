@@ -45,6 +45,7 @@ mcp.tool()(execution.close_position)
 
 mcp.tool()(risk.get_daily_pnl)
 mcp.tool()(risk.get_risk_status)
+mcp.tool()(risk.get_daily_performance_summary)
 
 
 def main() -> None:
