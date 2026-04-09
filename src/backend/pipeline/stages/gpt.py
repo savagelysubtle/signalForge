@@ -14,9 +14,9 @@ import asyncio
 import logging
 import time
 
-from ml.schemas import GateResult
 from openai import AsyncOpenAI
 
+from ml.schemas import GateResult
 from pipeline.http_retry import with_transient_retry
 from pipeline.model_config import GPT_MODEL
 from pipeline.prompts.gpt_debate import (
