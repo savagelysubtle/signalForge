@@ -793,6 +793,42 @@ class BrokerageOpenRequest(BaseModel):
     currency: str = "USD"
     entry_timestamp: str | None = None
     notes: str = ""
+    signal_entry_price: float | None = Field(
+        default=None,
+        description="Pipeline signal entry; with entry_price, slippage_pct is stored on the outcome.",
+    )
+    signal_created_at: str | None = Field(
+        default=None,
+        description="Recommendation created_at ISO; with entry_timestamp, time_to_execution_minutes is stored.",
+    )
+
+
+class OutcomePatch(BaseModel):
+    """Partial update for an outcome (only sent fields are applied)."""
+
+    entry_price: float | None = None
+    exit_price: float | None = None
+    shares: int | None = None
+    pnl_dollars: float | None = None
+    pnl_percent: float | None = None
+    holding_days: int | None = None
+    exit_reason: str | None = None
+    notes: str | None = None
+    source: str | None = None
+    brokerage_order_id: str | None = None
+    commission: float | None = None
+    fees: float | None = None
+    currency: str | None = None
+    gross_pnl: float | None = None
+    net_pnl: float | None = None
+    entry_timestamp: str | None = None
+    exit_timestamp: str | None = None
+    stop_loss: float | None = None
+    take_profit: float | None = None
+    slippage_pct: float | None = None
+    time_to_execution_minutes: float | None = None
+    failure_mode: str | None = None
+    structured_analysis: dict | None = None
 
 
 class SectorConcentrationRequest(BaseModel):

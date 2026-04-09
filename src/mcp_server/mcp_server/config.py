@@ -47,6 +47,8 @@ class Settings(BaseModel):
         auto_execute_min_confidence: Minimum recommendation confidence for auto-execute.
         sector_concentration_enabled: Call backend FMP sector check before orders.
         max_positions_per_sector: Max open equity positions per GICS sector (excludes skip).
+        regime_sizing_enabled: Scale order quantity using backend heartbeat regime
+            (see ``REGIME_POSITION_MULTIPLIERS``).
     """
 
     backend_url: str = "http://localhost:8420"
@@ -69,6 +71,7 @@ class Settings(BaseModel):
     auto_execute_min_confidence: float = 0.75
     sector_concentration_enabled: bool = True
     max_positions_per_sector: int = 2
+    regime_sizing_enabled: bool = False
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -100,7 +103,18 @@ class Settings(BaseModel):
             ).lower()
             == "true",
             max_positions_per_sector=int(os.environ.get("MAX_POSITIONS_PER_SECTOR", "2")),
+            regime_sizing_enabled=os.environ.get("REGIME_SIZING_ENABLED", "false").lower()
+            == "true",
         )
 
 
 settings = Settings.from_env()
+
+# Heartbeat regime_type -> multiplier on calculated share quantity (long-only sizing).
+REGIME_POSITION_MULTIPLIERS: dict[str, float] = {
+    "risk_off": 0.5,
+    "high_volatility": 0.65,
+    "trending_bear": 0.75,
+    "range_bound": 0.85,
+    "trending_bull": 1.0,
+}

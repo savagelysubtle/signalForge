@@ -182,6 +182,30 @@ class BackendClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def list_open_outcomes(
+        self, *, source: str | None = "ibkr", limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """Outcomes with no exit price (optionally filtered by source)."""
+        params: dict[str, Any] = {"limit": limit}
+        if source is not None:
+            params["source"] = source
+        resp = await self._client.get("/api/outcomes/open", params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, list) else []
+
+    async def patch_outcome(self, outcome_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Partial-update an outcome row."""
+        resp = await self._client.patch(f"/api/outcomes/{outcome_id}", json=payload)
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_market_heartbeat(self) -> dict[str, Any]:
+        """Current market regime and session context from the backend scanner."""
+        resp = await self._client.get("/api/scanner/heartbeat")
+        resp.raise_for_status()
+        return resp.json()
+
 
 _client: BackendClient | None = None
 
