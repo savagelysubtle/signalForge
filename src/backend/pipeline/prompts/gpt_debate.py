@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from ml.pre_gpt import format_ml_prior_for_prompt, ml_escalation_user_block
+from ml.schemas import GateResult
 from pipeline.schemas import (
     ChartAnalysis,
     DebateCase,
@@ -24,9 +26,9 @@ from utils.hashing import prompt_hash
 if TYPE_CHECKING:
     from services.fmp_service import FmpEnrichedStock, FmpQuote
 
-BULL_PROMPT_VERSION = "v5"
-BEAR_PROMPT_VERSION = "v5"
-JUDGE_PROMPT_VERSION = "v14"
+BULL_PROMPT_VERSION = "v6"
+BEAR_PROMPT_VERSION = "v6"
+JUDGE_PROMPT_VERSION = "v15"
 
 _BIAS_SCORE: dict[str, int] = {
     "strongly_bullish": 2,
@@ -81,6 +83,9 @@ Guidelines:
 - Confidence reflects how strong the overall bull case is across tracks
   (0.7+ = compelling, 0.5-0.7 = moderate, <0.5 = weak)
 - Note when your bullish reading requires ignoring warnings from other tracks
+- If INDEPENDENT ML PRIOR (Track D) appears: it uses only numerical TA, FMP, and
+  regime - not LLM narrative. Treat it as a fourth independent signal. You may
+  still argue bull if tracks A-C are strong, but explicitly acknowledge ML tension.
 """
 
 BEAR_SYSTEM_PROMPT = """\
@@ -115,6 +120,9 @@ Guidelines:
 - Confidence reflects how strong the overall bear case is across tracks
   (0.7+ = compelling risk, 0.5-0.7 = moderate, <0.5 = weak)
 - Note when your bearish reading requires ignoring bullish signals from other tracks
+- If INDEPENDENT ML PRIOR (Track D) appears: it uses only numerical TA, FMP, and
+  regime - not LLM narrative. Treat it as a fourth independent signal. You may
+  still argue bear if tracks A-C justify risk, but explicitly acknowledge ML tension.
 """
 
 JUDGE_SYSTEM_PROMPT = """\
@@ -227,6 +235,12 @@ TRACK AGREEMENT DECISION RULES:
 - 2/3 agree but numerical TA contradicts → WATCH. Flag the discrepancy.
 - Any signal where ADX < 20 and strategy requires trending market → NO_TRADE
 - Momentum score near zero (-0.2 to 0.2) → WATCH unless other signals are strong
+
+INDEPENDENT ML PRIOR (Track D) — when present:
+- This is a statistical model on TA/FMP/regime only (no LLM text). It is not a veto
+  by itself, but strong disagreement with your intended action should lower confidence
+  or favor HOLD/WATCH/NO_TRADE unless Tracks A-C overwhelmingly agree.
+- Name ML explicitly in confidence_adjustment when it influenced your verdict.
 
 For track_agreement: assess each upstream analysis (Perplexity fundamentals,
 Gemini sentiment, Claude technicals) and classify its directional lean as
@@ -709,6 +723,19 @@ def _format_risk_assessments(
     return "\n".join(parts)
 
 
+def _format_ml_injection_for_gpt(
+    pre_gpt_ml: dict[str, GateResult] | None,
+    ml_escalation: bool,
+) -> str:
+    """Append independent ML prior (Track D) and optional escalation copy."""
+    if not pre_gpt_ml:
+        return ""
+    parts = [f"\n{format_ml_prior_for_prompt(pre_gpt_ml)}"]
+    if ml_escalation:
+        parts.append(ml_escalation_user_block())
+    return "".join(parts)
+
+
 # ---------------------------------------------------------------------------
 # Builder Functions (track-aware parallel architecture)
 # ---------------------------------------------------------------------------
@@ -725,6 +752,8 @@ def _build_debate_side_prompt(
     risk_assessments: list[RiskAssessment] | None = None,
     fmp_context: dict[str, FmpEnrichedStock] | None = None,
     live_quotes: dict[str, FmpQuote] | None = None,
+    pre_gpt_ml: dict[str, GateResult] | None = None,
+    ml_escalation: bool = False,
 ) -> str:
     """Build bull or bear analyst user prompt with shared track-aware framing.
 
@@ -739,6 +768,8 @@ def _build_debate_side_prompt(
         risk_assessments: Risk flags from deterministic post-filter.
         fmp_context: FMP enriched stock data keyed by ticker.
         live_quotes: Real-time FMP quotes keyed by ticker.
+        pre_gpt_ml: Per-ticker independent ML gate output before GPT.
+        ml_escalation: Add deeper-reconciliation instructions (gray ML / ambiguous).
 
     Returns:
         Formatted user prompt string.
@@ -786,6 +817,8 @@ def _build_debate_side_prompt(
     if risk_assessments:
         parts.append(f"\n## RISK ASSESSMENT\n{_format_risk_assessments(risk_assessments, tickers)}")
 
+    parts.append(_format_ml_injection_for_gpt(pre_gpt_ml, ml_escalation))
+
     parts.append(
         f"\nReturn your {case_word} case as JSON matching the schema in your instructions."
     )
@@ -802,6 +835,8 @@ def build_bull_prompt(
     risk_assessments: list[RiskAssessment] | None = None,
     fmp_context: dict[str, FmpEnrichedStock] | None = None,
     live_quotes: dict[str, FmpQuote] | None = None,
+    pre_gpt_ml: dict[str, GateResult] | None = None,
+    ml_escalation: bool = False,
 ) -> str:
     """Build the user prompt for the bull analyst with track-aware framing.
 
@@ -818,6 +853,8 @@ def build_bull_prompt(
         risk_assessments: Risk flags from deterministic post-filter.
         fmp_context: FMP enriched stock data keyed by ticker.
         live_quotes: Real-time FMP quotes keyed by ticker.
+        pre_gpt_ml: Per-ticker independent ML gate output before GPT.
+        ml_escalation: Add deeper-reconciliation instructions (gray ML / ambiguous).
 
     Returns:
         Formatted user prompt string.
@@ -833,6 +870,8 @@ def build_bull_prompt(
         risk_assessments=risk_assessments,
         fmp_context=fmp_context,
         live_quotes=live_quotes,
+        pre_gpt_ml=pre_gpt_ml,
+        ml_escalation=ml_escalation,
     )
 
 
@@ -846,6 +885,8 @@ def build_bear_prompt(
     risk_assessments: list[RiskAssessment] | None = None,
     fmp_context: dict[str, FmpEnrichedStock] | None = None,
     live_quotes: dict[str, FmpQuote] | None = None,
+    pre_gpt_ml: dict[str, GateResult] | None = None,
+    ml_escalation: bool = False,
 ) -> str:
     """Build the user prompt for the bear analyst with track-aware framing.
 
@@ -862,6 +903,8 @@ def build_bear_prompt(
         risk_assessments: Risk flags from deterministic post-filter.
         fmp_context: FMP enriched stock data keyed by ticker.
         live_quotes: Real-time FMP quotes keyed by ticker.
+        pre_gpt_ml: Per-ticker independent ML gate output before GPT.
+        ml_escalation: Add deeper-reconciliation instructions (gray ML / ambiguous).
 
     Returns:
         Formatted user prompt string.
@@ -877,6 +920,8 @@ def build_bear_prompt(
         risk_assessments=risk_assessments,
         fmp_context=fmp_context,
         live_quotes=live_quotes,
+        pre_gpt_ml=pre_gpt_ml,
+        ml_escalation=ml_escalation,
     )
 
 
@@ -896,6 +941,8 @@ def build_judge_prompt(
     sector_consensus: str = "",
     live_quotes: dict[str, FmpQuote] | None = None,
     track_conflicts: str = "",
+    pre_gpt_ml: dict[str, GateResult] | None = None,
+    ml_escalation: bool = False,
 ) -> str:
     """Build the judge prompt with track-aware conflict resolution.
 
@@ -919,6 +966,8 @@ def build_judge_prompt(
         sector_consensus: Pre-formatted sector sentiment consensus, or empty.
         live_quotes: Real-time FMP quotes keyed by ticker.
         track_conflicts: Pre-formatted directional conflict summary per ticker.
+        pre_gpt_ml: Per-ticker independent ML gate output before GPT.
+        ml_escalation: Add deeper-reconciliation instructions (gray ML / ambiguous).
 
     Returns:
         Formatted user prompt string.
@@ -1015,6 +1064,8 @@ def build_judge_prompt(
             f"{_format_risk_assessments(risk_assessments, tickers)}"
         )
 
+    parts.append(_format_ml_injection_for_gpt(pre_gpt_ml, ml_escalation))
+
     if sector_consensus:
         parts.append(f"\n## SECTOR SENTIMENT CONSENSUS\n{sector_consensus}")
 
@@ -1075,14 +1126,14 @@ def build_judge_prompt(
 
 def get_bull_hash() -> str:
     """Return the version hash of the bull prompt."""
-    return prompt_hash(BULL_SYSTEM_PROMPT)
+    return prompt_hash(f"{BULL_PROMPT_VERSION}\n{BULL_SYSTEM_PROMPT}")
 
 
 def get_bear_hash() -> str:
     """Return the version hash of the bear prompt."""
-    return prompt_hash(BEAR_SYSTEM_PROMPT)
+    return prompt_hash(f"{BEAR_PROMPT_VERSION}\n{BEAR_SYSTEM_PROMPT}")
 
 
 def get_judge_hash() -> str:
     """Return the version hash of the judge prompt."""
-    return prompt_hash(JUDGE_SYSTEM_PROMPT)
+    return prompt_hash(f"{JUDGE_PROMPT_VERSION}\n{JUDGE_SYSTEM_PROMPT}")

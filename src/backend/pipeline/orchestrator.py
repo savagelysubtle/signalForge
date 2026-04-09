@@ -5,7 +5,8 @@ Pipeline (parallel tracks):
   Re-score FMP with regime → Perplexity → pre_filter_tickers →
   (Numerical TA || Live Quotes) →
   (Gemini || Claude) →
-  Risk post-filter → GPT synthesis → ML gate/shadow → Annotated charts.
+  Risk post-filter → Pre-GPT ML prior (prompts + optional debate escalation) →
+  GPT synthesis → calibration → ML gate/shadow → ML confidence blend → Annotated charts.
 
 Claude deliberately does NOT receive Gemini sentiment to avoid bias.
 """
@@ -74,6 +75,7 @@ from services.fmp_service import (
     screen_and_enrich,
 )
 from services.keyring_service import get_api_key
+from services.ml_confidence_blend import blend_confidence_with_ml
 from services.paper_tracker import schedule_paper_tracking
 from services.reflection import load_reflection_context, load_reflection_metrics
 from services.strategy import get_strategy
@@ -596,11 +598,7 @@ async def _run_pipeline(
         ticker_highlights = _hl or None
 
     async def _track_b_gemini() -> tuple[list[SentimentAnalysis], list[dict]]:
-        """Track B: Gemini sentiment enriched with FMP + Perplexity highlights.
-
-        Saves stage_outputs immediately so progress updates while Claude
-        is still running.
-        """
+        """Track B: Gemini sentiment enriched with FMP + Perplexity highlights."""
         sentiments_b, meta_b = await run_sentiment(
             ticker_symbols,
             config,
@@ -614,11 +612,7 @@ async def _run_pipeline(
         return sentiments_b, meta_b
 
     async def _track_c_claude() -> tuple[list[ChartAnalysis], list[dict]]:
-        """Track C: Technical analysis with numerical TA + live quotes (no sentiment).
-
-        Saves stage_outputs immediately so progress updates while Gemini
-        is still running.
-        """
+        """Track C: Technical analysis with numerical TA + live quotes (no sentiment)."""
         charts_c, meta_c = await run_chart_analysis(
             ticker_symbols,
             config,
@@ -721,6 +715,67 @@ async def _run_pipeline(
             cost_tracker,
         )
 
+    # ── Stage 3.5: Pre-GPT ML prior (prompt injection + debate escalation) ──
+    pre_gpt_hints: dict[str, Any] = {}
+    ml_escalation_flag = False
+    force_ml_debate_flag = False
+    if ticker_symbols:
+        try:
+            from ml.pre_gpt import (
+                build_ml_feature_dicts,
+                ml_uncertainty_escalates_debate,
+                pre_gpt_hints_to_json,
+                run_pre_gpt_gates,
+            )
+
+            ta_pre, fmp_pre, regime_pre = build_ml_feature_dicts(
+                ta_snapshots or None, fmp_map or None, regime
+            )
+            mg_start = time.perf_counter()
+            pre_gpt_hints = await run_pre_gpt_gates(
+                ticker_symbols,
+                config.strategy_type,
+                ta_pre,
+                fmp_pre,
+                regime_pre,
+            )
+            mg_ms = int((time.perf_counter() - mg_start) * 1000)
+            ml_escalation_flag = ml_uncertainty_escalates_debate(pre_gpt_hints)
+            force_ml_debate_flag = ml_escalation_flag and not config.enable_debate
+            mv_hint = next(
+                (h.model_version for h in pre_gpt_hints.values() if h.model_version),
+                "",
+            )
+            await _save_stage_output(
+                run_id,
+                {
+                    "stage": "ml_pre_gpt",
+                    "status": "success",
+                    "model": mv_hint or "lightgbm",
+                    "duration_ms": mg_ms,
+                    "raw_response": pre_gpt_hints_to_json(pre_gpt_hints),
+                },
+                cost_tracker,
+            )
+            if ml_escalation_flag:
+                result.meta["pre_gpt_ml_escalation"] = True
+        except Exception as exc:
+            logger.warning("Pre-GPT ML stage failed: %s", exc)
+            result.stage_errors.append(
+                StageError(stage="ml_pre_gpt", error=str(exc), type=type(exc).__name__)
+            )
+            await _save_stage_output(
+                run_id,
+                {
+                    "stage": "ml_pre_gpt",
+                    "status": "error",
+                    "model": "lightgbm",
+                    "duration_ms": 0,
+                    "error": str(exc),
+                },
+                cost_tracker,
+            )
+
     # ── Stage 4: GPT Synthesis (convergence point — track-aware) ─────────
     sector_consensus = _aggregate_sector_sentiment(sentiments, screening)
     live_quotes: dict = {}
@@ -754,6 +809,9 @@ async def _run_pipeline(
                     sector_consensus=sector_consensus,
                     live_quotes=live_quotes or None,
                     track_conflicts=track_conflicts,
+                    force_ml_debate=force_ml_debate_flag,
+                    pre_gpt_ml=pre_gpt_hints or None,
+                    ml_escalation=ml_escalation_flag,
                 ),
                 timeout=STAGE_TIMEOUTS["gpt"],
             )
@@ -763,6 +821,10 @@ async def _run_pipeline(
                 rec.signal_generated_at = signal_ts
                 if live_quotes and rec.ticker in live_quotes:
                     rec.price_at_signal = live_quotes[rec.ticker].price
+                hint = pre_gpt_hints.get(rec.ticker)
+                if hint and hint.reason not in ("no_independent_model", "prediction_failed"):
+                    rec.pre_gpt_ml_probability = hint.ml_probability
+                    rec.pre_gpt_ml_direction = hint.predicted_direction
             result.recommendations = recommendations
             for gm in gpt_metadata_list:
                 await _save_stage_output(run_id, gm, cost_tracker)
@@ -930,6 +992,9 @@ async def _run_pipeline(
             cost_tracker,
         )
 
+        for rec in result.recommendations:
+            blend_confidence_with_ml(rec)
+
         # 7.5b: ML shadow — full model comparison (non-blocking)
         try:
             from ml.inference import ml_model_available
@@ -1087,6 +1152,43 @@ async def _finalize(
     return result
 
 
+_STAGE_OUTPUT_INSERT_CHUNK = 75
+
+
+def _stage_output_row(run_id: str, metadata: dict) -> dict:
+    """Build a ``stage_outputs`` row dict from stage metadata."""
+    row: dict = {
+        "id": uuid.uuid4().hex,
+        "run_id": run_id,
+        "stage": metadata.get("stage", "perplexity"),
+        "ticker": metadata.get("ticker"),
+        "prompt_text": metadata.get("prompt_text", ""),
+        "raw_response": metadata.get("raw_response", ""),
+        "model_used": metadata.get("model", ""),
+        "duration_ms": metadata.get("duration_ms", 0),
+        "status": metadata.get("status", "unknown"),
+        "retry_count": metadata.get("retry_count", 0),
+        "created_at": datetime.now(tz=UTC).isoformat(),
+    }
+    if metadata.get("error"):
+        row["parsed_output"] = metadata["error"]
+    elif metadata.get("raw_response"):
+        row["parsed_output"] = metadata["raw_response"]
+    return row
+
+
+async def _save_stage_outputs_batch(run_id: str, metadatas: list[dict]) -> None:
+    """Persist multiple stage output rows in chunked inserts."""
+    if not metadatas:
+        return
+
+    client = await get_db()
+    rows = [_stage_output_row(run_id, m) for m in metadatas]
+    for i in range(0, len(rows), _STAGE_OUTPUT_INSERT_CHUNK):
+        chunk = rows[i : i + _STAGE_OUTPUT_INSERT_CHUNK]
+        await client.table("stage_outputs").insert(chunk).execute()
+
+
 async def _save_stage_output(
     run_id: str,
     metadata: dict,
@@ -1108,25 +1210,7 @@ async def _save_stage_output(
             output_tokens=output_tokens,
         )
 
-    client = await get_db()
-    row: dict = {
-        "id": uuid.uuid4().hex,
-        "run_id": run_id,
-        "stage": metadata.get("stage", "perplexity"),
-        "ticker": metadata.get("ticker"),
-        "prompt_text": metadata.get("prompt_text", ""),
-        "raw_response": metadata.get("raw_response", ""),
-        "model_used": metadata.get("model", ""),
-        "duration_ms": metadata.get("duration_ms", 0),
-        "status": metadata.get("status", "unknown"),
-        "retry_count": metadata.get("retry_count", 0),
-        "created_at": datetime.now(tz=UTC).isoformat(),
-    }
-    if metadata.get("error"):
-        row["parsed_output"] = metadata["error"]
-    elif metadata.get("raw_response"):
-        row["parsed_output"] = metadata["raw_response"]
-    await client.table("stage_outputs").insert(row).execute()
+    await _save_stage_outputs_batch(run_id, [metadata])
 
 
 async def _update_annotated_paths(
@@ -1227,6 +1311,8 @@ async def _save_recommendations(
             "ml_blocked": rec.ml_blocked,
             "ml_model_version": rec.ml_model_version,
             "ml_conformal_set": json.dumps(rec.ml_conformal_set) if rec.ml_conformal_set else None,
+            "pre_gpt_ml_probability": rec.pre_gpt_ml_probability,
+            "pre_gpt_ml_direction": rec.pre_gpt_ml_direction,
             "track_agreement": rec.track_agreement.model_dump_json()
             if rec.track_agreement
             else None,

@@ -217,6 +217,9 @@ export interface Recommendation {
   ml_blocked: boolean;
   ml_model_version: string | null;
   ml_conformal_set: string[];
+  /** Independent ML before GPT (training / transparency) */
+  pre_gpt_ml_probability: number | null;
+  pre_gpt_ml_direction: "UP" | "DOWN" | "FLAT" | null;
 }
 
 // ---------------------------------------------------------------------------

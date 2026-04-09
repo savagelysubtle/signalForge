@@ -453,6 +453,15 @@ class Recommendation(BaseModel):
     ml_conformal_set: list[str] = Field(default_factory=list)
     ml_model_version: str | None = None
 
+    # Independent ML at signal time (before GPT) — for training / UI transparency
+    pre_gpt_ml_probability: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="P(profitable) from independent model before GPT ran",
+    )
+    pre_gpt_ml_direction: Literal["UP", "DOWN", "FLAT"] | None = None
+
 
 class DebateCaseList(BaseModel):
     """Wrapper for batch bull/bear debate output from GPT."""

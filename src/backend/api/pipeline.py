@@ -247,11 +247,12 @@ _STAGE_LABELS: dict[str, str] = {
     "perplexity": "Perplexity Screening",
     "gemini": "Gemini Sentiment",
     "claude": "Claude Chart Analysis",
+    "ml_pre_gpt": "ML Prior (pre-GPT)",
     "gpt": "GPT Synthesis",
     "annotate": "Annotated Charts",
 }
 
-_STAGE_ORDER = ["fmp", "perplexity", "gemini", "claude", "gpt", "annotate"]
+_STAGE_ORDER = ["fmp", "perplexity", "gemini", "claude", "ml_pre_gpt", "gpt", "annotate"]
 
 
 @router.get("/progress/{run_id}", response_model=PipelineProgress)
@@ -379,6 +380,8 @@ async def _load_recommendations(
                 ml_conformal_set=json.loads(r["ml_conformal_set"])
                 if r.get("ml_conformal_set")
                 else [],
+                pre_gpt_ml_probability=r.get("pre_gpt_ml_probability"),
+                pre_gpt_ml_direction=r.get("pre_gpt_ml_direction"),
             )
         )
     return recs

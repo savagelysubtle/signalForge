@@ -14,6 +14,7 @@ import asyncio
 import logging
 import time
 
+from ml.schemas import GateResult
 from openai import AsyncOpenAI
 
 from pipeline.http_retry import with_transient_retry
@@ -179,6 +180,9 @@ async def run_debate(
     sector_consensus: str = "",
     live_quotes: dict | None = None,
     track_conflicts: str = "",
+    force_ml_debate: bool = False,
+    pre_gpt_ml: dict[str, GateResult] | None = None,
+    ml_escalation: bool = False,
 ) -> tuple[list[Recommendation], list[dict]]:
     """Run the GPT debate/synthesis with track-aware conflict resolution.
 
@@ -205,6 +209,10 @@ async def run_debate(
         regime_context: Pre-formatted market regime header, or empty.
         sector_consensus: Pre-formatted sector sentiment consensus, or empty.
         live_quotes: Real-time FMP quotes keyed by ticker (may be None).
+        track_conflicts: Pre-formatted Gemini vs Claude directional conflicts.
+        force_ml_debate: When True, run bull/bear even if ``config.enable_debate`` is False.
+        pre_gpt_ml: Independent ML gate outputs injected into GPT prompts (Track D).
+        ml_escalation: Add stronger reconciliation instructions for uncertain ML.
 
     Returns:
         Tuple of (list of Recommendation results,
@@ -214,7 +222,9 @@ async def run_debate(
     bull_cases: list[DebateCase] | None = None
     bear_cases: list[DebateCase] | None = None
 
-    if config.enable_debate:
+    run_debate_track = config.enable_debate or force_ml_debate
+
+    if run_debate_track:
         bull_cases, bear_cases, debate_metadata = await _run_debate_phase(
             tickers,
             screening,
@@ -225,6 +235,8 @@ async def run_debate(
             risk_assessments=risk_assessments,
             fmp_context=fmp_context,
             live_quotes=live_quotes,
+            pre_gpt_ml=pre_gpt_ml,
+            ml_escalation=ml_escalation,
         )
         all_metadata.extend(debate_metadata)
 
@@ -244,6 +256,8 @@ async def run_debate(
         sector_consensus=sector_consensus,
         live_quotes=live_quotes,
         track_conflicts=track_conflicts,
+        pre_gpt_ml=pre_gpt_ml,
+        ml_escalation=ml_escalation,
     )
     all_metadata.append(judge_metadata)
 
@@ -265,10 +279,11 @@ async def run_debate(
                 )
 
     logger.info(
-        "GPT debate: %d recommendations for %d tickers (debate=%s)",
+        "GPT debate: %d recommendations for %d tickers (debate=%s, ml_escalation=%s)",
         len(recommendations),
         len(tickers),
-        config.enable_debate,
+        run_debate_track,
+        ml_escalation,
     )
     return recommendations, all_metadata
 
@@ -283,6 +298,8 @@ async def _run_debate_phase(
     risk_assessments: list[RiskAssessment] | None = None,
     fmp_context: dict | None = None,
     live_quotes: dict | None = None,
+    pre_gpt_ml: dict[str, GateResult] | None = None,
+    ml_escalation: bool = False,
 ) -> tuple[list[DebateCase] | None, list[DebateCase] | None, list[dict]]:
     """Run bull then bear sequentially with track-aware prompts.
 
@@ -301,6 +318,8 @@ async def _run_debate_phase(
         risk_assessments=risk_assessments,
         fmp_context=fmp_context,
         live_quotes=live_quotes,
+        pre_gpt_ml=pre_gpt_ml,
+        ml_escalation=ml_escalation,
     )
     bear_prompt = build_bear_prompt(
         tickers,
@@ -312,6 +331,8 @@ async def _run_debate_phase(
         risk_assessments=risk_assessments,
         fmp_context=fmp_context,
         live_quotes=live_quotes,
+        pre_gpt_ml=pre_gpt_ml,
+        ml_escalation=ml_escalation,
     )
 
     bull_metadata: dict = {
@@ -414,6 +435,8 @@ async def _run_judge_phase(
     sector_consensus: str = "",
     live_quotes: dict | None = None,
     track_conflicts: str = "",
+    pre_gpt_ml: dict[str, GateResult] | None = None,
+    ml_escalation: bool = False,
 ) -> tuple[list[Recommendation], dict]:
     """Run the judge with track-aware conflict resolution.
 
@@ -436,6 +459,8 @@ async def _run_judge_phase(
         sector_consensus=sector_consensus,
         live_quotes=live_quotes,
         track_conflicts=track_conflicts,
+        pre_gpt_ml=pre_gpt_ml,
+        ml_escalation=ml_escalation,
     )
 
     judge_prompt = enforce_token_budget(JUDGE_SYSTEM_PROMPT, judge_prompt, model=GPT_MODEL)
