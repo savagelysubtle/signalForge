@@ -536,11 +536,40 @@ async def _run_pipeline(
         except Exception as exc:
             logger.debug(" Scanner results unavailable: %s", exc)
 
+    if not ticker_symbols and fmp_candidates:
+        cap = config.max_tickers if config.max_tickers else 20
+        ticker_symbols = [s.symbol for s in fmp_candidates[:cap]]
+        result.meta["ticker_source"] = "fmp_fallback"
+        logger.info(
+            " No tickers from discovery/screening; using top %d FMP pre-screened symbols",
+            len(ticker_symbols),
+        )
+
     if not ticker_symbols:
+        result.stage_errors.append(
+            StageError(
+                stage="pipeline",
+                error=(
+                    "No symbols to analyze: Perplexity returned no tickers, FMP pre-screen "
+                    "was empty or disabled, and no manual tickers were provided. "
+                    "Enter tickers (e.g. AAPL, MSFT), check API keys (Perplexity, FMP), "
+                    "or relax strategy screener filters."
+                ),
+                type="NoTickers",
+            )
+        )
+        result.meta["halt_reason"] = "no_tickers"
         return await _finalize(run_id, result, start, client, regime_context, cost_tracker)
 
     # ── Lightweight pre-filter (no LLM) ──────────────────────────────────
+    _tickers_before_pre_filter = list(ticker_symbols)
     ticker_symbols = pre_filter_tickers(ticker_symbols, fmp_map, config)
+    if not ticker_symbols and _tickers_before_pre_filter:
+        logger.warning(
+            " FMP pre-filter removed all %d tickers; continuing with unfiltered list",
+            len(_tickers_before_pre_filter),
+        )
+        ticker_symbols = _tickers_before_pre_filter
 
     # Enforce max_tickers cap from strategy config
     if config.max_tickers and len(ticker_symbols) > config.max_tickers:
