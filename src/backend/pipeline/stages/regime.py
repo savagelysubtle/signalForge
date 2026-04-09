@@ -132,6 +132,7 @@ async def classify_regime(
         "stage": "regime",
         "ticker": "_market",
         "prompt_text": user_prompt,
+        "model": AGENT_MODEL,
         "model_used": AGENT_MODEL,
         "status": "pending",
     }

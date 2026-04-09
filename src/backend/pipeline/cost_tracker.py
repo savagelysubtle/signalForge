@@ -14,6 +14,53 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Stages whose outputs represent LLM token streams (prompt + completion text).
+_LLM_TOKEN_COST_STAGES: frozenset[str] = frozenset(
+    {
+        "perplexity",
+        "gemini",
+        "claude",
+        "gpt_bull",
+        "gpt_bear",
+        "gpt_judge",
+        "regime",
+    }
+)
+
+# model / model_used values that are not billed per token like chat LLMs.
+_NON_TOKEN_COST_MODELS: frozenset[str] = frozenset(
+    {
+        "fmp-api",
+        "heartbeat-cache",
+        "deterministic",
+        "chart-img-v2",
+        "lightgbm",
+    }
+)
+
+
+def should_estimate_cost_from_metadata(metadata: dict[str, Any]) -> bool:
+    """Return True if stage metadata should contribute to token-based cost estimates.
+
+    Skips FMP JSON blobs, cached regime, ML gates, chart APIs, etc. Those saves
+    often carry huge ``raw_response`` strings; counting tokens on them is slow
+    and produces meaningless USD figures.
+    """
+    if not metadata:
+        return False
+    if metadata.get("status") == "api_error":
+        return False
+    stage = metadata.get("stage") or ""
+    if stage not in _LLM_TOKEN_COST_STAGES:
+        return False
+    model = (metadata.get("model") or metadata.get("model_used") or "").strip()
+    if not model:
+        return False
+    if model in _NON_TOKEN_COST_MODELS:
+        return False
+    return not model.lower().startswith("lightgbm")
+
+
 # Approximate per-million-token pricing (USD). Update as needed.
 _PRICING: dict[str, tuple[float, float]] = {
     # (input_per_M, output_per_M)

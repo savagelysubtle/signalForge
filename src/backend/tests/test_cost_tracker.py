@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from pipeline.cost_tracker import CostEntry, PipelineCostTracker
+from pipeline.cost_tracker import (
+    CostEntry,
+    PipelineCostTracker,
+    should_estimate_cost_from_metadata,
+)
 
 
 class TestCostEntry:
@@ -25,6 +29,61 @@ class TestCostEntry:
         assert entry.input_tokens == 0
         assert entry.output_tokens == 0
         assert entry.cost_usd == 0.0
+
+
+class TestShouldEstimateCostFromMetadata:
+    def test_fmp_screen_skipped(self):
+        assert not should_estimate_cost_from_metadata(
+            {
+                "stage": "fmp",
+                "model": "fmp-api",
+                "status": "success",
+                "raw_response": '{"huge": "json"}' * 1000,
+            }
+        )
+
+    def test_perplexity_included(self):
+        assert should_estimate_cost_from_metadata(
+            {
+                "stage": "perplexity",
+                "model": "perplexity/sonar",
+                "status": "success",
+                "prompt_text": "hello",
+                "raw_response": "{}",
+            }
+        )
+
+    def test_heartbeat_regime_skipped(self):
+        assert not should_estimate_cost_from_metadata(
+            {
+                "stage": "regime",
+                "model": "heartbeat-cache",
+                "status": "success",
+                "raw_response": "cached",
+            }
+        )
+
+    def test_regime_llm_included(self):
+        assert should_estimate_cost_from_metadata(
+            {
+                "stage": "regime",
+                "model_used": "sonar-pro",
+                "model": "sonar-pro",
+                "status": "success",
+                "prompt_text": "x",
+                "raw_response": "{}",
+            }
+        )
+
+    def test_api_error_skipped(self):
+        assert not should_estimate_cost_from_metadata(
+            {
+                "stage": "claude",
+                "model": "claude-sonnet-4-20250514",
+                "status": "api_error",
+                "error": "timeout",
+            }
+        )
 
 
 class TestPipelineCostTracker:

@@ -7,6 +7,7 @@ import contextlib
 import json
 import logging
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -135,6 +136,16 @@ async def get_pipeline_status(run_id: str, user_id: CurrentUser) -> PipelineResu
         _load_chart_errors(client, run_id),
     )
 
+    meta: dict[str, Any] = {}
+    raw_meta = row.get("meta")
+    if isinstance(raw_meta, str) and raw_meta.strip():
+        with contextlib.suppress(json.JSONDecodeError, TypeError):
+            parsed = json.loads(raw_meta)
+            if isinstance(parsed, dict):
+                meta = parsed
+    elif isinstance(raw_meta, dict):
+        meta = raw_meta
+
     return PipelineResult(
         run_id=row["id"],
         strategy_name=None,
@@ -148,6 +159,7 @@ async def get_pipeline_status(run_id: str, user_id: CurrentUser) -> PipelineResu
         stage_errors=json.loads(row["stage_errors"]) if row["stage_errors"] else [],
         total_duration_seconds=row["duration_seconds"] or 0.0,
         prompt_versions=json.loads(row["prompt_versions"]) if row["prompt_versions"] else {},
+        meta=meta,
     )
 
 

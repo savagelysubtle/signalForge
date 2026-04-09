@@ -21,10 +21,11 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
+from postgrest.exceptions import APIError
 from supabase import AsyncClient
 
 from database.connection import get_db
-from pipeline.cost_tracker import PipelineCostTracker
+from pipeline.cost_tracker import PipelineCostTracker, should_estimate_cost_from_metadata
 from pipeline.prompts.claude_chart import get_prompt_hash as claude_hash
 from pipeline.prompts.gemini_sentiment import get_prompt_hash as gemini_hash
 from pipeline.prompts.gpt_debate import (
@@ -1143,10 +1144,26 @@ async def _finalize(
             else None
         ),
     }
-    if cost_tracker and cost_tracker.entries:
+    if result.meta:
         update_fields["meta"] = json.dumps(result.meta)
 
-    await client.table("pipeline_runs").update(update_fields).eq("id", run_id).execute()
+    try:
+        await client.table("pipeline_runs").update(update_fields).eq("id", run_id).execute()
+    except APIError as exc:
+        if (
+            exc.code == "PGRST204"
+            and exc.message
+            and "meta" in exc.message
+            and "meta" in update_fields
+        ):
+            logger.warning(
+                "pipeline_runs.meta column missing; apply "
+                "database/migrations/023_pipeline_runs_meta.sql. Finalizing run without meta."
+            )
+            update_fields.pop("meta", None)
+            await client.table("pipeline_runs").update(update_fields).eq("id", run_id).execute()
+        else:
+            raise
 
     clear_run_symbol_cache(run_id)
     return result
@@ -1164,7 +1181,7 @@ def _stage_output_row(run_id: str, metadata: dict) -> dict:
         "ticker": metadata.get("ticker"),
         "prompt_text": metadata.get("prompt_text", ""),
         "raw_response": metadata.get("raw_response", ""),
-        "model_used": metadata.get("model", ""),
+        "model_used": metadata.get("model") or metadata.get("model_used", ""),
         "duration_ms": metadata.get("duration_ms", 0),
         "status": metadata.get("status", "unknown"),
         "retry_count": metadata.get("retry_count", 0),
@@ -1198,14 +1215,15 @@ async def _save_stage_output(
     if not metadata:
         return
 
-    if cost_tracker and metadata.get("model") and metadata.get("status") != "api_error":
+    if cost_tracker and should_estimate_cost_from_metadata(metadata):
         from pipeline.token_budget import count_tokens
 
+        model = (metadata.get("model") or metadata.get("model_used") or "").strip()
         input_tokens = count_tokens(metadata.get("prompt_text", ""))
         output_tokens = count_tokens(metadata.get("raw_response", ""))
         cost_tracker.record(
             stage=metadata.get("stage", "unknown"),
-            model=metadata.get("model", ""),
+            model=model,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
         )
