@@ -41,6 +41,26 @@ EXCHANGE_ALIASES: dict[str, str] = {
     "CBOE_BZX": "AMEX",
 }
 
+# TradingView exchange codes for US listings where FMP uses a bare symbol (no suffix).
+# Used only for cross-format matching (``AAPL`` vs ``NASDAQ:AAPL``), not for intl. tickers.
+_US_STOCK_TV_EXCHANGES: frozenset[str] = frozenset(
+    {
+        "AMEX",
+        "BATS",
+        "GREY",
+        "NASDAQ",
+        "NASDAQCM",
+        "NASDAQGM",
+        "NASDAQGS",
+        "NYSE",
+        "NYSEAMERICAN",
+        "OTC",
+        "OTCMKTS",
+        "PINK",
+        "US",
+    }
+)
+
 _WHITESPACE_RE = re.compile(r"\s+")
 _WRAP_CHARS_RE = re.compile(r'^[\s"\'$`*()[\]{}]+|[\s"\'`*.,;!?()[\]{}]+$')
 
@@ -124,6 +144,61 @@ def normalize_ticker(ticker: str) -> str:
             return f"{exchange}:{base}"
 
     return upper
+
+
+def canonical_ticker_match_key(ticker: str) -> str:
+    """Stable key for comparing tickers that may differ only by US exchange prefix.
+
+    US-listed symbols in ``EXCHANGE:SYMBOL`` form (e.g. ``NASDAQ:AAPL``) map to the
+    same key as a bare ``AAPL``. International listings keep ``EXCHANGE:SYMBOL`` so
+    ``TSX:SHOP`` never collides with a different ``SHOP`` on another venue.
+
+    Always applies :func:`normalize_ticker` first.
+
+    Args:
+        ticker: Raw or normalized ticker string.
+
+    Returns:
+        Uppercase match key suitable for set/dict lookups and deduplication.
+
+    Examples:
+        >>> canonical_ticker_match_key("NASDAQ:AAPL")
+        'AAPL'
+        >>> canonical_ticker_match_key("AAPL")
+        'AAPL'
+        >>> canonical_ticker_match_key("TSX:ENB")
+        'TSX:ENB'
+    """
+    norm = normalize_ticker(ticker)
+    if ":" not in norm:
+        return norm
+    exchange, symbol = norm.split(":", 1)
+    if exchange in _US_STOCK_TV_EXCHANGES:
+        return symbol
+    return norm
+
+
+def dedupe_ticker_symbols_preserve_order(symbols: list[str]) -> list[str]:
+    """Drop duplicate tickers that share the same :func:`canonical_ticker_match_key`.
+
+    Preserves the first occurrence's normalized spelling; later duplicates are removed.
+
+    Args:
+        symbols: Pipeline ticker list (any mix of formats).
+
+    Returns:
+        Deduplicated normalized tickers in original order.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in symbols:
+        norm = normalize_ticker(raw)
+        key = canonical_ticker_match_key(norm)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(norm)
+    return out
 
 
 TV_TO_FMP_SUFFIX: dict[str, str] = {

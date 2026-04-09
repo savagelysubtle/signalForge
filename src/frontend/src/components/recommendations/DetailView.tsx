@@ -9,6 +9,7 @@ import { RawTab } from './RawTab';
 import { motion, AnimatePresence } from 'motion/react';
 import clsx from 'clsx';
 import { AlertTriangle, X } from 'lucide-react';
+import { canonicalTickerMatchKey } from '../../utils/ticker';
 
 const STAGE_DISPLAY: Record<string, string> = {
   fmp: 'FMP',
@@ -100,10 +101,17 @@ export function DetailView({ tickerData, fullResult, initialTab = 'overview' }: 
     setStageErrorBannerDismissed(false);
   }, [fullResult.run_id]);
 
-  const sentiment = fullResult.sentiment_analyses.find(s => s.ticker === tickerData.ticker) ?? null;
-  const chartAnalyses = fullResult.chart_analyses.filter(c => c.ticker === tickerData.ticker);
-  const chartErrors = (fullResult.chart_errors ?? []).filter(e => e.ticker === tickerData.ticker);
-  const recommendation = fullResult.recommendations.find(r => r.ticker === tickerData.ticker) ?? null;
+  const symKey = canonicalTickerMatchKey(tickerData.ticker);
+  const sentiment =
+    fullResult.sentiment_analyses.find(s => canonicalTickerMatchKey(s.ticker) === symKey) ?? null;
+  const chartAnalyses = fullResult.chart_analyses.filter(
+    c => canonicalTickerMatchKey(c.ticker) === symKey
+  );
+  const chartErrors = (fullResult.chart_errors ?? []).filter(
+    e => canonicalTickerMatchKey(e.ticker) === symKey
+  );
+  const recommendation =
+    fullResult.recommendations.find(r => canonicalTickerMatchKey(r.ticker) === symKey) ?? null;
   const actionCfg = recommendation ? (ACTION_HEADER_CONFIG[recommendation.action] ?? null) : null;
   const modeCfg = MODE_CONFIG[fullResult.mode] ?? MODE_CONFIG.discovery;
   const screeningSummary = fullResult.screening?.screening_summary?.trim();

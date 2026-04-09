@@ -3,6 +3,7 @@ import { usePipeline } from '../../hooks/usePipeline';
 import { TickerCardList } from '../recommendations/TickerCardList';
 import { DetailView } from '../recommendations/DetailView';
 import { TabContentSkeleton } from '../shared/Skeleton';
+import { canonicalTickerMatchKey } from '../../utils/ticker';
 
 interface ResultsScreenProps {
   runId: string;
@@ -35,15 +36,19 @@ export function ResultsScreen({ runId }: ResultsScreenProps) {
     if (selectedTicker && screeningTickers.some(t => t.ticker === selectedTicker)) {
       return;
     }
-    const confByTicker = Object.fromEntries(
-      (currentResult.recommendations ?? []).map(r => [r.ticker, r.confidence])
+    const confByCanonical = Object.fromEntries(
+      (currentResult.recommendations ?? []).map(r => [
+        canonicalTickerMatchKey(r.ticker),
+        r.confidence,
+      ])
     );
-    const deduped = screeningTickers.filter(
-      (t, i, arr) => arr.findIndex(x => x.ticker === t.ticker) === i
-    );
+    const deduped = screeningTickers.filter((t, i, arr) => {
+      const k = canonicalTickerMatchKey(t.ticker);
+      return arr.findIndex(x => canonicalTickerMatchKey(x.ticker) === k) === i;
+    });
     const sorted = [...deduped].sort((a, b) => {
-      const ca = confByTicker[a.ticker] ?? -1;
-      const cb = confByTicker[b.ticker] ?? -1;
+      const ca = confByCanonical[canonicalTickerMatchKey(a.ticker)] ?? -1;
+      const cb = confByCanonical[canonicalTickerMatchKey(b.ticker)] ?? -1;
       if (cb !== ca) return cb - ca;
       return a.ticker.localeCompare(b.ticker);
     });
@@ -115,16 +120,20 @@ export function ResultsScreen({ runId }: ResultsScreenProps) {
     );
   }
 
-  const tickers = (currentResult.screening?.tickers || []).filter(
-    (t, i, arr) => arr.findIndex(x => x.ticker === t.ticker) === i
-  );
+  const tickers = (currentResult.screening?.tickers || []).filter((t, i, arr) => {
+    const k = canonicalTickerMatchKey(t.ticker);
+    return arr.findIndex(x => canonicalTickerMatchKey(x.ticker) === k) === i;
+  });
   const selectedTickerData = tickers.find(t => t.ticker === selectedTicker);
 
   const actionMap = Object.fromEntries(
-    (currentResult.recommendations || []).map(r => [r.ticker, r.action])
+    (currentResult.recommendations || []).map(r => [canonicalTickerMatchKey(r.ticker), r.action])
   );
   const confidenceMap = Object.fromEntries(
-    (currentResult.recommendations || []).map(r => [r.ticker, r.confidence])
+    (currentResult.recommendations || []).map(r => [
+      canonicalTickerMatchKey(r.ticker),
+      r.confidence,
+    ])
   );
 
   return (

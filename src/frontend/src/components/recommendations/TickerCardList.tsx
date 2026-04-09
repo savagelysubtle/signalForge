@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { FundamentalData } from '../../types';
+import { canonicalTickerMatchKey } from '../../utils/ticker';
 import { TickerCard } from './TickerCard';
 import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { motion } from 'motion/react';
@@ -60,14 +61,14 @@ export function TickerCardList({
   const displayTickers = useMemo(() => {
     let list = [...tickers];
     if (actionFilter !== 'ALL') {
-      list = list.filter(t => actionMap[t.ticker] === actionFilter);
+      list = list.filter(t => actionMap[canonicalTickerMatchKey(t.ticker)] === actionFilter);
     }
 
     const rank = (sym: string) => {
-      const a = actionMap[sym];
+      const a = actionMap[canonicalTickerMatchKey(sym)];
       return a !== undefined && a in ACTION_SORT_RANK ? ACTION_SORT_RANK[a] : 99;
     };
-    const conf = (sym: string) => confidenceMap[sym] ?? -1;
+    const conf = (sym: string) => confidenceMap[canonicalTickerMatchKey(sym)] ?? -1;
 
     list.sort((a, b) => {
       if (sortMode === 'alphabetical') {
@@ -150,9 +151,9 @@ export function TickerCardList({
       <div className="flex overflow-x-auto">
         <div className="flex gap-1.5 px-3 py-2">
           {displayTickers.map(ticker => {
-            const action = actionMap[ticker.ticker];
+            const action = actionMap[canonicalTickerMatchKey(ticker.ticker)];
             const dotColor = action ? ACTION_DOT[action] : null;
-            const c = confidenceMap[ticker.ticker];
+            const c = confidenceMap[canonicalTickerMatchKey(ticker.ticker)];
             return (
               <button
                 key={ticker.ticker}
@@ -193,9 +194,9 @@ export function TickerCardList({
           </button>
           <div className="flex flex-col gap-2 mt-2 overflow-y-auto px-1">
             {displayTickers.map(ticker => {
-              const action = actionMap[ticker.ticker];
+              const action = actionMap[canonicalTickerMatchKey(ticker.ticker)];
               const dotColor = action ? ACTION_DOT[action] : null;
-              const c = confidenceMap[ticker.ticker];
+              const c = confidenceMap[canonicalTickerMatchKey(ticker.ticker)];
               return (
                 <button
                   key={ticker.ticker}
@@ -261,8 +262,8 @@ export function TickerCardList({
               >
                 <TickerCard
                   data={ticker}
-                  action={actionMap[ticker.ticker]}
-                  confidence={confidenceMap[ticker.ticker]}
+                  action={actionMap[canonicalTickerMatchKey(ticker.ticker)]}
+                  confidence={confidenceMap[canonicalTickerMatchKey(ticker.ticker)]}
                   isSelected={selectedTicker === ticker.ticker}
                   onClick={() => onSelect(ticker.ticker)}
                   onRiskClick={onRiskClick ? () => onRiskClick(ticker.ticker) : undefined}

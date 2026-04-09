@@ -80,7 +80,12 @@ from services.ml_confidence_blend import blend_confidence_with_ml
 from services.paper_tracker import schedule_paper_tracking
 from services.reflection import load_reflection_context, load_reflection_metrics
 from services.strategy import get_strategy
-from utils.ticker import normalize_ticker, normalize_tickers
+from utils.ticker import (
+    canonical_ticker_match_key,
+    dedupe_ticker_symbols_preserve_order,
+    normalize_ticker,
+    normalize_tickers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -521,9 +526,15 @@ async def _run_pipeline(
                 max_age_minutes=90,
             )
             if scan_results:
-                scanner_tickers = [r.ticker for r in scan_results]
-                existing = set(ticker_symbols)
-                added = [t for t in scanner_tickers if t not in existing]
+                scanner_tickers = [normalize_ticker(r.ticker) for r in scan_results]
+                existing_keys = {canonical_ticker_match_key(t) for t in ticker_symbols}
+                added: list[str] = []
+                for t in scanner_tickers:
+                    k = canonical_ticker_match_key(t)
+                    if k in existing_keys:
+                        continue
+                    existing_keys.add(k)
+                    added.append(t)
                 if added:
                     # Prepend so max_tickers keeps scanner hits; Perplexity tail is cut first.
                     ticker_symbols = added + ticker_symbols
@@ -538,12 +549,14 @@ async def _run_pipeline(
 
     if not ticker_symbols and fmp_candidates:
         cap = config.max_tickers if config.max_tickers else 20
-        ticker_symbols = [s.symbol for s in fmp_candidates[:cap]]
+        ticker_symbols = [normalize_ticker(s.symbol) for s in fmp_candidates[:cap]]
         result.meta["ticker_source"] = "fmp_fallback"
         logger.info(
             " No tickers from discovery/screening; using top %d FMP pre-screened symbols",
             len(ticker_symbols),
         )
+
+    ticker_symbols = dedupe_ticker_symbols_preserve_order(ticker_symbols)
 
     if not ticker_symbols:
         result.stage_errors.append(
