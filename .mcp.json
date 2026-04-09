@@ -6,8 +6,10 @@
       "env": {
         "SIGNALFORGE_BACKEND_URL": "http://localhost:8420",
         "IBKR_HOST": "127.0.0.1",
-        "IBKR_PORT": "7497",
-        "IBKR_PAPER": "true"
+        "IBKR_PORT": "4002",
+        "IBKR_CLIENT_ID": "1",
+        "IBKR_PAPER": "true",
+        "IBKR_CASH_ACCOUNT": "true"
       }
     }
   }
