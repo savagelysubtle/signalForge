@@ -23,6 +23,7 @@ from typing import Any, Literal, cast
 from supabase import AsyncClient
 
 from database.connection import get_db
+from pipeline.prompts.claude_chart import get_prompt_hash as claude_hash
 from pipeline.prompts.gemini_sentiment import get_prompt_hash as gemini_hash
 from pipeline.prompts.gpt_debate import (
     get_bear_hash,
@@ -675,7 +676,6 @@ async def _run_pipeline(
 
     # ── Stage 4: GPT Synthesis (convergence point — track-aware) ─────────
     sector_consensus = _aggregate_sector_sentiment(sentiments, screening)
-    live_quotes_v2: dict = {}
     if ticker_symbols:
         try:
             reflection_context = await load_reflection_context(user_id)
@@ -935,7 +935,9 @@ async def _run_pipeline(
             await _save_recommendations(run_id, result.recommendations, user_id)
         except Exception:
             logger.exception(" Failed to save recommendations for run %s", run_id)
-            result.stage_errors.append(StageError(stage="save_recommendations", error="DB save failed"))
+            result.stage_errors.append(
+                StageError(stage="save_recommendations", error="DB save failed")
+            )
 
     # Annotated charts
     annotate_start = time.perf_counter()

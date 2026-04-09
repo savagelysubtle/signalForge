@@ -165,24 +165,18 @@ async def daily_outcome_summary(user_id: CurrentUser) -> DailyOutcomeSummary:
     day_start_et = now_et.replace(hour=0, minute=0, second=0, microsecond=0)
     day_end_et = day_start_et + timedelta(days=1)
 
-    all_resp = await client.table("outcomes").select("*").eq("user_id", user_id).execute()
-    rows = cast(list[dict[str, Any]], all_resp.data or [])
+    day_start_utc = day_start_et.astimezone(UTC).isoformat()
+    day_end_utc = day_end_et.astimezone(UTC).isoformat()
 
-    def _in_day(ts_val: str | None) -> bool:
-        if not ts_val:
-            return False
-        try:
-            raw = ts_val.replace("Z", "+00:00")
-            ts = datetime.fromisoformat(raw)
-            if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=UTC)
-            return day_start_et <= ts.astimezone(_ET) < day_end_et
-        except (TypeError, ValueError):
-            return False
-
-    closed_today: list[dict[str, Any]] = [
-        o for o in rows if o.get("exit_timestamp") and _in_day(str(o["exit_timestamp"]))
-    ]
+    closed_resp = (
+        await client.table("outcomes")
+        .select("*")
+        .eq("user_id", user_id)
+        .gte("exit_timestamp", day_start_utc)
+        .lt("exit_timestamp", day_end_utc)
+        .execute()
+    )
+    closed_today = cast(list[dict[str, Any]], closed_resp.data or [])
 
     wins = losses = be = 0
     realized = 0.0
@@ -199,16 +193,26 @@ async def daily_outcome_summary(user_id: CurrentUser) -> DailyOutcomeSummary:
         else:
             be += 1
 
-    opened_today = sum(
-        1 for o in rows if o.get("entry_timestamp") and _in_day(str(o["entry_timestamp"]))
+    opened_resp = (
+        await client.table("outcomes")
+        .select("id")
+        .eq("user_id", user_id)
+        .gte("entry_timestamp", day_start_utc)
+        .lt("entry_timestamp", day_end_utc)
+        .execute()
     )
-    open_tracked = sum(
-        1
-        for o in rows
-        if o.get("entry_price") is not None
-        and o.get("exit_price") is None
-        and o.get("exit_timestamp") is None
+    opened_today = len(opened_resp.data or [])
+
+    open_resp = (
+        await client.table("outcomes")
+        .select("id")
+        .eq("user_id", user_id)
+        .not_("entry_price", "is", "null")
+        .is_("exit_price", "null")
+        .is_("exit_timestamp", "null")
+        .execute()
     )
+    open_tracked = len(open_resp.data or [])
 
     return DailyOutcomeSummary(
         trading_date_et=day_start_et.strftime("%Y-%m-%d"),
