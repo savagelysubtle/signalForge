@@ -25,9 +25,15 @@ from typing import TYPE_CHECKING, Any
 from perplexity import AsyncPerplexity
 from pydantic import ValidationError
 
+from pipeline.circuit_breaker import (
+    CircuitOpenError,
+    check_provider,
+    record_failure,
+    record_success,
+)
 from pipeline.prompts.perplexity_analysis import (
-    ANALYSIS_SYSTEM_PROMPT,
     build_analysis_prompt,
+    build_analysis_system_prompt,
 )
 from pipeline.prompts.perplexity_analysis import get_prompt_hash as analysis_hash
 from pipeline.prompts.perplexity_discovery import (
@@ -44,9 +50,9 @@ from services.keyring_service import get_api_key
 if TYPE_CHECKING:
     from services.fmp_service import FmpEnrichedStock
 
-logger = logging.getLogger(__name__)
+from pipeline.model_config import PERPLEXITY_MODEL as AGENT_MODEL
 
-AGENT_MODEL = "openai/gpt-5.4"
+logger = logging.getLogger(__name__)
 MAX_RETRIES = 2
 MAX_TOOL_ROUNDS = 3
 
@@ -510,10 +516,25 @@ async def _call_with_retry(
     Returns:
         Tuple of (validated ScreeningResult or None, citation URLs).
     """
+    try:
+        check_provider("perplexity")
+    except CircuitOpenError as exc:
+        logger.warning("Skipping Perplexity: %s", exc)
+        return None, []
+
     last_error = ""
     all_citations: list[str] = []
 
     for attempt in range(1 + MAX_RETRIES):
+        if attempt > 0:
+            delay = 1.0 * (2 ** (attempt - 1))
+            logger.info(
+                "Backing off %.1fs before Perplexity retry %d/%d",
+                delay,
+                attempt,
+                MAX_RETRIES,
+            )
+            await asyncio.sleep(delay)
         effective_prompt = user_prompt
         if attempt > 0 and last_error:
             effective_prompt = (
@@ -562,20 +583,24 @@ async def _call_with_retry(
             result.citations = all_citations
             _distribute_citations(result, all_citations)
             _audit_sources(result, all_citations)
+            record_success("perplexity")
             return result, all_citations
 
         except (ValueError, json.JSONDecodeError) as exc:
             last_error = f"JSON parse error: {exc}"
             logger.warning("Perplexity JSON parse failed: %s. Raw: %s", exc, raw_text[:500])
+            record_failure("perplexity")
         except ValidationError as exc:
             last_error = f"Schema validation error: {exc}"
             logger.warning("Perplexity validation failed: %s. Raw: %s", exc, raw_text[:500])
+            record_failure("perplexity")
 
     logger.error(
         "All %d attempts failed for Perplexity. Last error: %s",
         1 + MAX_RETRIES,
         last_error,
     )
+    record_failure("perplexity")
     return None, all_citations
 
 
@@ -936,19 +961,20 @@ def _merge_bull_bear(
     for ticker in overlap:
         td = bull_tickers[ticker]
         td.key_highlights = [
-            "[HIGH CONVICTION] Found by both bull and bear analysis"
-        ] + td.key_highlights
+            "[HIGH CONVICTION] Found by both bull and bear analysis",
+            *td.key_highlights,
+        ]
         merged_tickers.append(td)
 
     for ticker in bull_only:
         td = bull_tickers[ticker]
-        td.key_highlights = ["[BULL ONLY] Speculative — upside catalysts"] + td.key_highlights
+        td.key_highlights = ["[BULL ONLY] Speculative — upside catalysts", *td.key_highlights]
         merged_tickers.append(td)
 
     for ticker in bear_only:
         td = bear_tickers[ticker]
-        td.key_highlights = ["[BEAR FLAGGED] Risk factors identified"] + td.key_highlights
-        td.risk_factors = bear_tickers[ticker].risk_factors + td.risk_factors
+        td.key_highlights = ["[BEAR FLAGGED] Risk factors identified", *td.key_highlights]
+        td.risk_factors = [*bear_tickers[ticker].risk_factors, *td.risk_factors]
         merged_tickers.append(td)
 
     return ScreeningResult(
@@ -979,6 +1005,7 @@ async def run_analysis(
     Returns:
         Tuple of (validated ScreeningResult or None, metadata dict).
     """
+    system_prompt = build_analysis_system_prompt(config)
     user_prompt = build_analysis_prompt(tickers, config)
     tools = _build_tools(config, include_fmp=False)
     search_mode = _get_search_mode(config)
@@ -987,14 +1014,14 @@ async def run_analysis(
         "stage": "perplexity",
         "mode": "analysis",
         "model": AGENT_MODEL,
-        "prompt_hash": analysis_hash(),
-        "prompt_text": f"{ANALYSIS_SYSTEM_PROMPT}\n---\n{user_prompt}",
+        "prompt_hash": analysis_hash(config),
+        "prompt_text": f"{system_prompt}\n---\n{user_prompt}",
     }
 
     start = time.perf_counter()
     try:
         result, citations = await _call_with_retry(
-            ANALYSIS_SYSTEM_PROMPT,
+            system_prompt,
             user_prompt,
             tools=tools,
             response_format=_RESPONSE_FORMAT,

@@ -117,5 +117,5 @@ def calculate_holding_days(
         dt_entry = datetime.fromisoformat(str(entry_ts))
         dt_exit = datetime.fromisoformat(str(exit_ts))
         return max(0, (dt_exit.date() - dt_entry.date()).days)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return None

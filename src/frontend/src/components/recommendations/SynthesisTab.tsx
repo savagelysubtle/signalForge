@@ -1,11 +1,21 @@
 import { useState, useEffect } from 'react';
-import type { Recommendation, DebateCase, TrackAgreement, ConfidenceBreakdown, SignalStrength } from '../../types';
+import type {
+  Recommendation,
+  DebateCase,
+  TrackAgreement,
+  ConfidenceBreakdown,
+  SignalStrength,
+  FundamentalData,
+} from '../../types';
+import { ConfidenceBreakdown as ConfidenceBreakdownViz } from './ConfidenceBreakdown';
 import { motion, AnimatePresence } from 'motion/react';
 import { ShieldAlert, ChevronDown, ChevronUp, Ban, Eye, Gauge, Clock, AlertTriangle, BrainCircuit, ShieldOff } from 'lucide-react';
 import clsx from 'clsx';
 
 interface SynthesisTabProps {
   recommendation: Recommendation | null;
+  /** Current price from FMP fundamentals (e.g. `FundamentalData.price`) for live delta vs `price_at_signal`. */
+  tickerData?: FundamentalData | null;
 }
 
 const ACTION_CONFIG: Record<string, { text: string; color: string; bg: string; border: string }> = {
@@ -93,14 +103,6 @@ const SIGNAL_STRENGTH_CONFIG: Record<string, { label: string; color: string; bg:
   no_edge:  { label: 'NO EDGE',  color: 'text-text-muted',      bg: 'bg-text-muted/15' },
 };
 
-const BREAKDOWN_COMPONENTS: { key: keyof ConfidenceBreakdown; label: string; max: number }[] = [
-  { key: 'track_agreement',    label: 'Track Agreement',    max: 0.30 },
-  { key: 'technical_strength', label: 'Technical Strength', max: 0.20 },
-  { key: 'trend_alignment',    label: 'Trend Alignment',    max: 0.20 },
-  { key: 'historical_pattern', label: 'Historical Pattern', max: 0.20 },
-  { key: 'regime_fit',         label: 'Regime Fit',         max: 0.10 },
-];
-
 function ConfidenceBreakdownPanel({ breakdown, rawConfidence, signalStrength }: {
   breakdown: ConfidenceBreakdown;
   rawConfidence: number | null;
@@ -130,45 +132,7 @@ function ConfidenceBreakdownPanel({ breakdown, rawConfidence, signalStrength }: 
         </div>
       )}
 
-      <div className="space-y-3 mb-4">
-        {BREAKDOWN_COMPONENTS.map(({ key, label, max }) => {
-          const value = breakdown[key] as number;
-          const fillPct = max > 0 ? Math.min((value / max) * 100, 100) : 0;
-          return (
-            <div key={key}>
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-xs text-text-muted font-body">{label}</span>
-                <span className="text-xs font-display font-semibold text-text-secondary tabular-nums">
-                  {value.toFixed(2)} / {max.toFixed(2)}
-                </span>
-              </div>
-              <div className="h-1.5 bg-bg-void rounded-full overflow-hidden">
-                <div
-                  className={clsx(
-                    'h-full rounded-full transition-all',
-                    fillPct >= 70 ? 'bg-accent-profit' : fillPct >= 40 ? 'bg-accent-alert' : 'bg-accent-loss',
-                  )}
-                  style={{ width: `${fillPct}%` }}
-                />
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {breakdown.penalties_applied.length > 0 && (
-        <div>
-          <h4 className="text-xs font-semibold text-accent-alert mb-1.5 font-body">Penalties Applied</h4>
-          <ul className="space-y-1">
-            {breakdown.penalties_applied.map((p, i) => (
-              <li key={i} className="flex items-start gap-2 text-xs text-accent-alert">
-                <span className="mt-1 w-1.5 h-1.5 rounded-full shrink-0 bg-accent-alert" />
-                {p}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      <ConfidenceBreakdownViz breakdown={breakdown} />
     </div>
   );
 }
@@ -400,7 +364,37 @@ function useSignalAge(signalGeneratedAt: string | null): { label: string; minute
   return { label: rem > 0 ? `${hours}h ${rem}m ago` : `${hours}h ago`, minutes };
 }
 
-function SignalFreshnessBar({ rec }: { rec: Recommendation }) {
+/** Colors % change vs signal price: good = aligned with BUY (up) / SHORT (down). */
+function priceAtSignalDeltaClass(action: string, pctChange: number): string {
+  if (Math.abs(pctChange) < 1e-9) return 'text-text-muted';
+  if (action === 'BUY') return pctChange > 0 ? 'text-accent-profit' : 'text-accent-loss';
+  if (action === 'SHORT') return pctChange > 0 ? 'text-accent-loss' : 'text-accent-profit';
+  return 'text-text-secondary';
+}
+
+function PriceAtSignalLive({
+  signalPrice,
+  currentPrice,
+  action,
+}: {
+  signalPrice: number;
+  currentPrice: number;
+  action: string;
+}) {
+  const pctChange = ((currentPrice - signalPrice) / signalPrice) * 100;
+  const pctLabel = `${pctChange > 0 ? '+' : ''}${pctChange.toFixed(2)}%`;
+  return (
+    <>
+      ${signalPrice.toFixed(2)}
+      <span className="text-text-muted"> → </span>
+      ${currentPrice.toFixed(2)}
+      <span className="text-text-muted"> </span>
+      <span className={priceAtSignalDeltaClass(action, pctChange)}>({pctLabel})</span>
+    </>
+  );
+}
+
+function SignalFreshnessBar({ rec, currentPrice }: { rec: Recommendation; currentPrice: number | null }) {
   const isActionable = rec.action === 'BUY' || rec.action === 'SHORT';
   const { label: ageLabel, minutes } = useSignalAge(rec.signal_generated_at);
 
@@ -438,8 +432,16 @@ function SignalFreshnessBar({ rec }: { rec: Recommendation }) {
       {rec.price_at_signal != null && (
         <div className="min-w-0">
           <div className="text-xs text-text-muted font-body">Price at signal</div>
-          <div className="text-sm font-display font-semibold tabular-nums text-text-primary">
-            ${rec.price_at_signal.toFixed(2)}
+          <div className="text-sm font-mono tabular-nums text-text-primary">
+            {currentPrice != null ? (
+              <PriceAtSignalLive
+                signalPrice={rec.price_at_signal}
+                currentPrice={currentPrice}
+                action={rec.action}
+              />
+            ) : (
+              <>${rec.price_at_signal.toFixed(2)}</>
+            )}
           </div>
         </div>
       )}
@@ -462,7 +464,7 @@ function SignalFreshnessBar({ rec }: { rec: Recommendation }) {
   );
 }
 
-export function SynthesisTab({ recommendation }: SynthesisTabProps) {
+export function SynthesisTab({ recommendation, tickerData }: SynthesisTabProps) {
   const [reasoningExpanded, setReasoningExpanded] = useState(false);
 
   if (!recommendation) {
@@ -504,7 +506,7 @@ export function SynthesisTab({ recommendation }: SynthesisTabProps) {
       </div>
 
       {/* Signal Freshness */}
-      <SignalFreshnessBar rec={recommendation} />
+      <SignalFreshnessBar rec={recommendation} currentPrice={tickerData?.price ?? null} />
 
       {/* NO_TRADE / WATCH callout */}
       {(recommendation.action === 'NO_TRADE' || recommendation.action === 'WATCH') && (

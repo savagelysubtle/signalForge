@@ -151,6 +151,9 @@ export function SentimentTab({ sentiment }: SentimentTabProps) {
             <div className={clsx('text-4xl font-display font-bold tabular-nums', label.color)}>
               {sentiment.sentiment_score > 0 ? '+' : ''}{sentiment.sentiment_score.toFixed(2)}
             </div>
+            <div className="text-text-secondary font-mono text-xs mt-1.5">
+              Confidence: {Math.round(sentiment.confidence * 100)}%
+            </div>
           </div>
           <div className="flex items-center gap-2">
             {bucket && bucket.text !== label.text && (

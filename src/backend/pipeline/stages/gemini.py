@@ -17,6 +17,8 @@ import time
 from google import genai
 from google.genai import types
 
+from pipeline.http_retry import with_transient_retry
+from pipeline.model_config import GEMINI_MODEL
 from pipeline.prompts.gemini_sentiment import (
     SENTIMENT_SYSTEM_PROMPT,
     build_sentiment_prompt,
@@ -27,8 +29,6 @@ from pipeline.validation import with_validation_retry
 from services.keyring_service import get_api_key
 
 logger = logging.getLogger(__name__)
-
-GEMINI_MODEL = "gemini-2.5-pro"
 
 _semaphore = asyncio.Semaphore(5)
 
@@ -43,11 +43,8 @@ def _get_client() -> genai.Client:
     return genai.Client(api_key=api_key)
 
 
-_TRANSIENT_CODES = {429, 500, 502, 503}
-_API_MAX_RETRIES = 3
-
-
 @with_validation_retry(schema=SentimentAnalysis, max_retries=2, provider="google")
+@with_transient_retry(max_retries=3)
 async def _call_gemini(
     system_prompt: str,
     user_prompt: str,
@@ -56,8 +53,8 @@ async def _call_gemini(
 ) -> str:
     """Make a single Gemini call with Google Search grounding.
 
-    Retries up to ``_API_MAX_RETRIES`` times on transient HTTP errors
-    (429, 500, 502, 503) with exponential backoff before raising.
+    Transient HTTP errors (429, 5xx) are handled by the
+    ``@with_transient_retry`` decorator with exponential backoff.
 
     Args:
         system_prompt: System instruction defining output format.
@@ -73,42 +70,16 @@ async def _call_gemini(
     if error_context:
         full_user_prompt = f"{user_prompt}\n\n---\nCORRECTION: {error_context}"
 
-    last_exc: Exception | None = None
-    for attempt in range(_API_MAX_RETRIES):
-        try:
-            async with _semaphore:
-                response = await client.aio.models.generate_content(
-                    model=GEMINI_MODEL,
-                    contents=full_user_prompt,
-                    config=types.GenerateContentConfig(
-                        system_instruction=system_prompt,
-                        tools=[types.Tool(google_search=types.GoogleSearch())],
-                    ),
-                )
-            return response.text or ""
-        except Exception as exc:
-            last_exc = exc
-            code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
-            if code is None:
-                err_str = str(exc)
-                for c in _TRANSIENT_CODES:
-                    if str(c) in err_str:
-                        code = c
-                        break
-            if code not in _TRANSIENT_CODES:
-                raise
-            wait = 2 ** (attempt + 1)
-            logger.warning(
-                "Gemini transient error (attempt %d/%d, code=%s), retrying in %ds: %s",
-                attempt + 1,
-                _API_MAX_RETRIES,
-                code,
-                wait,
-                exc,
-            )
-            await asyncio.sleep(wait)
-
-    raise last_exc  # type: ignore[misc]
+    async with _semaphore:
+        response = await client.aio.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=full_user_prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                tools=[types.Tool(google_search=types.GoogleSearch())],
+            ),
+        )
+    return response.text or ""
 
 
 async def _analyze_ticker(

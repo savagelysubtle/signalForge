@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import type { PipelineResult, FundamentalData } from '../../types';
+import { useEffect, useState } from 'react';
+import type { PipelineResult, FundamentalData, StageError } from '../../types';
 import { OverviewTab } from './OverviewTab';
 import { ChartTab } from './ChartTab';
 import { SentimentTab } from './SentimentTab';
@@ -8,6 +8,41 @@ import { FeedbackTab } from './FeedbackTab';
 import { RawTab } from './RawTab';
 import { motion, AnimatePresence } from 'motion/react';
 import clsx from 'clsx';
+import { AlertTriangle, X } from 'lucide-react';
+
+const STAGE_DISPLAY: Record<string, string> = {
+  fmp: 'FMP',
+  regime: 'Regime',
+  perplexity: 'Perplexity',
+  numerical_ta: 'Numerical TA',
+  gemini: 'Gemini',
+  claude: 'Claude',
+  risk_post_filter: 'Risk post-filter',
+  gpt: 'GPT',
+  risk_validation: 'Risk validation',
+  calibration: 'Calibration',
+  save_recommendations: 'Save recommendations',
+};
+
+function formatStageDisplayName(stage: string): string {
+  if (STAGE_DISPLAY[stage]) return STAGE_DISPLAY[stage];
+  return stage
+    .split('_')
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(' ');
+}
+
+function uniqueStageLabels(errors: StageError[]): string[] {
+  const seen = new Set<string>();
+  const labels: string[] = [];
+  for (const e of errors) {
+    if (!seen.has(e.stage)) {
+      seen.add(e.stage);
+      labels.push(formatStageDisplayName(e.stage));
+    }
+  }
+  return labels;
+}
 
 interface DetailViewProps {
   tickerData: FundamentalData;
@@ -59,12 +94,21 @@ function relativeTime(iso: string): string {
 
 export function DetailView({ tickerData, fullResult, initialTab = 'overview' }: DetailViewProps) {
   const [activeTab, setActiveTab] = useState<TabType>(initialTab);
+  const [stageErrorBannerDismissed, setStageErrorBannerDismissed] = useState(false);
+
+  useEffect(() => {
+    setStageErrorBannerDismissed(false);
+  }, [fullResult.run_id]);
+
   const sentiment = fullResult.sentiment_analyses.find(s => s.ticker === tickerData.ticker) ?? null;
   const chartAnalyses = fullResult.chart_analyses.filter(c => c.ticker === tickerData.ticker);
   const chartErrors = (fullResult.chart_errors ?? []).filter(e => e.ticker === tickerData.ticker);
   const recommendation = fullResult.recommendations.find(r => r.ticker === tickerData.ticker) ?? null;
   const actionCfg = recommendation ? (ACTION_HEADER_CONFIG[recommendation.action] ?? null) : null;
   const modeCfg = MODE_CONFIG[fullResult.mode] ?? MODE_CONFIG.discovery;
+  const screeningSummary = fullResult.screening?.screening_summary?.trim();
+  const stageErrorLabels = uniqueStageLabels(fullResult.stage_errors);
+  const showStageErrorBanner = fullResult.stage_errors.length > 0 && !stageErrorBannerDismissed;
 
   const tabs: { id: TabType; label: string }[] = [
     { id: 'overview', label: 'Overview' },
@@ -114,7 +158,35 @@ export function DetailView({ tickerData, fullResult, initialTab = 'overview' }: 
             </div>
           )}
         </div>
+        {screeningSummary && (
+          <p className="text-xs text-text-secondary font-body leading-relaxed mt-3 max-w-4xl">
+            {screeningSummary}
+          </p>
+        )}
       </div>
+
+      {showStageErrorBanner && (
+        <div
+          className="px-6 py-2.5 flex items-start gap-3 border-b border-border-gutter shrink-0 bg-accent-alert-dim"
+          role="alert"
+        >
+          <AlertTriangle
+            className="w-4 h-4 shrink-0 mt-0.5 text-accent-alert"
+            aria-hidden
+          />
+          <p className="text-sm text-text-primary font-body flex-1 min-w-0 leading-snug">
+            Pipeline completed with errors in: {stageErrorLabels.join(', ')}
+          </p>
+          <button
+            type="button"
+            onClick={() => setStageErrorBannerDismissed(true)}
+            className="shrink-0 p-1 rounded-md text-text-muted hover:text-text-primary hover:bg-bg-concrete/80 transition-colors"
+            aria-label="Dismiss pipeline error notice"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="overflow-x-auto border-b border-border-gutter shrink-0 bg-bg-asphalt">
@@ -160,7 +232,9 @@ export function DetailView({ tickerData, fullResult, initialTab = 'overview' }: 
             {activeTab === 'sentiment' && <SentimentTab sentiment={sentiment} />}
             {activeTab === 'feedback' && <FeedbackTab recommendation={recommendation} />}
             {activeTab === 'raw' && <RawTab data={fullResult} />}
-            {activeTab === 'synthesis' && <SynthesisTab recommendation={recommendation} />}
+            {activeTab === 'synthesis' && (
+              <SynthesisTab recommendation={recommendation} tickerData={tickerData} />
+            )}
           </motion.div>
         </AnimatePresence>
       </div>
@@ -186,7 +260,6 @@ export function DetailView({ tickerData, fullResult, initialTab = 'overview' }: 
           <div className="flex items-center gap-2 shrink-0">
             <span
               className={clsx('text-[10px] font-display font-semibold px-2 py-0.5 rounded', modeCfg.bg, modeCfg.color)}
-              title={fullResult.screening?.screening_summary ?? undefined}
             >
               {modeCfg.label}
             </span>

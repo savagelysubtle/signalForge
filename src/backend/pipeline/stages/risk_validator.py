@@ -11,7 +11,7 @@ import logging
 import re
 from typing import TYPE_CHECKING
 
-from pipeline.schemas import ChartAnalysis, Recommendation, StrategyConfig
+from pipeline.schemas import ChartAnalysis, Recommendation, RiskAssessment, StrategyConfig
 
 if TYPE_CHECKING:
     from services.fmp_service import FmpEnrichedStock, FmpQuote
@@ -90,12 +90,14 @@ def validate_risks(
     charts: list[ChartAnalysis],
     fmp_context: dict[str, FmpEnrichedStock] | None = None,
     live_quotes: dict[str, FmpQuote] | None = None,
+    risk_assessments: list[RiskAssessment] | None = None,
 ) -> list[Recommendation]:
     """Run deterministic risk checks on each recommendation.
 
     Attaches ``risk_violations`` and sets ``risk_approved`` on each
-    recommendation. Violations are advisory — they flag concerns but
-    do not remove or alter the recommendation.
+    recommendation. Also scales ``position_size_pct`` inversely with
+    risk_score from the risk post-filter, and hard-blocks extreme
+    fundamental risk (distressed Altman Z-score or very low Piotroski).
 
     Args:
         recommendations: GPT-produced recommendations to validate.
@@ -103,11 +105,13 @@ def validate_risks(
         charts: Claude chart analyses (used for ATR extraction).
         fmp_context: FMP enriched stock data keyed by ticker.
         live_quotes: Live price quotes keyed by ticker for price sanity checks.
+        risk_assessments: Per-ticker risk assessments from the risk post-filter.
 
     Returns:
         The same list with risk fields populated in-place.
     """
     rp = config.risk_params
+    _risk_map = {ra.ticker: ra for ra in (risk_assessments or [])}
 
     for rec in recommendations:
         violations: list[str] = []
@@ -156,6 +160,29 @@ def validate_risks(
                     violations.append(
                         f"Earnings in {earnings_days} day{'s' if earnings_days != 1 else ''} "
                         "— elevated volatility risk"
+                    )
+                if fmp_data.altman_z_score is not None and fmp_data.altman_z_score < 1.0:
+                    violations.append(
+                        f"Extreme distress: Altman Z-score {fmp_data.altman_z_score:.2f} "
+                        f"(distress zone <1.0)"
+                    )
+                if fmp_data.piotroski_score is not None and fmp_data.piotroski_score < 2:
+                    violations.append(
+                        f"Very weak fundamentals: Piotroski F-Score "
+                        f"{fmp_data.piotroski_score}/9 (<2)"
+                    )
+
+        # Scale position size inversely with risk_score from post-filter
+        if risk_assessments and rec.action in ("BUY", "SHORT"):
+            ra = _risk_map.get(rec.ticker)
+            if ra and ra.risk_score < 1.0:
+                risk_size_factor = max(0.25, ra.risk_score)
+                original_size = rec.position_size_pct
+                rec.position_size_pct = round(rec.position_size_pct * risk_size_factor, 2)
+                if rec.position_size_pct < original_size:
+                    violations.append(
+                        f"Position scaled {original_size:.1f}% -> {rec.position_size_pct:.1f}% "
+                        f"(risk_score={ra.risk_score:.2f})"
                     )
 
         rec.risk_violations = violations

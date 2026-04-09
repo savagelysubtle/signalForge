@@ -3,22 +3,29 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
 from database.connection import get_db
 from middleware.auth import CurrentUser
 from pipeline.schemas import PerformanceOverview, ReflectionResponse, TradeHistoryEntry
+from services.calibration_curve import compute_calibration_curve
+from services.paper_tracker import get_paper_performance, process_pending_checks
 from services.reflection import generate_reflection
 
 router = APIRouter(prefix="/insights", tags=["insights"])
 
 
 @router.post("/reflect", response_model=ReflectionResponse)
-async def trigger_reflection(user_id: CurrentUser) -> ReflectionResponse:
+async def trigger_reflection(
+    user_id: CurrentUser,
+    strategy_id: str | None = None,
+) -> ReflectionResponse:
     """Generate a new reflection from the user's trade history.
 
     Requires at least 5 logged outcomes to produce meaningful stats.
+    Optionally scoped to a single strategy via ``strategy_id`` query param.
     """
     client = await get_db()
 
@@ -32,7 +39,7 @@ async def trigger_reflection(user_id: CurrentUser) -> ReflectionResponse:
             detail=f"Need at least 5 logged outcomes to generate a reflection (have {outcome_count})",
         )
 
-    reflection = await generate_reflection(user_id)
+    reflection = await generate_reflection(user_id, strategy_id=strategy_id)
     return reflection
 
 
@@ -258,3 +265,32 @@ async def _compute_confidence_calibration(
         )
 
     return calibration
+
+
+@router.post("/paper-trades/process")
+async def trigger_paper_trade_processing(user_id: CurrentUser) -> dict[str, Any]:
+    """Run due paper-trade price checks (FMP quotes) and update stored P&L."""
+    _ = user_id
+    return await process_pending_checks()
+
+
+@router.get("/paper-performance")
+async def read_paper_performance(user_id: CurrentUser) -> dict[str, Any]:
+    """Aggregate paper trading stats for the authenticated user."""
+    return await get_paper_performance(user_id)
+
+
+@router.get("/calibration-curve")
+async def get_calibration_curve(user_id: CurrentUser) -> dict:
+    """Return the empirical calibration curve from historical outcomes.
+
+    Bins raw GPT confidence vs actual win rate. When sufficient data
+    exists (50+ outcomes), also provides isotonic regression mapping.
+    """
+    result = await compute_calibration_curve(user_id)
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Not enough outcome data to build a calibration curve (need 50+).",
+        )
+    return result

@@ -68,7 +68,11 @@
       "Bash(python:*)",
       "Bash(find D:/Coding/signalForge -name *.joblib -o -name *model* -type f)",
       "Bash(git fetch:*)",
-      "Bash(git merge:*)"
+      "Bash(git merge:*)",
+      "Bash(wc:*)"
     ]
-  }
+  },
+  "disabledMcpjsonServers": [
+    "signalforge"
+  ]
 }

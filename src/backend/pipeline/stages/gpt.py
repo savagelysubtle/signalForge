@@ -1,8 +1,9 @@
 """GPT debate and synthesis stage.
 
 Stage 4: Processes all tickers in batch through a bull/bear/judge debate
-(or single synthesis call when debate is disabled). Bull and bear analysts
-run in parallel; the judge runs sequentially after both complete.
+(or single synthesis call when debate is disabled). Bull runs first, then bear
+(with bull arguments injected so bear can challenge specific points); the judge
+runs after both complete.
 
 Uses the ``openai`` SDK with ``AsyncOpenAI`` for async API calls.
 """
@@ -15,6 +16,8 @@ import time
 
 from openai import AsyncOpenAI
 
+from pipeline.http_retry import with_transient_retry
+from pipeline.model_config import GPT_MODEL
 from pipeline.prompts.gpt_debate import (
     BEAR_SYSTEM_PROMPT,
     BULL_SYSTEM_PROMPT,
@@ -38,12 +41,11 @@ from pipeline.schemas import (
     SentimentAnalysis,
     StrategyConfig,
 )
+from pipeline.token_budget import enforce_token_budget
 from pipeline.validation import with_validation_retry
 from services.keyring_service import get_api_key
 
 logger = logging.getLogger(__name__)
-
-GPT_MODEL = "gpt-5.4"
 
 _semaphore = asyncio.Semaphore(3)
 
@@ -123,6 +125,7 @@ async def _call_gpt_judge(
     )
 
 
+@with_transient_retry(max_retries=3)
 async def _call_gpt(
     system_prompt: str,
     user_prompt: str,
@@ -175,6 +178,7 @@ async def run_debate(
     regime_context: str = "",
     sector_consensus: str = "",
     live_quotes: dict | None = None,
+    track_conflicts: str = "",
 ) -> tuple[list[Recommendation], list[dict]]:
     """Run the GPT debate/synthesis with track-aware conflict resolution.
 
@@ -239,6 +243,7 @@ async def run_debate(
         regime_context=regime_context,
         sector_consensus=sector_consensus,
         live_quotes=live_quotes,
+        track_conflicts=track_conflicts,
     )
     all_metadata.append(judge_metadata)
 
@@ -279,7 +284,9 @@ async def _run_debate_phase(
     fmp_context: dict | None = None,
     live_quotes: dict | None = None,
 ) -> tuple[list[DebateCase] | None, list[DebateCase] | None, list[dict]]:
-    """Run bull and bear analysts in parallel with track-aware prompts.
+    """Run bull then bear sequentially with track-aware prompts.
+
+    Bear receives a summary of the bull's cases so it can challenge specific points.
 
     Returns:
         Tuple of (bull_cases or None, bear_cases or None, metadata list).
@@ -322,15 +329,39 @@ async def _run_debate_phase(
 
     start = time.perf_counter()
 
-    bull_task = _call_gpt_bull(BULL_SYSTEM_PROMPT, bull_prompt)
-    bear_task = _call_gpt_bear(BEAR_SYSTEM_PROMPT, bear_prompt)
+    # Run bull first
+    try:
+        bull_result = await _call_gpt_bull(BULL_SYSTEM_PROMPT, bull_prompt)
+    except Exception as exc:
+        bull_result = exc
 
-    results = await asyncio.gather(bull_task, bear_task, return_exceptions=True)
+    # Inject bull's arguments into bear prompt so bear can challenge specific points
+    bull_cases_for_bear: list[DebateCase] | None = None
+    if (isinstance(bull_result, DebateCaseList) and bull_result is not None) or (
+        not isinstance(bull_result, Exception) and bull_result is not None
+    ):
+        bull_cases_for_bear = bull_result.cases
+
+    if bull_cases_for_bear:
+        bull_summary_lines = []
+        for bc in bull_cases_for_bear:
+            args = "; ".join(bc.key_arguments[:3])
+            bull_summary_lines.append(f"- {bc.ticker}: {bc.strongest_signal} (args: {args})")
+        bull_challenge_section = (
+            "\n\n## BULL CASE TO CHALLENGE\n"
+            "The bull analyst made these specific arguments. You MUST directly "
+            "counter each one with specific evidence:\n" + "\n".join(bull_summary_lines)
+        )
+        bear_prompt = bear_prompt + bull_challenge_section
+        bear_metadata["prompt_text"] = f"{BEAR_SYSTEM_PROMPT}\n---\n{bear_prompt}"
+
+    # Run bear with bull context
+    try:
+        bear_result = await _call_gpt_bear(BEAR_SYSTEM_PROMPT, bear_prompt)
+    except Exception as exc:
+        bear_result = exc
 
     elapsed_ms = int((time.perf_counter() - start) * 1000)
-
-    bull_result = results[0]
-    bear_result = results[1]
 
     bull_cases: list[DebateCase] | None = None
     bear_cases: list[DebateCase] | None = None
@@ -382,6 +413,7 @@ async def _run_judge_phase(
     regime_context: str = "",
     sector_consensus: str = "",
     live_quotes: dict | None = None,
+    track_conflicts: str = "",
 ) -> tuple[list[Recommendation], dict]:
     """Run the judge with track-aware conflict resolution.
 
@@ -403,7 +435,10 @@ async def _run_judge_phase(
         regime_context=regime_context,
         sector_consensus=sector_consensus,
         live_quotes=live_quotes,
+        track_conflicts=track_conflicts,
     )
+
+    judge_prompt = enforce_token_budget(JUDGE_SYSTEM_PROMPT, judge_prompt, model=GPT_MODEL)
 
     metadata: dict = {
         "stage": "gpt_judge",

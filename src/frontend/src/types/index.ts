@@ -146,6 +146,25 @@ export interface ConfidenceBreakdown {
 export type SignalStrength = "strong" | "moderate" | "weak" | "no_edge";
 
 // ---------------------------------------------------------------------------
+// Regime Classifier (Stage 0.5)
+// ---------------------------------------------------------------------------
+
+export type RegimeType =
+  | "trending_bull"
+  | "trending_bear"
+  | "range_bound"
+  | "high_volatility"
+  | "risk_off";
+
+export interface RegimeOutput {
+  regime_type: RegimeType;
+  vix_estimate: number | null;
+  breadth_estimate: string | null;
+  key_sectors: string[];
+  reasoning: string;
+}
+
+// ---------------------------------------------------------------------------
 // GPT Debate Stage (Phase 4 — define now, render later)
 // ---------------------------------------------------------------------------
 
@@ -181,10 +200,15 @@ export interface Recommendation {
   confidence_breakdown: ConfidenceBreakdown | null;
   signal_strength: SignalStrength | null;
   raw_gpt_confidence: number | null;
+  // Entry precision — produced by the GPT judge for actionable trade plans
+  entry_trigger: string | null; // "market", "limit", "breakout", "pullback", or custom
+  scaling_plan: string | null;
+  invalidation_conditions: string[];
+
   // Signal freshness — set by the orchestrator at recommendation-save time
   signal_generated_at: string | null; // ISO 8601 UTC
   price_at_signal: number | null;
-  entry_valid_window: string | null; // e.g. "1-2 hours", "1-2 trading days"
+  entry_valid_window: string; // e.g. "1-2 hours", "1-2 trading days"
   // Original GPT position size before ML gate adjustment
   raw_gpt_position_size_pct: number | null;
   // ML gate fields — set by the independent LightGBM model at Stage 4.8

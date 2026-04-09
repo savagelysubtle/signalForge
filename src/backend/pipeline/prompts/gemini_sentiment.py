@@ -12,7 +12,7 @@ from datetime import date
 from pipeline.schemas import StrategyConfig
 from utils.hashing import prompt_hash
 
-PROMPT_VERSION = "v6"
+PROMPT_VERSION = "v7"
 
 SENTIMENT_SYSTEM_PROMPT = """\
 You are a financial news analyst specializing in sentiment analysis.
@@ -70,6 +70,50 @@ Return a JSON object with this exact structure:
     "key_driver": "<primary driver of sector sentiment>"
   },
   "summary": "<2-3 sentence synthesis of the news landscape and sentiment drivers>"
+}
+
+## EXAMPLE OUTPUT (redacted)
+{
+  "ticker": "EXAMPLE",
+  "sentiment_score": 0.4,
+  "sentiment_label": "bullish",
+  "confidence": 0.75,
+  "key_catalysts": [
+    {
+      "headline": "Q2 earnings beat by 15% with raised guidance",
+      "source": "Reuters",
+      "url": "https://example.com/earnings",
+      "impact": "positive",
+      "significance": "high",
+      "published_date": "2026-04-01",
+      "hours_ago": 18
+    },
+    {
+      "headline": "FDA approval expected within 30 days for lead candidate",
+      "source": "BioPharma Digest",
+      "url": "",
+      "impact": "positive",
+      "significance": "high",
+      "published_date": "2026-04-07",
+      "hours_ago": 8
+    },
+    {
+      "headline": "Sector ETF sees rotation out of biotech names",
+      "source": "MarketWatch",
+      "url": "https://example.com/sector",
+      "impact": "negative",
+      "significance": "medium",
+      "published_date": "2026-04-06",
+      "hours_ago": 30
+    }
+  ],
+  "news_recency": "today",
+  "sector_sentiment": {
+    "label": "neutral",
+    "score": 0.05,
+    "key_driver": "Mixed sector rotation — biotech headwinds vs. risk-on appetite for growth names"
+  },
+  "summary": "Positive near-term catalysts from earnings beat and pipeline progress outweigh broader sector rotation headwinds. Analyst consensus shifting bullish with 3 upgrades in last week."
 }
 
 Scoring guide for sentiment_score:

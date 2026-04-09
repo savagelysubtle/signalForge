@@ -18,6 +18,8 @@ import time
 
 from anthropic import AsyncAnthropic
 
+from pipeline.http_retry import with_transient_retry
+from pipeline.model_config import CLAUDE_MAX_TOKENS, CLAUDE_MODEL
 from pipeline.prompts.claude_chart import (
     CHART_SYSTEM_PROMPT,
     build_chart_prompt,
@@ -35,8 +37,6 @@ from services.chart_image import fetch_chart_image
 from services.keyring_service import get_api_key
 
 logger = logging.getLogger(__name__)
-
-CLAUDE_MODEL = "claude-opus-4-6"
 
 _semaphore = asyncio.Semaphore(3)
 
@@ -80,6 +80,7 @@ def _get_client() -> AsyncAnthropic:
 
 
 @with_validation_retry(schema=ChartAnalysis, max_retries=2, provider="anthropic")
+@with_transient_retry(max_retries=3)
 async def _call_claude_vision(
     system_prompt: str,
     user_prompt: str,
@@ -109,7 +110,7 @@ async def _call_claude_vision(
     async with _semaphore:
         response = await client.messages.create(
             model=CLAUDE_MODEL,
-            max_tokens=4096,
+            max_tokens=CLAUDE_MAX_TOKENS,
             system=system_prompt,
             messages=[
                 {

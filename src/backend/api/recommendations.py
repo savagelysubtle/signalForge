@@ -143,16 +143,11 @@ async def list_recommendations(
             .in_("id", run_ids)
             .execute()
         )
-        strat_ids = list({
-            pr["strategy_id"] for pr in runs_resp.data if pr.get("strategy_id")
-        })
+        strat_ids = list({pr["strategy_id"] for pr in runs_resp.data if pr.get("strategy_id")})
         strat_name_lookup: dict[str, str] = {}
         if strat_ids:
             strats_resp = (
-                await client.table("strategies")
-                .select("id, name")
-                .in_("id", strat_ids)
-                .execute()
+                await client.table("strategies").select("id, name").in_("id", strat_ids).execute()
             )
             strat_name_lookup = {s["id"]: s["name"] for s in strats_resp.data}
 

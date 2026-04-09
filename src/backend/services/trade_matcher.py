@@ -503,15 +503,20 @@ async def _auto_confirm_and_follow(
         )
         logger.info("Auto-created 'following' decision for rec %s", rec_id)
 
-    existing_outcome = (
+    existing_outcome_resp = (
         await client.table("outcomes")
         .select("id, entry_price, shares, entry_timestamp, commission, stop_loss")
         .eq("decision_id", decision_id)
         .eq("user_id", user_id)
-        .maybe_single()
+        .limit(1)
         .execute()
     )
-    has_existing = existing_outcome and existing_outcome.data
+    existing_outcome_data = (
+        existing_outcome_resp.data[0]
+        if existing_outcome_resp and existing_outcome_resp.data
+        else None
+    )
+    has_existing = existing_outcome_data is not None
 
     rec_full = (
         await client.table("recommendations")
@@ -524,7 +529,7 @@ async def _auto_confirm_and_follow(
     rec_action = rec_data.get("action", "")
 
     if is_exit and has_existing:
-        entry_data = existing_outcome.data
+        entry_data = existing_outcome_data
         entry_price = entry_data.get("entry_price")
         entry_shares = entry_data.get("shares") or order["total_shares"]
         exit_price = order["avg_price"]
@@ -592,7 +597,7 @@ async def _auto_confirm_and_follow(
             await (
                 client.table("outcomes")
                 .update(outcome_fields)
-                .eq("id", existing_outcome.data["id"])
+                .eq("id", existing_outcome_data["id"])
                 .execute()
             )
         else:

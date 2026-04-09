@@ -19,6 +19,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from database.connection import get_db
+from pipeline.model_config import REFLECTION_MODEL
 from pipeline.schemas import ReflectionResponse, StructuredOutcomeAnalysis
 
 logger = logging.getLogger(__name__)
@@ -59,6 +60,39 @@ async def load_reflection_context(user_id: str = "") -> str:
         logger.exception("Failed to load reflection context")
 
     return ""
+
+
+async def load_reflection_metrics(user_id: str = "") -> dict[str, Any] | None:
+    """Load structured metrics from the latest reflection for calibration.
+
+    Unlike ``load_reflection_context`` (which returns the text injection prompt),
+    this returns the raw metrics dict containing ``confidence_calibration``,
+    ``pattern_stats``, and other fields consumed by
+    ``confidence_calibration._score_historical_pattern``.
+
+    Args:
+        user_id: Filter reflections by user. Empty string returns any user's latest.
+
+    Returns:
+        Metrics dict if available, or None.
+    """
+    try:
+        client = await get_db()
+        query = client.table("reflections").select("metrics").order("generated_at", desc=True)
+        if user_id:
+            query = query.eq("user_id", user_id)
+        response = await query.limit(1).execute()
+
+        if response and response.data and response.data[0].get("metrics"):
+            raw = response.data[0]["metrics"]
+            metrics = json.loads(raw) if isinstance(raw, str) else raw
+            if isinstance(metrics, dict):
+                logger.info("Loaded reflection metrics (%d keys)", len(metrics))
+                return metrics
+    except Exception:
+        logger.exception("Failed to load reflection metrics")
+
+    return None
 
 
 def _parse_stage_json(row: dict) -> dict | None:
@@ -264,7 +298,9 @@ def build_structured_outcome_analysis(
     if isinstance(track_agreement, dict):
         for track_name in ("perplexity", "gemini", "claude"):
             direction = track_agreement.get(f"{track_name}_direction", "neutral")
-            if (signal_direction == "long" and direction == "bullish") or (signal_direction == "short" and direction == "bearish"):
+            if (signal_direction == "long" and direction == "bullish") or (
+                signal_direction == "short" and direction == "bearish"
+            ):
                 tracks_agreed.append(track_name)
             elif direction == "neutral":
                 pass
@@ -295,7 +331,10 @@ def build_structured_outcome_analysis(
     )
 
 
-async def generate_reflection(user_id: str) -> ReflectionResponse:
+async def generate_reflection(
+    user_id: str,
+    strategy_id: str | None = None,
+) -> ReflectionResponse:
     """Generate a reflection from the user's trade history.
 
     Computes performance metrics from decisions + outcomes, fetches
@@ -305,6 +344,9 @@ async def generate_reflection(user_id: str) -> ReflectionResponse:
 
     Args:
         user_id: The user to generate a reflection for.
+        strategy_id: Optional strategy UUID to scope the reflection to a
+            single strategy. When provided, only recommendations from runs
+            using this strategy are included.
 
     Returns:
         The generated reflection with metrics and injection prompt.
@@ -327,6 +369,23 @@ async def generate_reflection(user_id: str) -> ReflectionResponse:
             .execute()
         )
         rec_map = {r["id"]: r for r in rec_resp.data}
+
+    # Strategy-scoped filtering: keep only recs from matching pipeline runs
+    if strategy_id and rec_map:
+        run_ids = list({r["run_id"] for r in rec_map.values() if r.get("run_id")})
+        if run_ids:
+            run_resp = (
+                await client.table("pipeline_runs")
+                .select("id")
+                .eq("strategy_id", strategy_id)
+                .in_("id", run_ids)
+                .execute()
+            )
+            valid_run_ids = {r["id"] for r in (run_resp.data or [])}
+            rec_map = {k: v for k, v in rec_map.items() if v.get("run_id") in valid_run_ids}
+            valid_rec_ids = set(rec_map.keys())
+            decisions = [d for d in decisions if d["recommendation_id"] in valid_rec_ids]
+            outcomes = [o for o in outcomes if o["recommendation_id"] in valid_rec_ids]
 
     stage_context = await _fetch_stage_context(client, rec_map)
 
@@ -1078,7 +1137,7 @@ async def _get_strategic_advice(metrics: dict) -> str:
         )
 
         response = await client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=REFLECTION_MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": json.dumps(metrics, indent=2)},

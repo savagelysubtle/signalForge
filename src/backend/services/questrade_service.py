@@ -652,5 +652,5 @@ def _is_expired(expires_at_str: str) -> bool:
         if expires.tzinfo is None:
             expires = expires.replace(tzinfo=UTC)
         return datetime.now(tz=UTC) >= expires
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return True

@@ -14,18 +14,16 @@ from typing import Any
 
 from perplexity import AsyncPerplexity
 
+from pipeline.model_config import REGIME_MODEL as AGENT_MODEL
 from pipeline.prompts.regime_classifier import (
     REGIME_SYSTEM_PROMPT,
     build_regime_prompt,
 )
 from pipeline.schemas import RegimeOutput
-from pipeline.validation import validate_llm_json
+from pipeline.validation import with_validation_retry
 from services.keyring_service import get_api_key
 
 logger = logging.getLogger(__name__)
-
-AGENT_MODEL = "perplexity/sonar"
-MAX_RETRIES = 1
 
 _semaphore = asyncio.Semaphore(3)
 
@@ -48,6 +46,59 @@ def _extract_text(output_items: list) -> str:
                 if text:
                     parts.append(text)
     return "\n".join(parts)
+
+
+@with_validation_retry(schema=RegimeOutput, max_retries=1, provider="perplexity")
+async def _call_regime_api(
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    error_context: str = "",
+) -> str:
+    """Make a single regime classification API call.
+
+    Args:
+        system_prompt: System instruction for regime classification.
+        user_prompt: Prompt with ground-truth data and classification request.
+        error_context: Appended on retries for self-correction.
+
+    Returns:
+        Raw response text from the API.
+    """
+    client = _get_client()
+
+    full_prompt = user_prompt
+    if error_context:
+        full_prompt = f"{user_prompt}\n\n---\nCORRECTION: {error_context}"
+
+    tools = [
+        {
+            "type": "web_search",
+            "filters": {
+                "search_domain_filter": [
+                    "reuters.com",
+                    "bloomberg.com",
+                    "cnbc.com",
+                    "marketwatch.com",
+                    "finance.yahoo.com",
+                    "barrons.com",
+                ],
+                "search_recency_filter": "day",
+            },
+        }
+    ]
+
+    api_kwargs: dict[str, Any] = {
+        "model": AGENT_MODEL,
+        "instructions": system_prompt,
+        "input": full_prompt,
+        "tools": tools,
+    }
+
+    async with _semaphore:
+        response = await client.responses.create(**api_kwargs)
+
+    return _extract_text(response.output)
 
 
 async def classify_regime(
@@ -85,65 +136,31 @@ async def classify_regime(
         "status": "pending",
     }
 
-    tools = [
-        {
-            "type": "web_search",
-            "filters": {
-                "search_domain_filter": [
-                    "reuters.com",
-                    "bloomberg.com",
-                    "cnbc.com",
-                    "marketwatch.com",
-                    "finance.yahoo.com",
-                    "barrons.com",
-                ],
-                "search_recency_filter": "day",
-            },
-        }
-    ]
+    try:
+        regime = await _call_regime_api(REGIME_SYSTEM_PROMPT, user_prompt)
+        elapsed = time.perf_counter() - start
+        metadata["duration_ms"] = int(elapsed * 1000)
 
-    client = _get_client()
+        if regime is not None:
+            metadata["status"] = "success"
+            metadata["raw_response"] = regime.model_dump_json()
+            metadata["parsed_output"] = regime.model_dump()
+            logger.info(
+                "Regime classified: %s (VIX=%s, breadth=%s) in %.1fs",
+                regime.regime_type,
+                regime.vix_estimate,
+                regime.breadth_estimate,
+                elapsed,
+            )
+            return regime, metadata
 
-    api_kwargs: dict[str, Any] = {
-        "model": AGENT_MODEL,
-        "instructions": REGIME_SYSTEM_PROMPT,
-        "input": user_prompt,
-        "tools": tools,
-    }
+        metadata["status"] = "validation_failed"
+        logger.warning("Regime classifier validation failed after retries")
+        return None, metadata
 
-    for attempt in range(MAX_RETRIES + 1):
-        try:
-            async with _semaphore:
-                response = await client.responses.create(**api_kwargs)
-
-            raw_text = _extract_text(response.output)
-            metadata["raw_response"] = raw_text
-
-            regime = validate_llm_json(raw_text, RegimeOutput)
-            if regime is not None:
-                elapsed = time.perf_counter() - start
-                metadata["status"] = "success"
-                metadata["duration_ms"] = int(elapsed * 1000)
-                metadata["parsed_output"] = regime.model_dump()
-                logger.info(
-                    "Regime classified: %s (VIX=%s, breadth=%s) in %.1fs",
-                    regime.regime_type,
-                    regime.vix_estimate,
-                    regime.breadth_estimate,
-                    elapsed,
-                )
-                return regime, metadata
-
-            if attempt < MAX_RETRIES:
-                logger.warning("Regime validation failed, retrying (attempt %d)", attempt + 1)
-
-        except Exception:
-            logger.exception("Regime classifier call failed (attempt %d)", attempt)
-            if attempt < MAX_RETRIES:
-                await asyncio.sleep(1)
-
-    elapsed = time.perf_counter() - start
-    metadata["status"] = "failed"
-    metadata["duration_ms"] = int(elapsed * 1000)
-    logger.warning("Regime classifier failed after %d attempts", MAX_RETRIES + 1)
-    return None, metadata
+    except Exception:
+        elapsed = time.perf_counter() - start
+        metadata["status"] = "failed"
+        metadata["duration_ms"] = int(elapsed * 1000)
+        logger.exception("Regime classifier failed")
+        return None, metadata

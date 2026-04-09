@@ -4,12 +4,13 @@ Every LLM call is wrapped so that:
 1. The raw response is parsed as JSON.
 2. The JSON is validated against a Pydantic schema.
 3. On validation failure, the call is retried with error context
-   appended to the prompt (max 2 retries).
+   appended to the prompt (max 2 retries) and exponential backoff.
 4. On final failure, ``None`` is returned and the error is logged.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -100,6 +101,7 @@ def with_validation_retry(  # noqa: UP047
     schema: type[T],
     max_retries: int = 2,
     provider: str = "",
+    base_delay: float = 1.0,
 ) -> Callable[
     [Callable[..., Awaitable[str]]],
     Callable[..., Awaitable[T | None]],
@@ -111,11 +113,16 @@ def with_validation_retry(  # noqa: UP047
     with an ``error_context`` keyword argument containing the validation error
     details so the LLM can self-correct.
 
+    Retries use exponential backoff: ``base_delay * 2^attempt`` seconds.
+
     Args:
         schema: Pydantic model class to validate against.
         max_retries: Maximum number of retries on validation failure.
         provider: LLM provider name for circuit breaker tracking
             (e.g. "openai", "anthropic", "google", "perplexity").
+        base_delay: Base delay in seconds for exponential backoff between
+            retries. First retry waits ``base_delay``, second waits
+            ``base_delay * 2``, etc. Set to 0 to disable backoff.
 
     Returns:
         Decorator that wraps an async LLM call with validation + retry.
@@ -126,7 +133,6 @@ def with_validation_retry(  # noqa: UP047
     ) -> Callable[..., Awaitable[T | None]]:
         @wraps(fn)
         async def wrapper(*args: object, **kwargs: object) -> T | None:
-            # Circuit breaker: fast-fail if provider is down
             breaker_provider = provider or fn.__module__.split(".")[-1]
             try:
                 check_provider(breaker_provider)
@@ -138,6 +144,17 @@ def with_validation_retry(  # noqa: UP047
 
             for attempt in range(1 + max_retries):
                 if attempt > 0:
+                    delay = base_delay * (2 ** (attempt - 1))
+                    if delay > 0:
+                        logger.info(
+                            "Backing off %.1fs before retry %d/%d for %s",
+                            delay,
+                            attempt,
+                            max_retries,
+                            fn.__name__,
+                        )
+                        await asyncio.sleep(delay)
+
                     kwargs["error_context"] = (
                         f"Your previous response failed validation: {last_error}. "
                         f"Please respond with valid JSON matching this schema: "

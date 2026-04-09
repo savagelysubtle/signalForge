@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
 BULL_PROMPT_VERSION = "v5"
 BEAR_PROMPT_VERSION = "v5"
-JUDGE_PROMPT_VERSION = "v12"
+JUDGE_PROMPT_VERSION = "v14"
 
 _BIAS_SCORE: dict[str, int] = {
     "strongly_bullish": 2,
@@ -169,6 +169,9 @@ Return a JSON object with this exact structure:
         "conflicts": ["<conflict description 1>", ...]
       },
       "confidence_adjustment": "<why confidence was raised or lowered>",
+      "entry_trigger": "<how to enter: 'market', 'limit', 'breakout', 'pullback', or custom>",
+      "scaling_plan": "<position scaling instructions, e.g. '50% now, add 50% on pullback to $187', or null>",
+      "invalidation_conditions": ["<condition that voids this signal before entry>", ...],
       "entry_valid_window": "<how long this entry signal remains actionable, e.g. '1-2 hours', '1 trading day', '2-3 trading days'>"
     }
   ]
@@ -182,6 +185,27 @@ entry_valid_window guidance:
 - If price is extended and a pullback entry is required: "valid on pullback to $X — no time limit but may not trigger"
 - For HOLD / WATCH / NO_TRADE: "N/A"
 - Be specific. The user needs to know whether to act now or set an alert.
+
+entry_trigger guidance (REQUIRED for BUY and SHORT):
+- "market": enter at current price immediately (price is at or near ideal entry)
+- "limit": set a limit order at entry_price (price is away from ideal entry)
+- "breakout": enter when price breaks above/below a key level (specify in scaling_plan)
+- "pullback": wait for a retracement to a specific level before entering
+- For HOLD / WATCH / NO_TRADE: null
+
+scaling_plan guidance:
+- How to build the position over time. Examples:
+  "Enter full position at market" (simple)
+  "50% at current price, add 50% on pullback to $187" (scaling in)
+  "25% on breakout above $195, add 75% on successful retest" (confirmation scaling)
+- For NO_TRADE / WATCH: null
+
+invalidation_conditions guidance (REQUIRED for BUY and SHORT):
+- What conditions would make this trade idea invalid BEFORE entry.
+- At minimum include a price level: "Price drops below $X before entry"
+- Include time-based: "Signal not triggered within entry_valid_window"
+- Include event-based when relevant: "Earnings report changes fundamentals"
+- For NO_TRADE / WATCH: empty array []
 
 VERDICT REQUIREMENTS — your verdict MUST explicitly state:
 1. Which track(s) you weighted most heavily and WHY, citing specific data points
@@ -268,6 +292,54 @@ Risk management rules:
 - risk_reward_ratio = (take_profit - entry) / (entry - stop_loss) — REQUIRED for BUY/SHORT
 - Reduce position_size_pct when confidence is low or tracks disagree
 - Flag warnings for any unusual risks (earnings, low liquidity, etc.)
+
+## EXAMPLE OUTPUT (redacted for brevity)
+{
+  "recommendations": [
+    {
+      "ticker": "EXAMPLE",
+      "action": "BUY",
+      "confidence": 0.72,
+      "entry_price": 185.50,
+      "stop_loss": 179.20,
+      "take_profit": 198.00,
+      "position_size_pct": 3.0,
+      "risk_reward_ratio": 1.98,
+      "holding_period": "3-5 days",
+      "bull_case": {
+        "ticker": "EXAMPLE",
+        "stance": "bull",
+        "key_arguments": ["Track A: revenue growth 22% YoY with expanding margins", "Track C: ascending triangle on daily, RSI 52 with room to run", "Track B: sentiment score 0.6 driven by analyst upgrades"],
+        "strongest_signal": "Track C: breakout above $184 resistance with volume confirmation (RVOL 1.8x)",
+        "weakest_counter": "Track B: sector rotation risk flagged by Gemini (-0.3 sector sentiment)",
+        "confidence": 0.78
+      },
+      "bear_case": {
+        "ticker": "EXAMPLE",
+        "stance": "bear",
+        "key_arguments": ["Earnings in 5 days creates binary event risk", "RSI approaching overbought on weekly timeframe"],
+        "strongest_signal": "Earnings proximity — historical post-earnings drawdown of 8%",
+        "weakest_counter": "Strong institutional buying in last 2 weeks suggests smart money is positioned",
+        "confidence": 0.45
+      },
+      "judge_reasoning": "Track C technical breakout is the primary driver, confirmed by Track A fundamental strength. Track B sector headwinds are acknowledged but ticker-specific catalysts outweigh. Reduced position size due to earnings proximity.",
+      "key_factors": ["Ascending triangle breakout with volume", "22% revenue growth", "Earnings in 5 days (risk)"],
+      "warnings": ["Binary event risk from upcoming earnings", "Weekly RSI approaching overbought"],
+      "track_agreement": {
+        "perplexity_direction": "bullish",
+        "gemini_direction": "neutral",
+        "claude_direction": "bullish",
+        "agreement_score": 0.65,
+        "conflicts": ["Gemini sector sentiment bearish while ticker-specific fundamentals bullish"]
+      },
+      "confidence_adjustment": "Lowered from 0.78 to 0.72 due to earnings proximity and Gemini sector headwinds. Track C and A alignment prevented further reduction.",
+      "entry_trigger": "limit",
+      "scaling_plan": "50% at $185.50 limit, add 50% on successful retest of $184 breakout level",
+      "invalidation_conditions": ["Price drops below $182 (triangle support)", "Pre-earnings guidance warning"],
+      "entry_valid_window": "1-2 trading days"
+    }
+  ]
+}
 """
 
 
@@ -642,7 +714,8 @@ def _format_risk_assessments(
 # ---------------------------------------------------------------------------
 
 
-def build_bull_prompt(
+def _build_debate_side_prompt(
+    side: str,
     tickers: list[str],
     screening: ScreeningResult | None,
     charts: list[ChartAnalysis],
@@ -653,12 +726,10 @@ def build_bull_prompt(
     fmp_context: dict[str, FmpEnrichedStock] | None = None,
     live_quotes: dict[str, FmpQuote] | None = None,
 ) -> str:
-    """Build the user prompt for the bull analyst with track-aware framing.
-
-    Structures data as three independent tracks (A/B/C) so the bull analyst
-    can draw the most optimistic reading from each.
+    """Build bull or bear analyst user prompt with shared track-aware framing.
 
     Args:
+        side: ``"bull"`` or ``"bear"`` — selects optimistic vs pessimistic framing.
         tickers: List of ticker symbols to analyze.
         screening: Perplexity screening result (Track A).
         charts: ChartAnalysis from Claude (Track C).
@@ -672,9 +743,16 @@ def build_bull_prompt(
     Returns:
         Formatted user prompt string.
     """
+    if side == "bull":
+        reading_phrase = "MOST OPTIMISTIC"
+        case_word = "bull"
+    else:
+        reading_phrase = "MOST PESSIMISTIC"
+        case_word = "bear"
+
     parts = [
-        f"Analyze the following {len(tickers)} tickers and build your bull case "
-        f"using the MOST OPTIMISTIC reading across all three tracks: "
+        f"Analyze the following {len(tickers)} tickers and build your {case_word} case "
+        f"using the {reading_phrase} reading across all three tracks: "
         f"{', '.join(tickers)}",
     ]
 
@@ -708,8 +786,54 @@ def build_bull_prompt(
     if risk_assessments:
         parts.append(f"\n## RISK ASSESSMENT\n{_format_risk_assessments(risk_assessments, tickers)}")
 
-    parts.append("\nReturn your bull case as JSON matching the schema in your instructions.")
+    parts.append(
+        f"\nReturn your {case_word} case as JSON matching the schema in your instructions."
+    )
     return "\n".join(parts)
+
+
+def build_bull_prompt(
+    tickers: list[str],
+    screening: ScreeningResult | None,
+    charts: list[ChartAnalysis],
+    sentiments: list[SentimentAnalysis],
+    config: StrategyConfig,
+    ta_snapshots: list[MultiTimeframeTechnical] | None = None,
+    risk_assessments: list[RiskAssessment] | None = None,
+    fmp_context: dict[str, FmpEnrichedStock] | None = None,
+    live_quotes: dict[str, FmpQuote] | None = None,
+) -> str:
+    """Build the user prompt for the bull analyst with track-aware framing.
+
+    Structures data as three independent tracks (A/B/C) so the bull analyst
+    can draw the most optimistic reading from each.
+
+    Args:
+        tickers: List of ticker symbols to analyze.
+        screening: Perplexity screening result (Track A).
+        charts: ChartAnalysis from Claude (Track C).
+        sentiments: SentimentAnalysis from Gemini (Track B).
+        config: Strategy configuration.
+        ta_snapshots: Raw numerical TA data for verification.
+        risk_assessments: Risk flags from deterministic post-filter.
+        fmp_context: FMP enriched stock data keyed by ticker.
+        live_quotes: Real-time FMP quotes keyed by ticker.
+
+    Returns:
+        Formatted user prompt string.
+    """
+    return _build_debate_side_prompt(
+        "bull",
+        tickers,
+        screening,
+        charts,
+        sentiments,
+        config,
+        ta_snapshots=ta_snapshots,
+        risk_assessments=risk_assessments,
+        fmp_context=fmp_context,
+        live_quotes=live_quotes,
+    )
 
 
 def build_bear_prompt(
@@ -742,44 +866,18 @@ def build_bear_prompt(
     Returns:
         Formatted user prompt string.
     """
-    parts = [
-        f"Analyze the following {len(tickers)} tickers and build your bear case "
-        f"using the MOST PESSIMISTIC reading across all three tracks: "
-        f"{', '.join(tickers)}",
-    ]
-
-    if config.trading_style:
-        parts.append(f"\nTrading context: {config.trading_style}")
-
-    parts.append(f"\n{_format_data_availability(tickers, screening, charts, sentiments)}")
-    parts.append(f"\n## LIVE MARKET DATA (real-time)\n{_format_live_quotes(live_quotes, tickers)}")
-
-    parts.append(
-        f"\n## === TRACK A: FUNDAMENTAL ANALYSIS (Perplexity) ===\n"
-        f"{_format_screening_data(screening, tickers)}"
+    return _build_debate_side_prompt(
+        "bear",
+        tickers,
+        screening,
+        charts,
+        sentiments,
+        config,
+        ta_snapshots=ta_snapshots,
+        risk_assessments=risk_assessments,
+        fmp_context=fmp_context,
+        live_quotes=live_quotes,
     )
-    parts.append(
-        f"\n## === TRACK B: SENTIMENT ANALYSIS (Gemini) ===\n"
-        f"{_format_sentiment_data(sentiments, tickers)}"
-    )
-    parts.append(
-        f"\n## === TRACK C: TECHNICAL ANALYSIS (Claude) ===\n{_format_chart_data(charts, tickers)}"
-    )
-
-    if ta_snapshots:
-        parts.append(
-            f"\n## RAW NUMERICAL DATA (for verification)\n"
-            f"{_format_numerical_ta(ta_snapshots, tickers)}"
-        )
-
-    if fmp_context:
-        parts.append(f"\n## QUANTITATIVE DATA (FMP)\n{_format_fmp_data(fmp_context, tickers)}")
-
-    if risk_assessments:
-        parts.append(f"\n## RISK ASSESSMENT\n{_format_risk_assessments(risk_assessments, tickers)}")
-
-    parts.append("\nReturn your bear case as JSON matching the schema in your instructions.")
-    return "\n".join(parts)
 
 
 def build_judge_prompt(
@@ -797,6 +895,7 @@ def build_judge_prompt(
     regime_context: str = "",
     sector_consensus: str = "",
     live_quotes: dict[str, FmpQuote] | None = None,
+    track_conflicts: str = "",
 ) -> str:
     """Build the judge prompt with track-aware conflict resolution.
 
@@ -819,6 +918,7 @@ def build_judge_prompt(
         regime_context: Pre-formatted market regime header, or empty.
         sector_consensus: Pre-formatted sector sentiment consensus, or empty.
         live_quotes: Real-time FMP quotes keyed by ticker.
+        track_conflicts: Pre-formatted directional conflict summary per ticker.
 
     Returns:
         Formatted user prompt string.
@@ -832,6 +932,18 @@ def build_judge_prompt(
         "your confidence, not be glossed over.",
     ]
 
+    # Strategy identity — gives the judge awareness of the strategy archetype
+    strategy_lines = ["\n## STRATEGY CONTEXT"]
+    strategy_label = config.name or "Unnamed"
+    if config.strategy_type:
+        strategy_label += f" ({config.strategy_type})"
+    strategy_lines.append(f"- Strategy: {strategy_label}")
+    if config.description:
+        strategy_lines.append(f"- Description: {config.description}")
+    if config.trading_style:
+        strategy_lines.append(f"- Trading style: {config.trading_style}")
+    parts.extend(strategy_lines)
+
     if regime_context:
         parts.append(f"\n{regime_context}")
 
@@ -843,9 +955,6 @@ def build_judge_prompt(
             f"- Max portfolio risk: {rp.max_portfolio_risk_pct}%",
         ]
     )
-
-    if config.trading_style:
-        parts.append(f"- Trading style: {config.trading_style}")
 
     if reflection_context:
         parts.append(f"\n## HISTORICAL PERFORMANCE CONTEXT\n{reflection_context}")
@@ -862,6 +971,14 @@ def build_judge_prompt(
             "\n## LIVE MARKET DATA\nNo real-time quotes available. "
             "Derive entry, stop-loss, and take-profit from the chart analysis "
             "and numerical TA data above."
+        )
+
+    if track_conflicts:
+        parts.append(
+            f"\n## TRACK CONFLICT SUMMARY\n"
+            f"The following directional disagreements were detected between the "
+            f"independent tracks. You MUST explicitly address each conflict in "
+            f"your recommendation rationale.\n{track_conflicts}"
         )
 
     # Three independent tracks — clearly labeled

@@ -23,6 +23,7 @@ dependencies = [
     "numpy>=2.2.0",
     "scikit-learn>=1.8.0",
     "crepes>=0.9.0",
+    "tiktoken>=0.9.0",
 ]
 
 [build-system]
@@ -67,6 +68,7 @@ line-ending = "auto"
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402", "F401"]
 "tests/**" = ["S101", "PLR2004", "D"]
+"pipeline/orchestrator.py" = ["F821"]  # ruff can't trace closures in deeply nested async functions
 
 [tool.ruff.lint.isort]
 known-first-party = ["database", "pipeline", "services", "api", "utils", "middleware", "config", "ml"]
@@ -83,4 +85,6 @@ error-on-warning = false
 dev = [
     "ruff>=0.15.7",
     "ty>=0.0.24",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=1.0.0",
 ]

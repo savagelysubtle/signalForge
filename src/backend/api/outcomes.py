@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
@@ -17,6 +19,10 @@ from pipeline.schemas import (
     OutcomeCreate,
     OutcomeResponse,
 )
+
+logger = logging.getLogger(__name__)
+
+AUTO_REFLECTION_THRESHOLD = 5
 
 router = APIRouter(prefix="/outcomes", tags=["outcomes"])
 
@@ -307,8 +313,45 @@ async def create_outcome(
     }
     await client.table("outcomes").insert(row).execute()
 
+    _reflection_task = asyncio.create_task(_maybe_auto_reflect(client, user_id))  # noqa: RUF006 — fire-and-forget; ref stored to prevent GC
+
     inserted = await client.table("outcomes").select("*").eq("id", outcome_id).single().execute()
     return _build_outcome_response(cast(dict[str, Any], inserted.data))
+
+
+async def _maybe_auto_reflect(client: Any, user_id: str) -> None:
+    """Auto-trigger reflection when enough new outcomes have accumulated.
+
+    Counts outcomes logged after the last reflection. If the count meets
+    the threshold, generates a new reflection in the background.
+    """
+    try:
+        last_ref = (
+            await client.table("reflections")
+            .select("generated_at")
+            .eq("user_id", user_id)
+            .order("generated_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+
+        query = client.table("outcomes").select("id", count="exact").eq("user_id", user_id)
+        if last_ref and last_ref.data:
+            query = query.gt("logged_at", last_ref.data[0]["generated_at"])
+        resp = await query.execute()
+
+        new_count = resp.count or 0
+        if new_count >= AUTO_REFLECTION_THRESHOLD:
+            from services.reflection import generate_reflection
+
+            logger.info(
+                "Auto-triggering reflection for user %s (%d new outcomes)",
+                user_id,
+                new_count,
+            )
+            await generate_reflection(user_id)
+    except Exception:
+        logger.debug("Auto-reflection check failed (non-critical)", exc_info=True)
 
 
 @router.put("/{outcome_id}", response_model=OutcomeResponse)

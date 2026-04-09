@@ -11,15 +11,22 @@ const ACTION_PILL: Record<string, { text: string; bg: string; border: string; te
   WATCH:    { text: 'WATCH',    bg: 'bg-accent-electric/20', border: 'border-accent-electric/35', text_color: 'text-accent-electric' },
 };
 
+function confidencePercentClass(confidence: number): string {
+  if (confidence >= 0.7) return 'text-[var(--accent-profit)]';
+  if (confidence >= 0.5) return 'text-[var(--accent-alert)]';
+  return 'text-[var(--accent-loss)]';
+}
+
 interface TickerCardProps {
   data: FundamentalData;
   action?: string;
+  confidence?: number;
   isSelected: boolean;
   onClick: () => void;
   onRiskClick?: () => void;
 }
 
-export function TickerCard({ data, action, isSelected, onClick, onRiskClick }: TickerCardProps) {
+export function TickerCard({ data, action, confidence, isSelected, onClick, onRiskClick }: TickerCardProps) {
   const pill = action ? ACTION_PILL[action] : null;
 
   return (
@@ -44,6 +51,13 @@ export function TickerCard({ data, action, isSelected, onClick, onRiskClick }: T
         </div>
         <div className="flex flex-col items-end gap-1">
           <AssetTypeBadge type={data.asset_type} />
+          {confidence !== undefined && !Number.isNaN(confidence) && (
+            <span
+              className={clsx('text-sm font-mono tabular-nums font-medium', confidencePercentClass(confidence))}
+            >
+              {Math.round(confidence * 100)}%
+            </span>
+          )}
           {pill && (
             <span className={clsx(
               'text-[10px] font-display font-bold px-1.5 py-0.5 rounded border uppercase tracking-wider',

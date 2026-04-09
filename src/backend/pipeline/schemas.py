@@ -421,10 +421,27 @@ class Recommendation(BaseModel):
         le=1.0,
         description="Original GPT confidence before calibration adjustments",
     )
+    # Entry precision — produced by the GPT judge for actionable trade plans
+    entry_trigger: str | None = Field(
+        default=None,
+        description="How to enter: 'market', 'limit', 'breakout', 'pullback', or custom",
+    )
+    scaling_plan: str | None = Field(
+        default=None,
+        description="Position scaling instructions, e.g. '50% now, 50% on pullback to $187'",
+    )
+    invalidation_conditions: list[str] = Field(
+        default_factory=list,
+        description="Conditions that void this signal before entry",
+    )
+
     # Signal freshness — set by the orchestrator at recommendation-save time
-    signal_generated_at: str | None = None  # ISO 8601 UTC timestamp when GPT emitted this signal
-    price_at_signal: float | None = None  # Live market price at the moment GPT ran
-    entry_valid_window: str | None = None  # GPT-estimated window e.g. "2 hours", "1-2 trading days"
+    signal_generated_at: str | None = None
+    price_at_signal: float | None = None
+    entry_valid_window: str = Field(
+        default="",
+        description="Time window the entry remains valid, e.g. '2 hours', '1-2 trading days'",
+    )
 
     # Original GPT position size before ML gate adjustment
     raw_gpt_position_size_pct: float | None = None

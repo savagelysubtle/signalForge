@@ -445,7 +445,7 @@ export function ChartTab({ ticker, chartAnalyses, chartErrors, chartIndicators, 
   const [adHocChartUrl, setAdHocChartUrl] = useState<string | null>(null);
   const [adHocTimeframe, setAdHocTimeframe] = useState<string | null>(null);
   const [adHocLoading, setAdHocLoading] = useState(false);
-  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(true);
   const activeAnalysis = chartAnalyses[activeTimeframe] ?? null;
   const hasErrors = chartErrors.length > 0;
 

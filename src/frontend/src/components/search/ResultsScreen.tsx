@@ -25,15 +25,29 @@ export function ResultsScreen({ runId }: ResultsScreenProps) {
       .finally(() => setIsLoading(false));
   }, [runId, getResult]);
 
-  // Auto-select first ticker when result loads
+  // Auto-select ticker when result loads — default matches sidebar (confidence descending)
   useEffect(() => {
-    if (currentResult?.screening?.tickers && currentResult.screening.tickers.length > 0) {
-      if (!selectedTicker || !currentResult.screening.tickers.find(t => t.ticker === selectedTicker)) {
-        setSelectedTicker(currentResult.screening.tickers[0].ticker);
-      }
-    } else {
+    const screeningTickers = currentResult?.screening?.tickers;
+    if (!screeningTickers || screeningTickers.length === 0) {
       setSelectedTicker(null);
+      return;
     }
+    if (selectedTicker && screeningTickers.some(t => t.ticker === selectedTicker)) {
+      return;
+    }
+    const confByTicker = Object.fromEntries(
+      (currentResult.recommendations ?? []).map(r => [r.ticker, r.confidence])
+    );
+    const deduped = screeningTickers.filter(
+      (t, i, arr) => arr.findIndex(x => x.ticker === t.ticker) === i
+    );
+    const sorted = [...deduped].sort((a, b) => {
+      const ca = confByTicker[a.ticker] ?? -1;
+      const cb = confByTicker[b.ticker] ?? -1;
+      if (cb !== ca) return cb - ca;
+      return a.ticker.localeCompare(b.ticker);
+    });
+    setSelectedTicker(sorted[0]?.ticker ?? null);
   }, [currentResult, selectedTicker]);
 
   const handleRiskClick = useCallback((ticker: string) => {
@@ -109,6 +123,9 @@ export function ResultsScreen({ runId }: ResultsScreenProps) {
   const actionMap = Object.fromEntries(
     (currentResult.recommendations || []).map(r => [r.ticker, r.action])
   );
+  const confidenceMap = Object.fromEntries(
+    (currentResult.recommendations || []).map(r => [r.ticker, r.confidence])
+  );
 
   return (
     <div className="flex flex-col md:flex-row h-full w-full overflow-hidden">
@@ -120,6 +137,7 @@ export function ResultsScreen({ runId }: ResultsScreenProps) {
         collapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed(prev => !prev)}
         actionMap={actionMap}
+        confidenceMap={confidenceMap}
       />
 
       {selectedTickerData ? (

@@ -23,6 +23,7 @@ from typing import Any, Literal, cast
 from supabase import AsyncClient
 
 from database.connection import get_db
+from pipeline.cost_tracker import PipelineCostTracker
 from pipeline.prompts.claude_chart import get_prompt_hash as claude_hash
 from pipeline.prompts.gemini_sentiment import get_prompt_hash as gemini_hash
 from pipeline.prompts.gpt_debate import (
@@ -73,7 +74,8 @@ from services.fmp_service import (
     screen_and_enrich,
 )
 from services.keyring_service import get_api_key
-from services.reflection import load_reflection_context
+from services.paper_tracker import schedule_paper_tracking
+from services.reflection import load_reflection_context, load_reflection_metrics
 from services.strategy import get_strategy
 from utils.ticker import normalize_ticker, normalize_tickers
 
@@ -87,6 +89,45 @@ STAGE_TIMEOUTS: dict[str, float] = {
     "gpt": 360.0,
     "annotate": 60.0,
 }
+
+
+def _build_ml_dicts(
+    ta_snapshots: list[MultiTimeframeTechnical],
+    fmp_map: dict[str, FmpEnrichedStock],
+    regime: RegimeOutput | None,
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, Any] | None]:
+    """Build the TA/FMP/regime dictionaries needed by ML calibration and gate.
+
+    Extracts the repeated dict-building pattern used by both the ML
+    calibration path and the ML gate/shadow runner.
+
+    Args:
+        ta_snapshots: Multi-timeframe TA snapshots keyed by ticker in the returned dict.
+        fmp_map: Mapping of symbol to enriched FMP stock (may be empty).
+        regime: Market regime output (may be None).
+
+    Returns:
+        Tuple of (ta_dict, fmp_dict, regime_dict).
+    """
+    ta_dict: dict[str, dict[str, Any]] = {}
+    for snap in ta_snapshots:
+        if hasattr(snap, "ticker") and hasattr(snap, "primary"):
+            ta_dict[snap.ticker] = snap.primary.model_dump() if snap.primary else {}
+
+    fmp_dict: dict[str, dict[str, Any]] = {}
+    if fmp_map:
+        for sym, stock in fmp_map.items():
+            fmp_dict[sym] = stock.model_dump() if hasattr(stock, "model_dump") else {}
+
+    regime_dict: dict[str, Any] | None = None
+    if regime:
+        regime_dict = {
+            "regime_type": regime.regime_type,
+            "vix_estimate": regime.vix_estimate,
+            "breadth_estimate": regime.breadth_estimate,
+        }
+
+    return ta_dict, fmp_dict, regime_dict
 
 
 async def run_pipeline(
@@ -148,6 +189,7 @@ async def run_pipeline(
         mode=mode,
         input_tickers=manual_tickers or [],
     )
+    cost_tracker = PipelineCostTracker()  # noqa: F841 — used in nested closures below
 
     client = await get_db()
     await (
@@ -278,6 +320,7 @@ async def _run_pipeline(
                 "duration_ms": fmp_elapsed_ms,
                 "raw_response": json.dumps([c.model_dump(mode="json") for c in candidates]),
             },
+            cost_tracker,
         )
         return candidates
 
@@ -298,7 +341,7 @@ async def _run_pipeline(
                     "duration_ms": 0,
                     "raw_response": f"Cached regime: {regime_out.regime_type}",
                 }
-                await _save_stage_output(run_id, meta)
+                await _save_stage_output(run_id, meta, cost_tracker)
                 logger.info(" Stage 0.5 using cached heartbeat: %s", regime_out.regime_type)
                 return regime_out, meta
         except Exception as exc:
@@ -324,7 +367,7 @@ async def _run_pipeline(
             timeout=STAGE_TIMEOUTS.get("regime", 30),
         )
         if regime_meta:
-            await _save_stage_output(run_id, regime_meta)
+            await _save_stage_output(run_id, regime_meta, cost_tracker)
         return regime_out, regime_meta
 
     # Launch both concurrently
@@ -346,6 +389,7 @@ async def _run_pipeline(
                 "duration_ms": 0,
                 "error": str(exc),
             },
+            cost_tracker,
         )
 
     if not fmp_candidates and not fmp_enabled:
@@ -358,6 +402,7 @@ async def _run_pipeline(
                 "duration_ms": 0,
                 "raw_response": "FMP pre-screening disabled for analysis mode",
             },
+            cost_tracker,
         )
 
     regime: RegimeOutput | None = None
@@ -451,7 +496,7 @@ async def _run_pipeline(
         screening.tickers = unique_tickers
         result.screening = screening
 
-    await _save_stage_output(run_id, stage_metadata)
+    await _save_stage_output(run_id, stage_metadata, cost_tracker)
 
     # Build ticker list for parallel tracks
     ticker_symbols = (
@@ -489,7 +534,7 @@ async def _run_pipeline(
             logger.debug(" Scanner results unavailable: %s", exc)
 
     if not ticker_symbols:
-        return await _finalize(run_id, result, start, client, regime_context)
+        return await _finalize(run_id, result, start, client, regime_context, cost_tracker)
 
     # ── Lightweight pre-filter (no LLM) ──────────────────────────────────
     ticker_symbols = pre_filter_tickers(ticker_symbols, fmp_map, config)
@@ -528,7 +573,7 @@ async def _run_pipeline(
     try:
         ta_snapshots, ta_metadata = await ta_task
         for tm in ta_metadata:
-            await _save_stage_output(run_id, tm)
+            await _save_stage_output(run_id, tm, cost_tracker)
     except Exception as exc:
         result.stage_errors.append(
             StageError(stage="numerical_ta", error=str(exc), type=type(exc).__name__)
@@ -565,7 +610,7 @@ async def _run_pipeline(
             regime_context=regime_context,
         )
         for gm in meta_b:
-            await _save_stage_output(run_id, gm)
+            await _save_stage_output(run_id, gm, cost_tracker)
         return sentiments_b, meta_b
 
     async def _track_c_claude() -> tuple[list[ChartAnalysis], list[dict]]:
@@ -582,10 +627,10 @@ async def _run_pipeline(
             user_id,
             regime_context=regime_context,
             live_quotes=claude_live_quotes or None,
-            is_crypto=config.is_crypto,
+            is_crypto=config.fmp_screener.is_crypto if config.fmp_screener else False,
         )
         for cm in meta_c:
-            await _save_stage_output(run_id, cm)
+            await _save_stage_output(run_id, cm, cost_tracker)
         return charts_c, meta_c
 
     gemini_result: tuple[list[SentimentAnalysis], list[dict]] = ([], [])
@@ -657,6 +702,7 @@ async def _run_pipeline(
                 "duration_ms": 0,
                 "raw_response": json.dumps([r.model_dump() for r in risk_assessments]),
             },
+            cost_tracker,
         )
     except Exception as exc:
         logger.exception(" Risk post-filter failed")
@@ -672,21 +718,24 @@ async def _run_pipeline(
                 "duration_ms": 0,
                 "error": str(exc),
             },
+            cost_tracker,
         )
 
     # ── Stage 4: GPT Synthesis (convergence point — track-aware) ─────────
     sector_consensus = _aggregate_sector_sentiment(sentiments, screening)
+    live_quotes: dict = {}
+    reflection_metrics: dict | None = None
     if ticker_symbols:
         try:
             reflection_context = await load_reflection_context(user_id)
-            # Fetch quotes immediately before GPT so entry prices anchor to the
-            # freshest available price (Gemini+Claude may have taken several minutes).
-            live_quotes: dict = {}
+            reflection_metrics = await load_reflection_metrics(user_id)
             try:
                 live_quotes = await fetch_quotes(ticker_symbols)
                 logger.info("Fetched %d live quotes before GPT stage", len(live_quotes))
             except Exception as exc:
                 logger.warning("Live quote fetch failed: %s", exc)
+
+            track_conflicts = _build_track_conflicts(sentiments, charts, ticker_symbols)
 
             gpt_signal_time = datetime.now(tz=UTC)
             recommendations, gpt_metadata_list = await asyncio.wait_for(
@@ -704,6 +753,7 @@ async def _run_pipeline(
                     regime_context=regime_context,
                     sector_consensus=sector_consensus,
                     live_quotes=live_quotes or None,
+                    track_conflicts=track_conflicts,
                 ),
                 timeout=STAGE_TIMEOUTS["gpt"],
             )
@@ -715,7 +765,7 @@ async def _run_pipeline(
                     rec.price_at_signal = live_quotes[rec.ticker].price
             result.recommendations = recommendations
             for gm in gpt_metadata_list:
-                await _save_stage_output(run_id, gm)
+                await _save_stage_output(run_id, gm, cost_tracker)
         except Exception as exc:
             result.stage_errors.append(
                 StageError(stage="gpt", error=str(exc), type=type(exc).__name__)
@@ -738,6 +788,7 @@ async def _run_pipeline(
                 charts,
                 fmp_context=fmp_map or None,
                 live_quotes=live_quotes or None,
+                risk_assessments=risk_assessments or None,
             )
         except Exception as exc:
             logger.exception("Risk validation failed, using unvalidated recommendations")
@@ -780,25 +831,9 @@ async def _run_pipeline(
             if use_ml_calibration:
                 from services.ml_calibration import calibrate_with_ml
 
-                ta_dict: dict[str, dict[str, Any]] = {}
-                for snap in ta_snapshots:
-                    if hasattr(snap, "ticker") and hasattr(snap, "primary"):
-                        ta_dict[snap.ticker] = snap.primary.model_dump() if snap.primary else {}
-
-                fmp_dict_cal: dict[str, dict[str, Any]] = {}
-                if fmp_map:
-                    for sym, stock in fmp_map.items():
-                        fmp_dict_cal[sym] = (
-                            stock.model_dump() if hasattr(stock, "model_dump") else {}
-                        )
-
-                regime_dict_cal: dict[str, Any] | None = None
-                if regime:
-                    regime_dict_cal = {
-                        "regime_type": regime.regime_type,
-                        "vix_estimate": regime.vix_estimate,
-                        "breadth_estimate": regime.breadth_estimate,
-                    }
+                ta_dict, fmp_dict_cal, regime_dict_cal = _build_ml_dicts(
+                    ta_snapshots, fmp_map, regime
+                )
 
                 rec_dicts = [r.model_dump() for r in result.recommendations]
                 calibrated = await calibrate_with_ml(
@@ -820,6 +855,7 @@ async def _run_pipeline(
                     config=config,
                     regime_context=regime_context,
                     risk_assessments=risk_assessments or None,
+                    reflection_metrics=reflection_metrics,
                 )
         except Exception as exc:
             logger.exception(" Confidence calibration failed, using raw confidence")
@@ -829,23 +865,7 @@ async def _run_pipeline(
 
     # ML gate + shadow predictions (Phase 7.5)
     if result.recommendations:
-        ta_dict_ml: dict[str, dict[str, Any]] = {}
-        for snap in ta_snapshots:
-            if hasattr(snap, "ticker") and hasattr(snap, "primary"):
-                ta_dict_ml[snap.ticker] = snap.primary.model_dump() if snap.primary else {}
-
-        fmp_dict_ml: dict[str, dict[str, Any]] = {}
-        if fmp_map:
-            for sym, stock in fmp_map.items():
-                fmp_dict_ml[sym] = stock.model_dump() if hasattr(stock, "model_dump") else {}
-
-        regime_dict_ml: dict[str, Any] | None = None
-        if regime:
-            regime_dict_ml = {
-                "regime_type": regime.regime_type,
-                "vix_estimate": regime.vix_estimate,
-                "breadth_estimate": regime.breadth_estimate,
-            }
+        ta_dict_ml, fmp_dict_ml, regime_dict_ml = _build_ml_dicts(ta_snapshots, fmp_map, regime)
 
         # Capture raw GPT position sizing before gate modifies it
         for rec in result.recommendations:
@@ -907,6 +927,7 @@ async def _run_pipeline(
                 "duration_ms": gate_ms,
                 "raw_response": json.dumps(gate_results) if gate_results else "",
             },
+            cost_tracker,
         )
 
         # 7.5b: ML shadow — full model comparison (non-blocking)
@@ -959,7 +980,7 @@ async def _run_pipeline(
                     entry_price=rec.entry_price if rec else None,
                     stop_loss=rec.stop_loss if rec else None,
                     take_profit=rec.take_profit if rec else None,
-                    is_crypto=config.is_crypto,
+                    is_crypto=config.fmp_screener.is_crypto if config.fmp_screener else False,
                 )
                 result.chart_analyses[ca_index].annotated_chart_path = url
             except Exception as exc:
@@ -991,9 +1012,15 @@ async def _run_pipeline(
             "duration_ms": annotate_ms,
             "raw_response": f"{annotate_count} charts annotated",
         },
+        cost_tracker,
     )
 
-    return await _finalize(run_id, result, start, client, regime_context)
+    # Schedule paper tracking (fire-and-forget)
+    if result.recommendations:
+        rec_dicts = [r.model_dump(mode="json") for r in result.recommendations]
+        _paper_task = asyncio.create_task(schedule_paper_tracking(run_id, rec_dicts, user_id))  # noqa: RUF006 — fire-and-forget; ref stored to prevent GC
+
+    return await _finalize(run_id, result, start, client, regime_context, cost_tracker)
 
 
 async def _finalize(
@@ -1002,8 +1029,9 @@ async def _finalize(
     start: float,
     client: Any,
     regime_context: str,
+    cost_tracker: PipelineCostTracker | None = None,
 ) -> PipelineResult:
-    """Finalize pipeline run: timing, prompt versions, DB update.
+    """Finalize pipeline run: timing, prompt versions, cost, DB update.
 
     Args:
         run_id: Pipeline run UUID.
@@ -1011,6 +1039,7 @@ async def _finalize(
         start: perf_counter value from pipeline start.
         client: Supabase client.
         regime_context: Unused, kept for signature consistency.
+        cost_tracker: Accumulated LLM cost data for this run.
 
     Returns:
         Completed PipelineResult.
@@ -1027,6 +1056,9 @@ async def _finalize(
         "gpt_judge": get_judge_hash(),
     }
 
+    if cost_tracker and cost_tracker.entries:
+        result.meta["cost"] = cost_tracker.summary()
+
     has_data = (
         result.screening
         or result.sentiment_analyses
@@ -1034,33 +1066,47 @@ async def _finalize(
         or result.recommendations
     )
     status = "completed" if has_data else ("partial" if result.stage_errors else "failed")
-    await (
-        client.table("pipeline_runs")
-        .update(
-            {
-                "status": status,
-                "completed_at": datetime.now(tz=UTC).isoformat(),
-                "duration_seconds": result.total_duration_seconds,
-                "prompt_versions": json.dumps(result.prompt_versions),
-                "stage_errors": (
-                    json.dumps([e.model_dump() for e in result.stage_errors])
-                    if result.stage_errors
-                    else None
-                ),
-            }
-        )
-        .eq("id", run_id)
-        .execute()
-    )
+
+    update_fields: dict[str, Any] = {
+        "status": status,
+        "completed_at": datetime.now(tz=UTC).isoformat(),
+        "duration_seconds": result.total_duration_seconds,
+        "prompt_versions": json.dumps(result.prompt_versions),
+        "stage_errors": (
+            json.dumps([e.model_dump() for e in result.stage_errors])
+            if result.stage_errors
+            else None
+        ),
+    }
+    if cost_tracker and cost_tracker.entries:
+        update_fields["meta"] = json.dumps(result.meta)
+
+    await client.table("pipeline_runs").update(update_fields).eq("id", run_id).execute()
 
     clear_run_symbol_cache(run_id)
     return result
 
 
-async def _save_stage_output(run_id: str, metadata: dict) -> None:
+async def _save_stage_output(
+    run_id: str,
+    metadata: dict,
+    cost_tracker: PipelineCostTracker | None = None,
+) -> None:
     """Persist raw stage output to the stage_outputs table."""
     if not metadata:
         return
+
+    if cost_tracker and metadata.get("model") and metadata.get("status") != "api_error":
+        from pipeline.token_budget import count_tokens
+
+        input_tokens = count_tokens(metadata.get("prompt_text", ""))
+        output_tokens = count_tokens(metadata.get("raw_response", ""))
+        cost_tracker.record(
+            stage=metadata.get("stage", "unknown"),
+            model=metadata.get("model", ""),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
 
     client = await get_db()
     row: dict = {
@@ -1122,20 +1168,26 @@ async def _update_annotated_paths(
         ):
             continue
 
-    for ca in analyses_with_paths:
-        row_id = row_map.get((ca.ticker, ca.timeframe))
-        if row_id:
-            await (
-                client.table("stage_outputs")
-                .update({"raw_response": ca.model_dump_json()})
-                .eq("id", row_id)
-                .execute()
-            )
-            logger.debug(
-                "Updated annotated_chart_path for %s %s in stage_outputs",
-                ca.ticker,
-                ca.timeframe,
-            )
+    async def _update_one(ca: ChartAnalysis, row_id: str) -> None:
+        await (
+            client.table("stage_outputs")
+            .update({"raw_response": ca.model_dump_json()})
+            .eq("id", row_id)
+            .execute()
+        )
+        logger.debug(
+            "Updated annotated_chart_path for %s %s in stage_outputs",
+            ca.ticker,
+            ca.timeframe,
+        )
+
+    tasks = [
+        _update_one(ca, row_map[key])
+        for ca in analyses_with_paths
+        if (key := (ca.ticker, ca.timeframe)) in row_map
+    ]
+    if tasks:
+        await asyncio.gather(*tasks)
 
 
 async def _save_recommendations(
@@ -1225,6 +1277,66 @@ def _build_override_screening_prompt(overrides: ScreenerOverrides) -> str:
 
     parts.append("strong fundamentals momentum analyst upgrades")
     return " ".join(parts)
+
+
+def _build_track_conflicts(
+    sentiments: list[SentimentAnalysis],
+    charts: list[ChartAnalysis],
+    tickers: list[str],
+) -> str:
+    """Build a per-ticker directional conflict summary between Gemini and Claude.
+
+    Compares Gemini's sentiment direction to Claude's technical direction for
+    each ticker. Only flags meaningful disagreements (one bullish, other bearish).
+
+    Args:
+        sentiments: Gemini sentiment analyses.
+        charts: Claude chart analyses.
+        tickers: Tickers to check for conflicts.
+
+    Returns:
+        Formatted conflict summary text, or empty string if no conflicts.
+    """
+    sent_map = {s.ticker: s for s in sentiments}
+    chart_map: dict[str, ChartAnalysis] = {}
+    for c in charts:
+        if c.ticker not in chart_map:
+            chart_map[c.ticker] = c
+
+    _BEARISH = frozenset({"bearish", "strongly_bearish"})
+    _BULLISH = frozenset({"bullish", "strongly_bullish"})
+
+    conflicts: list[str] = []
+    for ticker in tickers:
+        sa = sent_map.get(ticker)
+        ca = chart_map.get(ticker)
+        if not sa or not ca:
+            continue
+
+        sent_dir = sa.sentiment_label
+        tech_dir = ca.trend_direction
+
+        gemini_bearish = sent_dir in _BEARISH
+        gemini_bullish = sent_dir in _BULLISH
+        claude_bearish = tech_dir == "bearish"
+        claude_bullish = tech_dir == "bullish"
+
+        if gemini_bearish and claude_bullish:
+            patterns = ", ".join(ca.patterns_detected[:3]) if ca.patterns_detected else ca.summary
+            conflicts.append(
+                f"- CONFLICT {ticker}: Gemini sentiment is {sent_dir} "
+                f"(score {sa.sentiment_score:+.2f}) while Claude chart is bullish "
+                f"({patterns}). The judge must explicitly resolve this conflict."
+            )
+        elif gemini_bullish and claude_bearish:
+            patterns = ", ".join(ca.patterns_detected[:3]) if ca.patterns_detected else ca.summary
+            conflicts.append(
+                f"- CONFLICT {ticker}: Gemini sentiment is {sent_dir} "
+                f"(score {sa.sentiment_score:+.2f}) while Claude chart is bearish "
+                f"({patterns}). The judge must explicitly resolve this conflict."
+            )
+
+    return "\n".join(conflicts)
 
 
 def _aggregate_sector_sentiment(

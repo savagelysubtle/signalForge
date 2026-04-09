@@ -9,16 +9,9 @@ from __future__ import annotations
 from pipeline.schemas import StrategyConfig
 from utils.hashing import prompt_hash
 
-PROMPT_VERSION = "v8"
+PROMPT_VERSION = "v9"
 
-ANALYSIS_SYSTEM_PROMPT = """\
-You are a financial research analyst with a focus on the Canadian market
-(TSX, TSXV). You will be given a list of ticker symbols (stocks, ETFs, or
-crypto). Research each one and return structured fundamental data. When a
-ticker could resolve to both a Canadian and US listing, prefer the Canadian
-listing unless the user explicitly specified otherwise. You must return
-ONLY valid JSON — no commentary outside the JSON structure.
-
+_ANALYSIS_JSON_SCHEMA = """
 Return a JSON object with this exact structure:
 {
   "mode": "analysis",
@@ -69,6 +62,70 @@ Ticker format rules (CRITICAL -- use TradingView format):
 - NEVER return Yahoo Finance format with suffixes like .TO, .V, .L
 """
 
+_EXCHANGE_LABELS: dict[str | None, str] = {
+    "tsx": "Canadian market (TSX, TSXV)",
+    "tsxv": "Canadian market (TSX, TSXV)",
+    "nyse": "US market (NYSE, NASDAQ)",
+    "nasdaq": "US market (NYSE, NASDAQ)",
+    "lse": "UK market (LSE)",
+    "asx": "Australian market (ASX)",
+    "xetr": "German market (XETR)",
+}
+
+_LISTING_PREFERENCES: dict[str | None, str] = {
+    "tsx": (
+        " When a ticker could resolve to both a Canadian and US listing,"
+        " prefer the Canadian listing unless the user explicitly specified otherwise."
+    ),
+    "tsxv": (
+        " When a ticker could resolve to both a Canadian and US listing,"
+        " prefer the Canadian listing unless the user explicitly specified otherwise."
+    ),
+}
+
+
+def build_analysis_system_prompt(config: StrategyConfig | None = None) -> str:
+    """Build a market-context-aware analysis system prompt.
+
+    Uses the strategy's FMP config (exchange, country, is_crypto) to tailor
+    market focus, matching how discovery mode adapts. Falls back to a
+    market-neutral prompt when no FMP config is provided.
+
+    Args:
+        config: Strategy configuration with optional FMP screener settings.
+
+    Returns:
+        Complete system prompt string.
+    """
+    market_focus = ""
+    listing_preference = ""
+
+    if config and config.fmp_screener:
+        fmp = config.fmp_screener
+        if fmp.is_crypto:
+            market_focus = " specializing in cryptocurrency markets"
+        elif fmp.exchange:
+            exchange_key = fmp.exchange.lower()
+            label = _EXCHANGE_LABELS.get(exchange_key)
+            if label:
+                market_focus = f" with a focus on the {label}"
+            else:
+                market_focus = f" with a focus on {fmp.exchange.upper()} listed securities"
+            listing_preference = _LISTING_PREFERENCES.get(exchange_key, "")
+        elif fmp.country:
+            market_focus = f" with a focus on {fmp.country} markets"
+
+    header = (
+        f"You are a financial research analyst{market_focus}. You will be given"
+        " a list of ticker symbols (stocks, ETFs, or crypto). Research each one"
+        f" and return structured fundamental data.{listing_preference} You must"
+        " return ONLY valid JSON — no commentary outside the JSON structure."
+    )
+    return header + _ANALYSIS_JSON_SCHEMA
+
+
+ANALYSIS_SYSTEM_PROMPT = build_analysis_system_prompt()
+
 
 def build_analysis_prompt(
     tickers: list[str],
@@ -90,6 +147,6 @@ def build_analysis_prompt(
     return " ".join(parts)
 
 
-def get_prompt_hash() -> str:
-    """Return the version hash of the current analysis prompt."""
-    return prompt_hash(ANALYSIS_SYSTEM_PROMPT)
+def get_prompt_hash(config: StrategyConfig | None = None) -> str:
+    """Return the version hash of the analysis prompt for the given config."""
+    return prompt_hash(build_analysis_system_prompt(config))
