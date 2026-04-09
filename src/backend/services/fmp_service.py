@@ -15,12 +15,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from typing import Any, Literal
 
-import httpx
 from pydantic import BaseModel, Field
 
 from pipeline.schemas import FmpScreenerConfig
+from services.http_clients import get_http_client
 from services.keyring_service import get_api_key
 from utils.ticker import to_fmp_symbol
 
@@ -29,6 +30,13 @@ logger = logging.getLogger(__name__)
 FMP_BASE_URL = "https://financialmodelingprep.com/stable"
 FMP_TIMEOUT = 30
 _semaphore = asyncio.Semaphore(5)
+
+# Short-lived batch quote cache (orchestrator fetches quotes twice per run)
+_quote_lock = asyncio.Lock()
+_quote_cache_key: tuple[str, ...] | None = None
+_quote_cache_mono: float = 0.0
+_quote_cache_data: dict[str, Any] = {}
+QUOTE_CACHE_TTL_S = 5.0
 
 
 # ---------------------------------------------------------------------------
@@ -388,7 +396,8 @@ async def _fmp_get(endpoint: str, params: dict[str, Any] | None = None) -> Any:
     if params:
         query.update(params)
 
-    async with _semaphore, httpx.AsyncClient(timeout=FMP_TIMEOUT) as client:
+    client = await get_http_client()
+    async with _semaphore:
         url = f"{FMP_BASE_URL}/{endpoint}"
         response = await client.get(url, params=query)
         response.raise_for_status()
@@ -778,6 +787,9 @@ async def fetch_quotes(symbols: list[str]) -> dict[str, FmpQuote]:
     FMP-compatible format (``AGI.TO``) and maps response keys back so
     callers can look up results using the original TradingView keys.
 
+    Identical symbol sets within ``QUOTE_CACHE_TTL_S`` reuse the last response
+    to avoid duplicate batch calls in the same pipeline run.
+
     Args:
         symbols: List of ticker symbols in any format
             (TradingView ``"TSX:AGI"`` or bare ``"AAPL"``).
@@ -785,8 +797,19 @@ async def fetch_quotes(symbols: list[str]) -> dict[str, FmpQuote]:
     Returns:
         Mapping of original symbol → FmpQuote. Missing symbols are omitted.
     """
+    global _quote_cache_key, _quote_cache_mono, _quote_cache_data
+
     if not symbols:
         return {}
+    cache_key = tuple(sorted(dict.fromkeys(symbols)))
+    now = time.monotonic()
+    async with _quote_lock:
+        if (
+            _quote_cache_key == cache_key
+            and now - _quote_cache_mono < QUOTE_CACHE_TTL_S
+            and _quote_cache_data
+        ):
+            return dict(_quote_cache_data)
     try:
         fmp_to_original: dict[str, str] = {}
         fmp_symbols: list[str] = []
@@ -809,6 +832,10 @@ async def fetch_quotes(symbols: list[str]) -> dict[str, FmpQuote]:
             except Exception:
                 logger.debug("Skipping unparseable quote item: %s", item)
         logger.info("Fetched live quotes for %d/%d symbols", len(result), len(symbols))
+        async with _quote_lock:
+            _quote_cache_key = cache_key
+            _quote_cache_mono = time.monotonic()
+            _quote_cache_data = dict(result)
         return result
     except Exception as exc:
         logger.warning("Failed to fetch live quotes: %s", exc)
@@ -839,7 +866,8 @@ async def fetch_technical_indicator(
     url = f"https://financialmodelingprep.com/api/v3/technical_indicator/{timeframe}/{fmp_sym}"
     params = {"type": indicator_type, "period": period, "apikey": api_key}
     try:
-        async with _semaphore, httpx.AsyncClient(timeout=FMP_TIMEOUT) as client:
+        client = await get_http_client()
+        async with _semaphore:
             response = await client.get(url, params=params)
             response.raise_for_status()
             data = response.json()
@@ -1824,16 +1852,42 @@ async def screen_and_enrich(
             fetch_bulk_price_targets(),
         )
 
-    # Step 3: merge base enrichment using bulk data
+    # Step 3: merge base enrichment using bulk data (parallel fallbacks)
+    ratio_fallback: dict[str, FmpRatiosTTM | Exception] = {}
+    metrics_fallback: dict[str, FmpKeyMetrics | Exception] = {}
+    if config.enrich_with_ratios:
+        syms = [sr.symbol for sr in screener_results]
+        need_ratios = [s for s in syms if not bulk_ratios.get(s)]
+        need_metrics = [s for s in syms if not bulk_metrics.get(s)]
+        if need_ratios:
+            r_vals = await asyncio.gather(
+                *[fetch_ratios_ttm(s) for s in need_ratios],
+                return_exceptions=True,
+            )
+            ratio_fallback = dict(zip(need_ratios, r_vals, strict=True))
+        if need_metrics:
+            m_vals = await asyncio.gather(
+                *[fetch_key_metrics_ttm(s) for s in need_metrics],
+                return_exceptions=True,
+            )
+            metrics_fallback = dict(zip(need_metrics, m_vals, strict=True))
+
     enriched: list[FmpEnrichedStock] = []
     for sr in screener_results:
         ratios = bulk_ratios.get(sr.symbol) if bulk_ratios else None
         metrics = bulk_metrics.get(sr.symbol) if bulk_metrics else None
-        # Fall back to per-ticker if bulk missed this symbol
         if config.enrich_with_ratios and ratios is None:
-            ratios = await fetch_ratios_ttm(sr.symbol)
+            fb = ratio_fallback.get(sr.symbol)
+            if isinstance(fb, Exception):
+                logger.debug("Ratio fallback failed for %s: %s", sr.symbol, fb)
+            elif fb is not None:
+                ratios = fb
         if config.enrich_with_ratios and metrics is None:
-            metrics = await fetch_key_metrics_ttm(sr.symbol)
+            fb = metrics_fallback.get(sr.symbol)
+            if isinstance(fb, Exception):
+                logger.debug("Metrics fallback failed for %s: %s", sr.symbol, fb)
+            elif fb is not None:
+                metrics = fb
         enriched.append(_merge_enrichment(sr, ratios, metrics))
 
     # Step 4: extended enrichment (insider, price change, scores, analyst, float)

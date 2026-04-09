@@ -22,6 +22,7 @@ from slowapi.errors import RateLimitExceeded
 
 from config import APP_NAME, APP_VERSION, settings
 from database.connection import close_db, get_db, init_db
+from services.http_clients import close_http_clients, init_http_clients
 from services.keyring_service import load_env
 from services.market_heartbeat import close_heartbeat, init_heartbeat
 from services.strategy import ensure_defaults
@@ -101,6 +102,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     import asyncio as _aio
 
     load_env()
+    await init_http_clients()
     await init_db()
     await ensure_defaults()
 
@@ -121,6 +123,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     with contextlib.suppress(_aio.CancelledError):
         await scanner_task
     await close_heartbeat()
+    await close_http_clients()
     await close_db()
 
 

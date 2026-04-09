@@ -28,6 +28,7 @@ from pipeline.schemas import (
     TechnicalSnapshot,
     VolumeSnapshot,
 )
+from services.http_clients import get_http_client
 from services.keyring_service import get_api_key
 from utils.ticker import to_fmp_symbol
 
@@ -105,7 +106,8 @@ async def _fetch_indicator_series(
         "apikey": api_key,
     }
     try:
-        async with _semaphore, httpx.AsyncClient(timeout=FMP_TIMEOUT) as client:
+        client = await get_http_client()
+        async with _semaphore:
             resp = await client.get(url, params=params)
             resp.raise_for_status()
             data = resp.json()
@@ -147,7 +149,8 @@ async def _fetch_historical_prices(
     params: dict[str, Any] = {"symbol": fmp_sym, "apikey": api_key}
 
     try:
-        async with _semaphore, httpx.AsyncClient(timeout=FMP_TIMEOUT) as client:
+        client = await get_http_client()
+        async with _semaphore:
             resp = await client.get(url, params=params)
             resp.raise_for_status()
             data = resp.json()
@@ -185,12 +188,9 @@ async def fetch_ohlcv_stable(
     params: dict[str, Any] = {"symbol": fmp_sym, "apikey": api_key}
 
     try:
+        hc = client or await get_http_client()
         async with _semaphore:
-            if client:
-                resp = await client.get(url, params=params)
-            else:
-                async with httpx.AsyncClient(timeout=FMP_TIMEOUT) as c:
-                    resp = await c.get(url, params=params)
+            resp = await hc.get(url, params=params)
         resp.raise_for_status()
         data = resp.json()
         if isinstance(data, list):
@@ -1037,12 +1037,9 @@ async def fetch_intraday_ohlcv(
     params: dict[str, Any] = {"symbol": fmp_sym, "apikey": api_key}
 
     try:
+        hc = client or await get_http_client()
         async with _semaphore:
-            if client:
-                resp = await client.get(url, params=params)
-            else:
-                async with httpx.AsyncClient(timeout=FMP_TIMEOUT) as c:
-                    resp = await c.get(url, params=params)
+            resp = await hc.get(url, params=params)
         resp.raise_for_status()
         data = resp.json()
         if isinstance(data, list):

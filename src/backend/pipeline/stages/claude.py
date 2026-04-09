@@ -39,6 +39,7 @@ from services.keyring_service import get_api_key
 logger = logging.getLogger(__name__)
 
 _semaphore = asyncio.Semaphore(3)
+_anthropic_client: AsyncAnthropic | None = None
 
 
 def _format_quote_for_claude(live_quotes: dict | None, ticker: str) -> str | None:
@@ -70,13 +71,16 @@ def _format_quote_for_claude(live_quotes: dict | None, ticker: str) -> str | Non
 
 
 def _get_client() -> AsyncAnthropic:
-    """Build an async Anthropic client using the configured API key."""
-    api_key = get_api_key("anthropic")
-    if not api_key:
-        raise RuntimeError(
-            "Anthropic API key not configured. Set ANTHROPIC_API_KEY in .env (see .env.example)."
-        )
-    return AsyncAnthropic(api_key=api_key)
+    """Return a process-wide async Anthropic client (lazy singleton)."""
+    global _anthropic_client
+    if _anthropic_client is None:
+        api_key = get_api_key("anthropic")
+        if not api_key:
+            raise RuntimeError(
+                "Anthropic API key not configured. Set ANTHROPIC_API_KEY in .env (see .env.example)."
+            )
+        _anthropic_client = AsyncAnthropic(api_key=api_key)
+    return _anthropic_client
 
 
 @with_validation_retry(schema=ChartAnalysis, max_retries=2, provider="anthropic")

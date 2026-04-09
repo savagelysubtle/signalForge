@@ -12,19 +12,33 @@ API Reference: https://doc.chart-img.com/
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
-import httpx
 from supabase import Client, create_client
 
 from config import paths, settings
 from pipeline.schemas import TechnicalLevel
+from services.http_clients import get_http_client
 from services.keyring_service import get_api_key
 from utils.ticker import normalize_ticker
 
 logger = logging.getLogger(__name__)
 
 CHART_IMG_V2_URL = "https://api.chart-img.com/v2/tradingview/advanced-chart"
+
+# Bound concurrent Chart-Img requests (pipeline may spawn many timeframes x tickers).
+_chart_img_semaphore = asyncio.Semaphore(8)
+
+
+def _storage_upload_png(supabase: Client, path: str, image_bytes: bytes) -> None:
+    """Sync Supabase upload — run via ``asyncio.to_thread`` to avoid blocking the loop."""
+    supabase.storage.from_("charts").upload(
+        path=path,
+        file=image_bytes,
+        file_options={"content-type": "image/png"},
+    )
+
 
 INDICATOR_MAP: dict[str, str] = {
     "RSI": "Relative Strength Index",
@@ -339,7 +353,8 @@ async def fetch_chart_image(
 
     response = None
     last_symbol = ticker
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with _chart_img_semaphore:
+        client = await get_http_client()
         for tv_symbol in tv_symbols:
             last_symbol = tv_symbol
             body: dict = {
@@ -382,11 +397,7 @@ async def fetch_chart_image(
         supabase = _get_supabase()
         upload_path = f"{user_id}/{run_id}/{ticker}_{timeframe}.png"
 
-        supabase.storage.from_("charts").upload(
-            path=upload_path,
-            file=image_bytes,
-            file_options={"content-type": "image/png"},
-        )
+        await asyncio.to_thread(_storage_upload_png, supabase, upload_path, image_bytes)
 
         public_url = f"{settings.supabase_url}/storage/v1/object/public/charts/{upload_path}"
         logger.info("Chart image uploaded to Supabase: %s (%d bytes)", public_url, len(image_bytes))
@@ -526,7 +537,8 @@ async def fetch_annotated_chart(
     }
 
     response = None
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with _chart_img_semaphore:
+        client = await get_http_client()
         for tv_symbol in tv_symbols:
             body: dict = {
                 "symbol": tv_symbol,
@@ -561,11 +573,7 @@ async def fetch_annotated_chart(
         supabase = _get_supabase()
         upload_path = f"{user_id}/{run_id}/annotated/{ticker}_{timeframe}.png"
 
-        supabase.storage.from_("charts").upload(
-            path=upload_path,
-            file=image_bytes,
-            file_options={"content-type": "image/png"},
-        )
+        await asyncio.to_thread(_storage_upload_png, supabase, upload_path, image_bytes)
 
         public_url = f"{settings.supabase_url}/storage/v1/object/public/charts/{upload_path}"
         logger.info("Annotated chart uploaded: %s (%d bytes)", public_url, len(image_bytes))

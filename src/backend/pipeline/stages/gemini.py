@@ -32,15 +32,20 @@ logger = logging.getLogger(__name__)
 
 _semaphore = asyncio.Semaphore(5)
 
+_gemini_client: genai.Client | None = None
+
 
 def _get_client() -> genai.Client:
-    """Build a Gemini client using the configured API key."""
-    api_key = get_api_key("google")
-    if not api_key:
-        raise RuntimeError(
-            "Google API key not configured. Set GOOGLE_API_KEY in .env (see .env.example)."
-        )
-    return genai.Client(api_key=api_key)
+    """Return a process-wide Gemini client (lazy singleton)."""
+    global _gemini_client
+    if _gemini_client is None:
+        api_key = get_api_key("google")
+        if not api_key:
+            raise RuntimeError(
+                "Google API key not configured. Set GOOGLE_API_KEY in .env (see .env.example)."
+            )
+        _gemini_client = genai.Client(api_key=api_key)
+    return _gemini_client
 
 
 @with_validation_retry(schema=SentimentAnalysis, max_retries=2, provider="google")

@@ -102,10 +102,12 @@ async def fetch_crypto_universe_binance(
         ticker -> Binance symbol (``{"BTC": "BTCUSDT", ...}``).
     """
     try:
-        async with httpx.AsyncClient(timeout=BINANCE_TIMEOUT) as client:
-            resp = await client.get(f"{BINANCE_BASE_URL}/ticker/24hr")
-            resp.raise_for_status()
-            data = resp.json()
+        from services.http_clients import get_http_client
+
+        client = await get_http_client()
+        resp = await client.get(f"{BINANCE_BASE_URL}/ticker/24hr")
+        resp.raise_for_status()
+        data = resp.json()
     except Exception as exc:
         logger.warning("Binance ticker/24hr fetch failed: %s", exc)
         return [], {}
@@ -179,12 +181,11 @@ async def fetch_crypto_ohlcv_binance(
     }
 
     try:
+        from services.http_clients import get_http_client
+
+        hc = client or await get_http_client()
         async with _semaphore:
-            if client:
-                resp = await client.get(f"{BINANCE_BASE_URL}/klines", params=params)
-            else:
-                async with httpx.AsyncClient(timeout=BINANCE_TIMEOUT) as c:
-                    resp = await c.get(f"{BINANCE_BASE_URL}/klines", params=params)
+            resp = await hc.get(f"{BINANCE_BASE_URL}/klines", params=params)
         resp.raise_for_status()
         raw = resp.json()
     except Exception as exc:

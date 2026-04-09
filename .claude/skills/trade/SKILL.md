@@ -5,9 +5,50 @@ description: >
   analyze tickers, execute trades, manage positions, check P&L, or review risk
   status. Covers the full workflow: pipeline analysis, order preview, confirmation,
   execution, and portfolio monitoring. Long-only, USD cash account, US exchanges only.
+  Considers macro and policy news as context when relevant, never as a sole trigger.
+  Includes a US cash-session operating schedule aligned with the backend scanner.
 ---
 
 # Trade — SignalForge IBKR Trading Skill
+
+## Operating schedule (US equities, Eastern Time)
+
+Use this **when the user wants a routine** or when you open a trading session: state
+**PAPER or LIVE**, the **current ET window** below, and **1–2 sentences** on what
+fits now (e.g. prep vs execution vs EOD review). This is **guidance only** — all
+constraints above still apply; **never** place orders without preview + confirmation.
+
+**Weekdays (regular session)**
+
+| ET window | Focus | Suggested actions |
+|-----------|--------|-------------------|
+| **04:00–09:30** Pre-market | Plan, news context, watchlists | `run_pipeline` / `list_strategies` for prep; `get_positions`, `get_open_orders` if user holds overnights. New **cash-session** entries usually **fail** `market_hours` until 9:30 — say so if they ask to trade. |
+| **09:30–10:30** Open | Higher volatility, opening range | Favor **intraday**-style strategies if the user wants day trades; after 9:30 only, `preview_order` when they ask to execute. |
+| **10:30–12:00** Mid-morning | Trend continuation / swing entries | Swing or intraday per user; optional fresh `run_pipeline` if setups stale. |
+| **12:00–14:00** Midday | Often chopper; be selective | Lighter new risk unless setup is strong; good time to **`get_risk_status`**, **`get_daily_pnl`**, reconcile `get_open_orders`. |
+| **14:00–15:30** Afternoon | Trend days: continuation | Still within `market_hours`; watch size on late adds. |
+| **15:00–16:00** Power hour | Liquidity and closes | **`get_daily_pnl`**, **`get_positions`** before close if user wants EOD snapshot. Discourage **new** aggressive intraday entries after **~15:30** unless user insists. |
+| **16:00–20:00** After-hours | Analysis for tomorrow | Pipeline runs fine; **`market_hours`** gate blocks typical **new** equity **market** bracket entries — remind user. |
+
+**Weekends**
+
+- Portfolio summary (`get_account_summary`, `get_positions`), strategy picks (`list_strategies`),
+  paper workflow, or **`run_pipeline`** for Monday prep. No expectation of regular-session
+  fills; set expectations clearly.
+
+**Backend scanner alignment (SignalForge server)**
+
+- When the **FastAPI backend** is running, the **strategy scanner** is scheduled near
+  **8:30 AM**, **12:00 PM**, and **3:00 PM ET** on weekdays (`schedule_hours_et` in
+  `main.py`). Fresh scanner-backed tickers can appear in **discovery** pipeline runs
+  after those windows — mention **`list_recent_runs`** or a new **`run_pipeline`**
+  if the user wants setups aligned with that refresh.
+
+**Not automated without a host**
+
+- This schedule tells **you** (the assistant) what to prioritize **in chat**. It does
+  not start Cursor/Claude by itself. For **unattended** triggers, the user needs an
+  external scheduler (cron, Railway job, etc.) plus whatever invokes MCP or the API.
 
 ## Constraints (NEVER violate)
 
@@ -19,6 +60,13 @@ description: >
    wait for explicit user confirmation before placing.
 4. **Paper vs Live awareness** — Always state whether you're on PAPER or LIVE
    at the start of any trading session.
+5. **Macro and policy as context only** — When **verified** news or **documented**
+   policy shifts plausibly affect a sector or name (e.g. tariffs, rates, major
+   regulation), you may add a **short** caveat alongside pipeline output: what
+   might be at risk or what to watch. **Never** treat political commentary, social
+   posts, or any single individual's statements as a trading signal. **Never**
+   override recommendations, risk gates, or the confirmation workflow because of
+   political noise. The pipeline and IBKR gates remain authoritative for execution.
 
 ## Available MCP Tools
 
@@ -88,6 +136,9 @@ Show the user a clear summary for each recommendation:
 - Risk/reward ratio, position size %
 - Key factors and warnings
 - ML blocked status
+- If **relevant**, one line on **macro/policy** risk (only from credible,
+  checkable sources — e.g. sector exposure to trade policy or rates), without
+  turning it into a buy/sell directive
 
 If action is SHORT, tell the user: "This is a SHORT recommendation but your
 cash account only supports long positions — this cannot be executed."

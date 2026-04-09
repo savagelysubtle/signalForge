@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any
+from typing import Any, cast
 
 from database.connection import get_db
 from ml.inference import build_feature_vector, ml_model_available, run_prediction
@@ -45,6 +45,7 @@ async def run_ml_shadow(
         return []
 
     predictions: list[MLPrediction] = []
+    insert_rows: list[dict[str, Any]] = []
 
     for rec in recommendations:
         ticker = rec.get("ticker", "")
@@ -99,14 +100,42 @@ async def run_ml_shadow(
 
         if prediction is not None:
             predictions.append(prediction)
-            await _store_shadow_prediction(
-                run_id=run_id,
-                user_id=user_id,
-                ticker=ticker,
-                strategy_type=strategy_type,
-                ml_prediction=prediction,
-                gpt_rec=rec,
+            insert_rows.append(
+                {
+                    "id": uuid.uuid4().hex,
+                    "user_id": user_id,
+                    "run_id": run_id,
+                    "ticker": ticker,
+                    "strategy_type": strategy_type,
+                    "prediction_date": "now()",
+                    "ml_prediction": prediction.model_dump(),
+                    "ml_direction": prediction.predicted_direction,
+                    "ml_confidence": prediction.probability_profitable
+                    if prediction.probability_profitable is not None
+                    else prediction.probability_up,
+                    "ml_reliability": prediction.reliability_score,
+                    "gpt_prediction": {
+                        "action": rec.get("action", ""),
+                        "confidence": rec.get("confidence", 0),
+                    },
+                    "gpt_action": rec.get("action", ""),
+                    "gpt_confidence": rec.get("confidence", 0),
+                    "model_version": prediction.model_version,
+                }
             )
+
+    if insert_rows:
+        try:
+            client = await get_db()
+            _chunk = 100
+            for i in range(0, len(insert_rows), _chunk):
+                await (
+                    client.table("ml_shadow_predictions")
+                    .insert(insert_rows[i : i + _chunk])
+                    .execute()
+                )
+        except Exception:
+            logger.exception("Failed to batch store shadow predictions")
 
     if predictions:
         logger.info(
@@ -116,43 +145,6 @@ async def run_ml_shadow(
         )
 
     return predictions
-
-
-async def _store_shadow_prediction(
-    run_id: str,
-    user_id: str,
-    ticker: str,
-    strategy_type: str,
-    ml_prediction: MLPrediction,
-    gpt_rec: dict[str, Any],
-) -> None:
-    """Store a shadow prediction in the database for later comparison."""
-    try:
-        client = await get_db()
-        row = {
-            "id": uuid.uuid4().hex,
-            "user_id": user_id,
-            "run_id": run_id,
-            "ticker": ticker,
-            "strategy_type": strategy_type,
-            "prediction_date": "now()",
-            "ml_prediction": ml_prediction.model_dump(),
-            "ml_direction": ml_prediction.predicted_direction,
-            "ml_confidence": ml_prediction.probability_profitable
-            if ml_prediction.probability_profitable is not None
-            else ml_prediction.probability_up,
-            "ml_reliability": ml_prediction.reliability_score,
-            "gpt_prediction": {
-                "action": gpt_rec.get("action", ""),
-                "confidence": gpt_rec.get("confidence", 0),
-            },
-            "gpt_action": gpt_rec.get("action", ""),
-            "gpt_confidence": gpt_rec.get("confidence", 0),
-            "model_version": ml_prediction.model_version,
-        }
-        await client.table("ml_shadow_predictions").insert(row).execute()
-    except Exception:
-        logger.exception("Failed to store shadow prediction for %s", ticker)
 
 
 async def get_shadow_stats(user_id: str) -> ShadowStats:
@@ -167,9 +159,12 @@ async def get_shadow_stats(user_id: str) -> ShadowStats:
     try:
         client = await get_db()
         result = (
-            await client.table("ml_shadow_predictions").select("*").eq("user_id", user_id).execute()
+            await client.table("ml_shadow_predictions")
+            .select("actual_direction,ml_correct,gpt_correct,ml_direction,gpt_action,model_version")
+            .eq("user_id", user_id)
+            .execute()
         )
-        rows = result.data or []
+        rows = cast(list[dict[str, Any]], result.data or [])
     except Exception:
         logger.exception("Failed to fetch shadow stats")
         return ShadowStats()

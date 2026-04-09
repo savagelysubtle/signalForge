@@ -8,7 +8,9 @@ the model assigns low probability to.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from functools import partial
 from typing import Any
 
 from ml.inference import (
@@ -132,7 +134,9 @@ async def run_ml_gate(
         llm_features=None,
     )
 
-    prediction = run_prediction(ticker, strategy_type, features, mode="independent")
+    prediction = await asyncio.to_thread(
+        partial(run_prediction, ticker, strategy_type, features, mode="independent")
+    )
     if prediction is None:
         return GateResult(
             ticker=ticker,
@@ -151,7 +155,9 @@ async def run_ml_gate(
 
     # --- Meta-labeler conviction blending ---
     meta_conviction: float | None = None
-    meta_conv = run_meta_prediction(ticker, strategy_type, features)
+    meta_conv = await asyncio.to_thread(
+        partial(run_meta_prediction, ticker, strategy_type, features)
+    )
     if meta_conv is not None:
         meta_conviction = meta_conv
         prob = 0.6 * prob + 0.4 * meta_conviction

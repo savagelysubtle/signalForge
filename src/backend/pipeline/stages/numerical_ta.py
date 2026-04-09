@@ -17,8 +17,6 @@ import logging
 import time
 from typing import Any, Protocol
 
-import httpx
-
 from pipeline.schemas import MultiTimeframeTechnical, StrategyConfig, TechnicalSnapshot
 from services.technical_analysis import build_multi_timeframe
 
@@ -31,7 +29,7 @@ class _OhlcvFetcher(Protocol):
         symbol: str,
         *,
         limit: int = 300,
-        client: httpx.AsyncClient | None = None,
+        client: Any = None,
     ) -> list[dict[str, Any]]: ...
 
 
@@ -137,6 +135,7 @@ async def run_ta_for_scanner(
     Returns:
         Tuple of (snapshots, raw_candles) where both are dicts keyed by ticker.
     """
+    from services.http_clients import get_http_client
     from services.technical_analysis import build_snapshot_from_ohlcv, fetch_ohlcv_stable
 
     fetcher = ohlcv_fetcher or fetch_ohlcv_stable
@@ -150,34 +149,34 @@ async def run_ta_for_scanner(
     raw_candles: dict[str, list[dict[str, Any]]] = {}
     consecutive_fails = 0
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        for batch_start in range(0, len(tickers), batch_size):
-            batch = tickers[batch_start : batch_start + batch_size]
-            tasks = [fetcher(_symbol_map.get(t, t), limit=300, client=client) for t in batch]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+    client = await get_http_client()
+    for batch_start in range(0, len(tickers), batch_size):
+        batch = tickers[batch_start : batch_start + batch_size]
+        tasks = [fetcher(_symbol_map.get(t, t), limit=300, client=client) for t in batch]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
-            for ticker, result in zip(batch, results, strict=False):
-                if isinstance(result, Exception) or not result:
-                    consecutive_fails += 1
-                    if isinstance(result, Exception):
-                        logger.debug("Scanner OHLCV failed for %s: %s", ticker, result)
-                    continue
+        for ticker, result in zip(batch, results, strict=False):
+            if isinstance(result, Exception) or not result:
+                consecutive_fails += 1
+                if isinstance(result, Exception):
+                    logger.debug("Scanner OHLCV failed for %s: %s", ticker, result)
+                continue
 
-                consecutive_fails = 0
-                raw_candles[ticker] = result
-                snap = build_snapshot_from_ohlcv(ticker, timeframe, result)
-                if snap:
-                    out[ticker] = snap
+            consecutive_fails = 0
+            raw_candles[ticker] = result
+            snap = build_snapshot_from_ohlcv(ticker, timeframe, result)
+            if snap:
+                out[ticker] = snap
 
-            if consecutive_fails >= max_consecutive_fails:
-                logger.error(
-                    "Scanner TA: %d consecutive failures — aborting early",
-                    consecutive_fails,
-                )
-                break
+        if consecutive_fails >= max_consecutive_fails:
+            logger.error(
+                "Scanner TA: %d consecutive failures — aborting early",
+                consecutive_fails,
+            )
+            break
 
-            if batch_start + batch_size < len(tickers):
-                await asyncio.sleep(batch_delay)
+        if batch_start + batch_size < len(tickers):
+            await asyncio.sleep(batch_delay)
 
     logger.info("Scanner TA: %d/%d tickers succeeded", len(out), len(tickers))
     return out, raw_candles

@@ -711,9 +711,8 @@ class StrategyScanner:
             state: Current market regime state.
             is_crypto: When True, use Binance OHLCV instead of FMP.
         """
-        import httpx
-
         from pipeline.stages.numerical_ta import run_ta_for_scanner
+        from services.http_clients import get_http_client
         from services.technical_analysis import (
             aggregate_daily_to_weekly,
             compute_extra_daily_features,
@@ -748,34 +747,34 @@ class StrategyScanner:
         batch_delay = 0.5
         intraday_tickers = list(snapshots.keys())
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                for batch_start in range(0, len(intraday_tickers), batch_size):
-                    batch = intraday_tickers[batch_start : batch_start + batch_size]
-                    if is_crypto:
-                        from services.crypto_data import fetch_crypto_ohlcv_binance
+            client = await get_http_client()
+            for batch_start in range(0, len(intraday_tickers), batch_size):
+                batch = intraday_tickers[batch_start : batch_start + batch_size]
+                if is_crypto:
+                    from services.crypto_data import fetch_crypto_ohlcv_binance
 
-                        tasks = [
-                            fetch_crypto_ohlcv_binance(
-                                self._crypto_binance_map.get(t, f"{t}USDT"),
-                                interval="4h",
-                                limit=200,
-                                client=client,
-                            )
-                            for t in batch
-                        ]
-                    else:
-                        tasks = [
-                            fetch_intraday_ohlcv(t, timeframe="4hour", limit=200, client=client)
-                            for t in batch
-                        ]
-                    results_4h = await asyncio.gather(*tasks, return_exceptions=True)
-                    for ticker, result in zip(batch, results_4h, strict=False):
-                        if isinstance(result, Exception) or not result:
-                            continue
-                        intraday_features[ticker] = compute_tf_features(result, "4H")
+                    tasks = [
+                        fetch_crypto_ohlcv_binance(
+                            self._crypto_binance_map.get(t, f"{t}USDT"),
+                            interval="4h",
+                            limit=200,
+                            client=client,
+                        )
+                        for t in batch
+                    ]
+                else:
+                    tasks = [
+                        fetch_intraday_ohlcv(t, timeframe="4hour", limit=200, client=client)
+                        for t in batch
+                    ]
+                results_4h = await asyncio.gather(*tasks, return_exceptions=True)
+                for ticker, result in zip(batch, results_4h, strict=False):
+                    if isinstance(result, Exception) or not result:
+                        continue
+                    intraday_features[ticker] = compute_tf_features(result, "4H")
 
-                    if batch_start + batch_size < len(intraday_tickers):
-                        await asyncio.sleep(batch_delay)
+                if batch_start + batch_size < len(intraday_tickers):
+                    await asyncio.sleep(batch_delay)
         except Exception as exc:
             logger.warning("4H feature fetch failed (non-fatal): %s", exc)
 
