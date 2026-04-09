@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -481,6 +481,7 @@ class PipelineResult(BaseModel):
     chart_indicators: list[str] = Field(
         default_factory=lambda: ["RSI", "MACD", "Volume", "EMA_50", "EMA_200", "ATR"]
     )
+    meta: dict[str, Any] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -715,9 +716,6 @@ class StrategyConfig(BaseModel):
     is_template: bool = False
     recommended: bool = False
     strategy_type: str = "swing"
-
-    # Pipeline version (v1 = legacy sequential, v2 = parallel independent tracks)
-    pipeline_version: Literal["v1", "v2"] = "v2"
 
 
 # ---------------------------------------------------------------------------

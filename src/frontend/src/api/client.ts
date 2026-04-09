@@ -63,6 +63,7 @@ export const api = {
     manual_tickers?: string[];
     user_prompt?: string;
     screener_overrides?: ScreenerOverrides;
+    mode_override?: string;
   }) =>
     request<{ run_id: string; status: string }>("/api/pipeline/run", {
       method: "POST",

@@ -8,6 +8,12 @@ const POLL_MS = 3000;
 /** Terminal statuses that mean the pipeline is no longer running. */
 const DONE_STATUSES = new Set(['completed', 'partial', 'failed']);
 
+/** Maximum time to poll before assuming the pipeline is stuck (ms). */
+const POLL_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+
+/** Number of consecutive poll failures before surfacing an error. */
+const MAX_CONSECUTIVE_POLL_FAILURES = 5;
+
 export function usePipeline() {
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -31,6 +37,7 @@ export function usePipeline() {
     manualTickers?: string[],
     userPrompt?: string,
     screenerOverrides?: ScreenerOverrides,
+    modeOverride?: string,
   ) => {
     cancelledRef.current = false;
     setIsRunning(true);
@@ -44,18 +51,33 @@ export function usePipeline() {
         manual_tickers: manualTickers,
         user_prompt: userPrompt,
         screener_overrides: screenerOverrides,
+        mode_override: modeOverride,
       });
 
       // Poll progress until the run reaches a terminal status
+      const pollStart = Date.now();
+      let consecutiveFailures = 0;
       while (!cancelledRef.current) {
         await new Promise<void>((resolve) => setTimeout(resolve, POLL_MS));
         if (cancelledRef.current) break;
 
+        // Timeout guard — stop polling if the pipeline seems stuck
+        if (Date.now() - pollStart > POLL_TIMEOUT_MS) {
+          setError('Pipeline timed out — it may still be running on the server. Check history later.');
+          break;
+        }
+
         try {
           const p = await api.getPipelineProgress(run_id);
+          consecutiveFailures = 0;
           setProgress(p);
           if (DONE_STATUSES.has(p.run_status)) break;
         } catch {
+          consecutiveFailures++;
+          if (consecutiveFailures >= MAX_CONSECUTIVE_POLL_FAILURES) {
+            setError('Lost connection to the server. The pipeline may still be running — check history later.');
+            break;
+          }
           // Transient network errors during polling are non-fatal — keep waiting
         }
       }
@@ -99,6 +121,8 @@ export function usePipeline() {
     }
   }, []);
 
+  const clearError = useCallback(() => setError(null), []);
+
   return {
     isRunning,
     error,
@@ -109,5 +133,7 @@ export function usePipeline() {
     runPipeline,
     fetchHistory,
     getResult,
+    setError,
+    clearError,
   };
 }

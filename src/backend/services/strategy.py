@@ -71,7 +71,7 @@ def _row_to_config(row: dict[str, Any]) -> StrategyConfig:
     elif isinstance(short_tf_raw, list):
         short_tf = short_tf_raw
     else:
-        short_tf = ["15m", "1H"]
+        short_tf = []
 
     short_tf_ind_raw = row.get("short_tf_indicators")
     if isinstance(short_tf_ind_raw, str):

@@ -109,7 +109,7 @@ const MODE_BG: Record<RunMode, string> = {
 export function SearchScreen() {
   const navigate = useNavigate();
   const { templates, strategies } = useStrategies();
-  const { runPipeline, isRunning, error, history, fetchHistory, isLoadingHistory, progress } = usePipeline();
+  const { runPipeline, isRunning, error, setError, history, fetchHistory, isLoadingHistory, progress } = usePipeline();
 
   const pipelineSectionRef = useRef<HTMLDivElement>(null);
 
@@ -186,7 +186,7 @@ export function SearchScreen() {
   const handleScannerRun = async (scannerRuleKey: string, tickers: string[]) => {
     const match = resolveStrategyConfigForScannerRule(scannerRuleKey, allStrategies);
     if (!match) {
-      console.error('No strategy template matched prescanner rule:', scannerRuleKey);
+      setError(`No strategy template matches scanner rule "${scannerRuleKey}". Add a matching strategy first.`);
       return;
     }
     scrollToPipelineSection();
@@ -199,6 +199,7 @@ export function SearchScreen() {
         tickers.length > 0 ? tickers : undefined,
         undefined,
         overrides,
+        'analysis',
       );
       if (result?.run_id) navigate(`/?run=${result.run_id}`);
     } catch (err) {

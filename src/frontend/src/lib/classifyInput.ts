@@ -1,7 +1,7 @@
 export type RunMode = 'none' | 'discovery' | 'analysis' | 'combined' | 'prompt';
 export type InputKind = 'empty' | 'tickers' | 'prompt';
 
-const TICKER_RE = /^[A-Z0-9]{1,5}(\.[A-Z]{1,2})?$/;
+const TICKER_RE = /^[A-Z0-9]{1,5}(-[A-Z0-9]{1,5})?(\.[A-Z]{1,2})?$/;
 
 export function classifyInput(raw: string): { kind: InputKind; tickers: string[] } {
   const trimmed = raw.trim();

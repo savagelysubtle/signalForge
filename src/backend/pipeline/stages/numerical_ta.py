@@ -15,10 +15,25 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any
+from typing import Any, Protocol
+
+import httpx
 
 from pipeline.schemas import MultiTimeframeTechnical, StrategyConfig, TechnicalSnapshot
 from services.technical_analysis import build_multi_timeframe
+
+
+class _OhlcvFetcher(Protocol):
+    """Callable that fetches OHLCV candles for a symbol."""
+
+    async def __call__(
+        self,
+        symbol: str,
+        *,
+        limit: int = 300,
+        client: httpx.AsyncClient | None = None,
+    ) -> list[dict[str, Any]]: ...
+
 
 logger = logging.getLogger(__name__)
 
@@ -100,23 +115,32 @@ async def run_numerical_ta(
 async def run_ta_for_scanner(
     tickers: list[str],
     timeframe: str = "D",
+    *,
+    ohlcv_fetcher: _OhlcvFetcher | None = None,
+    symbol_map: dict[str, str] | None = None,
 ) -> tuple[dict[str, TechnicalSnapshot], dict[str, list[dict[str, Any]]]]:
     """Lightweight TA fetch for the strategy scanner.
 
-    Fetches OHLCV data from the FMP ``/stable/`` endpoint in batches and
-    computes all indicators locally using numpy.  Also returns raw daily
-    candles so the caller can derive weekly features without extra API calls.
+    Fetches OHLCV data in batches and computes all indicators locally
+    using numpy.  Also returns raw daily candles so the caller can derive
+    weekly features without extra API calls.
 
     Args:
-        tickers: Ticker symbols to fetch.
+        tickers: Display ticker symbols to fetch.
         timeframe: Timeframe string (default ``"D"``).
+        ohlcv_fetcher: Async callable ``(symbol, *, limit, client) -> list[dict]``.
+            Defaults to FMP's ``fetch_ohlcv_stable``.
+        symbol_map: Optional mapping from display ticker to API symbol
+            (e.g. ``{"BTC": "BTCUSDT"}``).  When provided, the API symbol
+            is used for data fetching but results are keyed by display ticker.
 
     Returns:
         Tuple of (snapshots, raw_candles) where both are dicts keyed by ticker.
     """
-    import httpx
-
     from services.technical_analysis import build_snapshot_from_ohlcv, fetch_ohlcv_stable
+
+    fetcher = ohlcv_fetcher or fetch_ohlcv_stable
+    _symbol_map = symbol_map or {}
 
     batch_size = 20
     batch_delay = 0.5
@@ -129,7 +153,7 @@ async def run_ta_for_scanner(
     async with httpx.AsyncClient(timeout=30) as client:
         for batch_start in range(0, len(tickers), batch_size):
             batch = tickers[batch_start : batch_start + batch_size]
-            tasks = [fetch_ohlcv_stable(t, limit=300, client=client) for t in batch]
+            tasks = [fetcher(_symbol_map.get(t, t), limit=300, client=client) for t in batch]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
             for ticker, result in zip(batch, results, strict=False):

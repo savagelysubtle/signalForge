@@ -220,6 +220,7 @@ export interface PipelineResult {
   total_duration_seconds: number;
   prompt_versions: Record<string, string>;
   chart_indicators: string[];
+  meta: Record<string, unknown>;
 }
 
 export interface StageError {

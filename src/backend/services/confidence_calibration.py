@@ -2,18 +2,22 @@
 
 Decomposes the GPT-assigned confidence into weighted sub-components,
 then applies deterministic penalty rules based on numerical TA state,
-track agreement, and historical pattern accuracy. The result replaces
-the raw GPT confidence with a calibrated score and a position-sizing
-hint (``SignalStrength``).
+track agreement, and historical pattern accuracy. The final confidence
+is a blend of the original GPT confidence (40%) and the calibrated
+TA-based score (60%), preserving qualitative signal while grounding it
+in numerical reality. A ``SignalStrength`` position-sizing hint is
+derived from the blended score.
 
 Auto-threshold rules (starting points -- Phase 6 feedback loop tunes over time):
   - EMA cross age > 5 candles on daily:    -0.15
   - RSI > 70 on bullish signal:            -0.10
   - RSI < 30 on bearish signal:            -0.10
-  - ADX < 20 (no trend):                   -0.20 (trend-following only)
+  - ADX < 20 (no trend):                   penalized via lower base in _score_technical_strength
+                                           (explicit penalty lives in risk_post_filter only)
   - Volume < 0.8x average:                 -0.10
   - Tracks disagree:                       -0.15 per dissenting track
   - Historical pattern accuracy < 40%:     -0.20
+  - Risk disapproved:                      (1 - risk_score) * 0.07 (halved; GPT already factors flags)
 """
 
 from __future__ import annotations
@@ -156,11 +160,6 @@ def _score_trend_alignment(
             )
             base = max(0.0, base - 0.15)
 
-    is_trend_strategy = config.strategy_type.lower() in _TREND_FOLLOWING_TYPES
-    if is_trend_strategy and snap.adx < 20:
-        penalties.append(f"low_adx_trend_strategy: -0.20 (ADX={snap.adx:.1f}, no trend)")
-        base = max(0.0, base - 0.20)
-
     return round(min(base, 0.20), 4), penalties
 
 
@@ -276,7 +275,7 @@ def calibrate_recommendation(
     """Apply structured confidence calibration to a single recommendation.
 
     Preserves the original GPT confidence in ``raw_gpt_confidence``, then
-    replaces ``confidence`` with the calibrated score and sets
+    blends it with the calibrated score (40% GPT + 60% calibrated) and sets
     ``confidence_breakdown`` and ``signal_strength``.
 
     Args:
@@ -319,7 +318,7 @@ def calibrate_recommendation(
     calibrated = max(0.0, min(1.0, raw_total - vol_penalty))
 
     if risk_assessment and not risk_assessment.risk_approved:
-        risk_penalty = (1.0 - risk_assessment.risk_score) * 0.15
+        risk_penalty = (1.0 - risk_assessment.risk_score) * 0.07
         all_penalties.append(f"risk_disapproved: -{risk_penalty:.2f}")
         calibrated = max(0.0, calibrated - risk_penalty)
 
@@ -334,9 +333,14 @@ def calibrate_recommendation(
     )
 
     rec.raw_gpt_confidence = rec.confidence
-    rec.confidence = round(calibrated, 4)
+
+    # Blend: 40% GPT qualitative signal + 60% TA-based calibrated score
+    blended = 0.4 * rec.confidence + 0.6 * calibrated
+    blended = round(max(0.0, min(1.0, blended)), 4)
+
+    rec.confidence = blended
     rec.confidence_breakdown = breakdown
-    rec.signal_strength = _classify_signal_strength(calibrated)
+    rec.signal_strength = _classify_signal_strength(blended)
 
     if all_penalties:
         penalty_summary = "; ".join(all_penalties)
@@ -347,10 +351,11 @@ def calibrate_recommendation(
             rec.confidence_adjustment = f"Calibration: {penalty_summary}"
 
     logger.info(
-        "Calibrated %s: GPT=%.2f → calibrated=%.4f (%s)",
+        "Calibrated %s: GPT=%.2f → TA=%.4f → blended=%.4f (%s)",
         rec.ticker,
         rec.raw_gpt_confidence,
         calibrated,
+        blended,
         rec.signal_strength,
     )
 

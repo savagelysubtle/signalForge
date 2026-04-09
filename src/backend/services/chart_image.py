@@ -99,6 +99,8 @@ _US_EXCHANGE_FALLBACKS = ["NASDAQ", "NYSE", "AMEX"]
 
 _CANADIAN_EXCHANGE_FALLBACKS = ["TSX", "TSXV"]
 
+_CRYPTO_EXCHANGE_FALLBACKS = ["BINANCE", "COINBASE", "BYBIT"]
+
 _TRUST_UNIT_SUFFIXES = ("-UN", "-U", "-DB", "-PR", "-WT", "-RT")
 
 
@@ -123,12 +125,15 @@ def _fix_canadian_symbol(symbol: str) -> str:
     return symbol
 
 
-def _to_tradingview_symbols(ticker: str) -> list[str]:
+def _to_tradingview_symbols(ticker: str, *, is_crypto: bool = False) -> list[str]:
     """Convert ticker to one or more TradingView ``EXCHANGE:SYMBOL`` candidates.
 
     Chart-Img v2 requires ``EXCHANGE:SYMBOL`` format. For non-US tickers
     (Yahoo suffixes or already-prefixed), returns candidates with fallbacks.
     For bare US symbols, returns candidates for NASDAQ, NYSE, and AMEX.
+
+    When ``is_crypto=True``, produces candidates for crypto exchanges using
+    the ``XXXUSDT`` pair format (e.g. ``BINANCE:BTCUSDT``).
 
     Canadian tickers (TSX/TSXV prefixed or .TO/.V suffixed) get both TSX and
     TSXV as candidates, since Perplexity may guess the wrong exchange.
@@ -139,15 +144,32 @@ def _to_tradingview_symbols(ticker: str) -> list[str]:
     suffixes, so malformed input like ``TSX: CVE`` or ``ENB.TO`` is handled.
     Canadian trust-unit hyphens are converted to dots (``REI-UN`` → ``REI.UN``).
 
+    Args:
+        ticker: Raw ticker symbol from any source.
+        is_crypto: When True, produce crypto exchange candidates instead of
+            US stock exchanges.
+
     Examples:
-        TSX:ENB    -> ["TSX:ENB", "TSXV:ENB", "NASDAQ:ENB", "NYSE:ENB", "AMEX:ENB"]
-        TSX:REI-UN -> ["TSX:REI.UN", "TSXV:REI.UN"]
-        TSXV:NVX   -> ["TSXV:NVX", "TSX:NVX", "NASDAQ:NVX", "NYSE:NVX", "AMEX:NVX"]
-        AC.TO      -> ["TSX:AC", "TSXV:AC"]
-        AAPL       -> ["NASDAQ:AAPL", "NYSE:AAPL", "AMEX:AAPL"]
-        TSX: CVE   -> ["TSX:CVE", "TSXV:CVE", "NASDAQ:CVE", "NYSE:CVE", "AMEX:CVE"]
+        _to_tradingview_symbols("BTC", is_crypto=True)
+            -> ["BINANCE:BTCUSDT", "COINBASE:BTCUSD", "BYBIT:BTCUSDT"]
+        _to_tradingview_symbols("TSX:ENB")
+            -> ["TSX:ENB", "TSXV:ENB", "NASDAQ:ENB", "NYSE:ENB", "AMEX:ENB"]
+        _to_tradingview_symbols("AC.TO")
+            -> ["TSX:AC", "TSXV:AC"]
+        _to_tradingview_symbols("AAPL")
+            -> ["NASDAQ:AAPL", "NYSE:AAPL", "AMEX:AAPL"]
     """
     ticker = normalize_ticker(ticker)
+
+    if is_crypto:
+        symbol = ticker.split(":", 1)[-1] if ":" in ticker else ticker
+        symbol = symbol.removesuffix("USDT").removesuffix("USD")
+        return [
+            f"BINANCE:{symbol}USDT",
+            f"COINBASE:{symbol}USD",
+            f"BYBIT:{symbol}USDT",
+        ]
+
     if ":" in ticker:
         exchange, symbol = ticker.split(":", 1)
         if exchange in _CANADIAN_EXCHANGE_FALLBACKS:
@@ -171,6 +193,38 @@ def _to_tradingview_symbols(ticker: str) -> list[str]:
 
 
 _supabase_client: Client | None = None
+
+# ---------------------------------------------------------------------------
+# Per-run symbol resolution cache
+# ---------------------------------------------------------------------------
+# Stores the first TradingView symbol that resolved successfully for each
+# (run_id, ticker) pair.  Annotated charts reuse the resolved symbol instead
+# of re-probing every exchange candidate — cutting up to 2/3 of Chart-Img
+# API calls for the annotated pass.  The cache is scoped per run_id and
+# cleared at the end of each pipeline run so it never serves stale data.
+# ---------------------------------------------------------------------------
+_run_symbol_cache: dict[str, dict[str, str]] = {}
+
+
+def _cache_resolved_symbol(run_id: str, ticker: str, resolved_symbol: str) -> None:
+    """Record which TradingView symbol worked for *ticker* in this run."""
+    _run_symbol_cache.setdefault(run_id, {})[ticker] = resolved_symbol
+
+
+def _get_cached_symbol(run_id: str, ticker: str) -> str | None:
+    """Return the previously resolved TV symbol, or ``None``."""
+    return _run_symbol_cache.get(run_id, {}).get(ticker)
+
+
+def clear_run_symbol_cache(run_id: str) -> None:
+    """Remove all cached symbols for a finished run.
+
+    Called by the orchestrator once the pipeline run is complete to prevent
+    unbounded memory growth.
+    """
+    removed = _run_symbol_cache.pop(run_id, None)
+    if removed:
+        logger.debug("Cleared symbol cache for run %s (%d entries)", run_id, len(removed))
 
 
 def _get_supabase() -> Client:
@@ -229,6 +283,8 @@ async def fetch_chart_image(
     indicators: list[str],
     run_id: str,
     user_id: str,
+    *,
+    is_crypto: bool = False,
 ) -> tuple[bytes, str]:
     """Fetch a TradingView chart screenshot from Chart-Img v2 API and store it.
 
@@ -240,11 +296,12 @@ async def fetch_chart_image(
     to local filesystem and returns the local path as a string.
 
     Args:
-        ticker: Stock/crypto ticker symbol (e.g. "AAPL", "TSX:ENB").
+        ticker: Stock/crypto ticker symbol (e.g. "AAPL", "TSX:ENB", "BTC").
         timeframe: Strategy timeframe code (e.g. "D", "4H", "W").
         indicators: List of indicator names from strategy config.
         run_id: Pipeline run UUID for unique filenames.
         user_id: User UUID for storage path isolation.
+        is_crypto: When True, use crypto exchange symbols (BINANCE, etc.).
 
     Returns:
         Tuple of (raw PNG bytes, public URL or local path string).
@@ -261,7 +318,7 @@ async def fetch_chart_image(
 
     interval = TIMEFRAME_MAP.get(timeframe, "1D")
     studies = _map_indicators(indicators)
-    tv_symbols = _to_tradingview_symbols(ticker)
+    tv_symbols = _to_tradingview_symbols(ticker, is_crypto=is_crypto)
     logger.info("Chart-Img candidates for '%s': %s", ticker, tv_symbols)
 
     headers = {
@@ -287,6 +344,7 @@ async def fetch_chart_image(
             logger.info("Chart-Img request: %s", {k: v for k, v in body.items() if k != "studies"})
             response = await client.post(CHART_IMG_V2_URL, json=body, headers=headers)
             if response.status_code < 400:
+                _cache_resolved_symbol(run_id, ticker, tv_symbol)
                 break
             logger.warning(
                 "Chart-Img %s failed (HTTP %s): %s",
@@ -396,6 +454,8 @@ async def fetch_annotated_chart(
     entry_price: float | None = None,
     stop_loss: float | None = None,
     take_profit: float | None = None,
+    *,
+    is_crypto: bool = False,
 ) -> str:
     """Generate a chart image with key-level and trade-parameter overlays.
 
@@ -405,7 +465,7 @@ async def fetch_annotated_chart(
     studies + drawings; we use 0 studies and up to 5 drawings.
 
     Args:
-        ticker: Stock ticker symbol (e.g. "TSX:WCP", "AAPL").
+        ticker: Stock/crypto ticker symbol (e.g. "TSX:WCP", "AAPL", "BTC").
         timeframe: Strategy timeframe code (e.g. "D", "4H").
         key_levels: Support/resistance levels from Claude's analysis.
         run_id: Pipeline run UUID for unique storage path.
@@ -413,6 +473,7 @@ async def fetch_annotated_chart(
         entry_price: GPT-recommended entry price (optional).
         stop_loss: GPT-recommended stop loss (optional).
         take_profit: GPT-recommended take profit (optional).
+        is_crypto: When True, use crypto exchange symbols (BINANCE, etc.).
 
     Returns:
         Public URL (Supabase) or local file path of the annotated chart PNG.
@@ -433,7 +494,16 @@ async def fetch_annotated_chart(
         return ""
 
     interval = TIMEFRAME_MAP.get(timeframe, "1D")
-    tv_symbols = _to_tradingview_symbols(ticker)
+
+    cached = _get_cached_symbol(run_id, ticker)
+    if cached:
+        tv_symbols = [cached]
+        logger.info("Annotated chart using cached symbol %s for %s", cached, ticker)
+    else:
+        tv_symbols = _to_tradingview_symbols(ticker, is_crypto=is_crypto)
+        logger.info(
+            "Annotated chart probing %d candidates for %s (no cache hit)", len(tv_symbols), ticker
+        )
 
     headers = {
         "x-api-key": api_key,

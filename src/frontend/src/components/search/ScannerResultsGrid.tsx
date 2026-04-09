@@ -124,7 +124,7 @@ export function ScannerResultsGrid({ results, onRunScannerStrategy, disabled }: 
             </div>
             <button
               type="button"
-              onClick={() => void onRunScannerStrategy(strategyType, items.map((i) => i.ticker))}
+              onClick={() => void onRunScannerStrategy(strategyType, items.slice(0, 10).map((i) => i.ticker))}
               disabled={disabled}
               className="flex items-center gap-1 text-[10px] font-display text-accent-signal hover:text-accent-signal/80 transition-colors disabled:opacity-40"
             >

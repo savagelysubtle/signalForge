@@ -725,7 +725,7 @@ async def fetch_vix_quote() -> tuple[float | None, str]:
 
 
 async def fetch_quotes(symbols: list[str]) -> dict[str, FmpQuote]:
-    """Fetch real-time quotes for multiple symbols via FMP ``/stable/quote``.
+    """Fetch real-time quotes for multiple symbols via FMP ``/stable/batch-quote``.
 
     Automatically converts TradingView-format tickers (``TSX:AGI``) to
     FMP-compatible format (``AGI.TO``) and maps response keys back so
@@ -749,7 +749,7 @@ async def fetch_quotes(symbols: list[str]) -> dict[str, FmpQuote]:
             fmp_to_original[fmp_sym.upper()] = sym
 
         joined = ",".join(fmp_symbols)
-        data = await _fmp_get("quote", {"symbol": joined})
+        data = await _fmp_get("batch-quote", {"symbols": joined})
         if not isinstance(data, list):
             return {}
         result: dict[str, FmpQuote] = {}
@@ -858,8 +858,11 @@ async def fetch_sector_performance() -> list[FmpSectorPerformance]:
     Returns:
         List of sector performance entries with change percentages.
     """
+    from datetime import UTC, datetime
+
     try:
-        data = await _fmp_get("sector-performance-snapshot")
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        data = await _fmp_get("sector-performance-snapshot", {"date": today})
         if not isinstance(data, list):
             return []
         results: list[FmpSectorPerformance] = []

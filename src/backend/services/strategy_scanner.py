@@ -253,6 +253,9 @@ REGIME_ACTIVE_STRATEGIES: dict[str, list[str]] = {
 }
 
 _DEFAULT_ACTIVE = list(STRATEGY_RULES.keys())
+
+_CRYPTO_STRATEGIES: frozenset[str] = frozenset({"crypto_swing", "crypto_intraday"})
+
 MIN_RULE_SCORE = 0.35
 MIN_ML_PROB = 0.52
 MIN_COMBINED_SCORE = 0.45
@@ -365,6 +368,7 @@ class StrategyScanner:
     def __init__(self, heartbeat: MarketHeartbeat) -> None:
         self.heartbeat = heartbeat
         self._scan_lock = asyncio.Lock()
+        self._crypto_binance_map: dict[str, str] = {}
 
     async def run_scan(
         self,
@@ -426,66 +430,51 @@ class StrategyScanner:
                 await self._finalize_report(report)
                 return report
 
-            universe = await self._fetch_universe(
-                country=country,
-                exchange=exchange,
-                sector=sector,
-                market_cap_min=market_cap_min,
-                market_cap_max=market_cap_max,
-                limit=limit,
+            stock_strategies = [s for s in active_strategies if s not in _CRYPTO_STRATEGIES]
+            # Crypto always runs regardless of regime or stock filters
+            crypto_strategies = list(_CRYPTO_STRATEGIES)
+
+            async def _empty_list() -> list[str]:
+                return []
+
+            stock_universe_coro = (
+                self._fetch_universe(
+                    country=country,
+                    exchange=exchange,
+                    sector=sector,
+                    market_cap_min=market_cap_min,
+                    market_cap_max=market_cap_max,
+                    limit=limit,
+                )
+                if stock_strategies
+                else _empty_list()
             )
-            report.universe_size = len(universe)
-            logger.info(
-                "Scanner: %d tickers, strategies=%s",
-                len(universe),
-                active_strategies,
+            crypto_universe_coro = self._fetch_crypto_universe()
+
+            stock_universe, crypto_universe = await asyncio.gather(
+                stock_universe_coro, crypto_universe_coro
             )
 
-            features_map = await self._fetch_all_ta(universe, state)
+            report.universe_size = len(stock_universe) + len(crypto_universe)
+            logger.info(
+                "Scanner: %d stock + %d crypto tickers, stock_strategies=%s, crypto_strategies=%s",
+                len(stock_universe),
+                len(crypto_universe),
+                stock_strategies,
+                crypto_strategies,
+            )
+
+            stock_features: dict[str, TickerFeatures] = {}
+            crypto_features: dict[str, TickerFeatures] = {}
+            if stock_universe:
+                stock_features = await self._fetch_all_ta(stock_universe, state)
+            if crypto_universe:
+                crypto_features = await self._fetch_all_ta(crypto_universe, state, is_crypto=True)
 
             results: list[ScanResult] = []
-            for ticker, features in features_map.items():
-                for strategy in active_strategies:
-                    rule_fn = STRATEGY_RULES.get(strategy)
-                    if not rule_fn:
-                        continue
-                    features.strategy_type = strategy
-                    features.regime = state.regime_type
-                    rule_score = rule_fn(features)
-                    if rule_score < MIN_RULE_SCORE:
-                        continue
 
-                    ml_prob = await self._quick_ml_score(
-                        ticker,
-                        strategy,
-                        features,
-                        state,
-                    )
-                    if ml_prob is not None:
-                        combined = _RULE_WEIGHT * rule_score + _ML_WEIGHT * ml_prob
-                    else:
-                        combined = rule_score
-
-                    if combined >= MIN_COMBINED_SCORE:
-                        actionable = combined >= 0.58 and (ml_prob is None or ml_prob >= 0.55)
-                        results.append(
-                            ScanResult(
-                                ticker=ticker,
-                                strategy_type=strategy,
-                                rule_score=round(rule_score, 4),
-                                ml_probability=round(ml_prob, 4) if ml_prob else None,
-                                combined_score=round(combined, 4),
-                                matched_rules=self._get_matched_rules(strategy, features),
-                                regime_type=state.regime_type,
-                                rsi=round(features.rsi, 1),
-                                volume_ratio=round(features.volume_ratio, 2),
-                                momentum_score=round(features.momentum_score, 3),
-                                atr_pct=round(features.atr_pct, 2),
-                                ema_alignment=features.ema_alignment,
-                                earnings_within_5d=features.earnings_within_5d,
-                                is_actionable=actionable,
-                            )
-                        )
+            results.extend(await self._score_universe(stock_features, stock_strategies, state))
+            results.extend(await self._score_universe(crypto_features, crypto_strategies, state))
 
             results.sort(key=lambda r: r.combined_score, reverse=True)
             report.results = results
@@ -580,6 +569,53 @@ class StrategyScanner:
 
     # ── Internal: universe + TA ─────────────────────────────────────────
 
+    async def _score_universe(
+        self,
+        features_map: dict[str, TickerFeatures],
+        strategies: list[str],
+        state: MarketState,
+    ) -> list[ScanResult]:
+        """Apply strategy rules + ML scoring to a features map."""
+        results: list[ScanResult] = []
+        for ticker, features in features_map.items():
+            for strategy in strategies:
+                rule_fn = STRATEGY_RULES.get(strategy)
+                if not rule_fn:
+                    continue
+                features.strategy_type = strategy
+                features.regime = state.regime_type
+                rule_score = rule_fn(features)
+                if rule_score < MIN_RULE_SCORE:
+                    continue
+
+                ml_prob = await self._quick_ml_score(ticker, strategy, features, state)
+                if ml_prob is not None:
+                    combined = _RULE_WEIGHT * rule_score + _ML_WEIGHT * ml_prob
+                else:
+                    combined = rule_score
+
+                if combined >= MIN_COMBINED_SCORE:
+                    actionable = combined >= 0.58 and (ml_prob is None or ml_prob >= 0.55)
+                    results.append(
+                        ScanResult(
+                            ticker=ticker,
+                            strategy_type=strategy,
+                            rule_score=round(rule_score, 4),
+                            ml_probability=round(ml_prob, 4) if ml_prob else None,
+                            combined_score=round(combined, 4),
+                            matched_rules=self._get_matched_rules(strategy, features),
+                            regime_type=state.regime_type,
+                            rsi=round(features.rsi, 1),
+                            volume_ratio=round(features.volume_ratio, 2),
+                            momentum_score=round(features.momentum_score, 3),
+                            atr_pct=round(features.atr_pct, 2),
+                            ema_alignment=features.ema_alignment,
+                            earnings_within_5d=features.earnings_within_5d,
+                            is_actionable=actionable,
+                        )
+                    )
+        return results
+
     # FMP `country` filters by headquarters, not listing exchange.
     # Post-filter to the country's primary exchanges when no explicit exchange is set.
     _COUNTRY_EXCHANGES: ClassVar[dict[str, set[str]]] = {
@@ -645,12 +681,36 @@ class StrategyScanner:
             logger.warning("Universe fetch failed: %s", exc)
             return []
 
+    async def _fetch_crypto_universe(self, *, limit: int = 50) -> list[str]:
+        """Fetch top crypto tickers from Binance ranked by 24h USDT volume.
+
+        Stores a ``display_ticker -> binance_symbol`` mapping in
+        ``self._crypto_binance_map`` so that downstream OHLCV fetches
+        can resolve the correct Binance symbol.
+
+        Returns:
+            List of display tickers (e.g. ``["BTC", "ETH", "SOL"]``).
+        """
+        from services.crypto_data import fetch_crypto_universe_binance
+
+        tickers, binance_map = await fetch_crypto_universe_binance(limit=limit)
+        self._crypto_binance_map = binance_map
+        return tickers
+
     async def _fetch_all_ta(
         self,
         tickers: list[str],
         state: MarketState,
+        *,
+        is_crypto: bool = False,
     ) -> dict[str, TickerFeatures]:
-        """Fetch daily TA and compute weekly + 4H features for all tickers."""
+        """Fetch daily TA and compute weekly + 4H features for all tickers.
+
+        Args:
+            tickers: Display ticker symbols.
+            state: Current market regime state.
+            is_crypto: When True, use Binance OHLCV instead of FMP.
+        """
         import httpx
 
         from pipeline.stages.numerical_ta import run_ta_for_scanner
@@ -661,7 +721,20 @@ class StrategyScanner:
             fetch_intraday_ohlcv,
         )
 
-        snapshots, raw_candles = await run_ta_for_scanner(tickers, timeframe="D")
+        ohlcv_fetcher = None
+        symbol_map: dict[str, str] | None = None
+        if is_crypto:
+            from services.crypto_data import fetch_crypto_ohlcv_binance
+
+            ohlcv_fetcher = fetch_crypto_ohlcv_binance
+            symbol_map = self._crypto_binance_map
+
+        snapshots, raw_candles = await run_ta_for_scanner(
+            tickers,
+            timeframe="D",
+            ohlcv_fetcher=ohlcv_fetcher,
+            symbol_map=symbol_map,
+        )
 
         weekly_features: dict[str, dict[str, float | None]] = {}
         extra_daily: dict[str, dict[str, float | None]] = {}
@@ -678,10 +751,23 @@ class StrategyScanner:
             async with httpx.AsyncClient(timeout=30) as client:
                 for batch_start in range(0, len(intraday_tickers), batch_size):
                     batch = intraday_tickers[batch_start : batch_start + batch_size]
-                    tasks = [
-                        fetch_intraday_ohlcv(t, timeframe="4hour", limit=200, client=client)
-                        for t in batch
-                    ]
+                    if is_crypto:
+                        from services.crypto_data import fetch_crypto_ohlcv_binance
+
+                        tasks = [
+                            fetch_crypto_ohlcv_binance(
+                                self._crypto_binance_map.get(t, f"{t}USDT"),
+                                interval="4h",
+                                limit=200,
+                                client=client,
+                            )
+                            for t in batch
+                        ]
+                    else:
+                        tasks = [
+                            fetch_intraday_ohlcv(t, timeframe="4hour", limit=200, client=client)
+                            for t in batch
+                        ]
                     results_4h = await asyncio.gather(*tasks, return_exceptions=True)
                     for ticker, result in zip(batch, results_4h, strict=False):
                         if isinstance(result, Exception) or not result:

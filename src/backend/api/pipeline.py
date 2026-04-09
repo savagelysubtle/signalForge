@@ -43,6 +43,7 @@ class PipelineRunRequest(BaseModel):
     manual_tickers: list[str] = Field(default_factory=list)
     user_prompt: str | None = None
     screener_overrides: ScreenerOverrides | None = None
+    mode_override: str | None = None
 
 
 class PipelineRunResponse(BaseModel):
@@ -76,9 +77,32 @@ async def trigger_pipeline_run(
                 user_prompt=user_prompt,
                 user_id=user_id,
                 screener_overrides=body.screener_overrides,
+                mode_override=body.mode_override,
             )
         except Exception as exc:
             logger.error("Background pipeline run %s failed: %s", run_id, exc, exc_info=True)
+            # Mark the run as failed in the DB so the frontend stops polling
+            with contextlib.suppress(Exception):
+                db = await get_db()
+                await (
+                    db.table("pipeline_runs")
+                    .update(
+                        {
+                            "status": "failed",
+                            "stage_errors": json.dumps(
+                                [
+                                    {
+                                        "stage": "pipeline",
+                                        "error": str(exc),
+                                        "type": type(exc).__name__,
+                                    }
+                                ]
+                            ),
+                        }
+                    )
+                    .eq("id", run_id)
+                    .execute()
+                )
 
     task = asyncio.create_task(_run_background())
     _background_tasks.add(task)
@@ -275,18 +299,17 @@ async def get_pipeline_progress(run_id: str, user_id: CurrentUser) -> PipelinePr
         skipped = counts.get("skipped", 0)
         if skipped > 0 and total == skipped:
             return "skipped", 0
-        errors = counts.get("error", 0)
         success = counts.get("success", 0)
-        if success > 0 or errors > 0:
+        terminal = success + sum(
+            v for k, v in counts.items() if k not in ("success", "skipped", "running")
+        )
+        if terminal > 0:
             return "done", total
         return "running", total
 
-    first_pending_set = False
     stages: list[StageProgress] = []
     for stage_name in _STAGE_ORDER:
         st, cnt = _stage_status(stage_name)
-        if st == "pending" and not first_pending_set and run_status == "running":
-            first_pending_set = True
         stages.append(
             StageProgress(
                 stage=stage_name,

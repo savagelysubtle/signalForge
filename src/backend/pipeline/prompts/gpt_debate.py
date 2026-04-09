@@ -24,13 +24,9 @@ from utils.hashing import prompt_hash
 if TYPE_CHECKING:
     from services.fmp_service import FmpEnrichedStock, FmpQuote
 
-BULL_PROMPT_VERSION = "v3"
-BEAR_PROMPT_VERSION = "v3"
-JUDGE_PROMPT_VERSION = "v10"
-
-BULL_PROMPT_VERSION_V2 = "v4"
-BEAR_PROMPT_VERSION_V2 = "v4"
-JUDGE_PROMPT_VERSION_V2 = "v11"
+BULL_PROMPT_VERSION = "v5"
+BEAR_PROMPT_VERSION = "v5"
+JUDGE_PROMPT_VERSION = "v12"
 
 _BIAS_SCORE: dict[str, int] = {
     "strongly_bullish": 2,
@@ -54,234 +50,6 @@ _TF_WEIGHT: dict[str, float] = {
 # ---------------------------------------------------------------------------
 
 BULL_SYSTEM_PROMPT = """\
-You are a bullish analyst specializing in finding compelling long opportunities.
-For each ticker provided, construct the strongest possible bull case using the
-available fundamental data, technical chart analysis, and news sentiment.
-
-You must return ONLY valid JSON — no commentary outside the JSON structure.
-
-Return a JSON object with this exact structure:
-{
-  "cases": [
-    {
-      "ticker": "<SYMBOL>",
-      "stance": "bull",
-      "key_arguments": ["<argument 1>", "<argument 2>", ...],
-      "strongest_signal": "<the single most compelling bullish signal>",
-      "weakest_counter": "<the bear argument you find hardest to dismiss>",
-      "confidence": <float from 0.0 to 1.0>
-    }
-  ]
-}
-
-Guidelines:
-- Provide at least 3 key arguments per ticker, drawing from fundamentals, technicals, and sentiment
-- Be specific — cite actual indicator values, price levels, catalyst details
-- The strongest_signal should be concrete and actionable, not vague
-- Confidence reflects how strong the overall bull case is (0.7+ = compelling, 0.5-0.7 = moderate, <0.5 = weak)
-- Acknowledge the weakest_counter honestly — this strengthens credibility
-"""
-
-BEAR_SYSTEM_PROMPT = """\
-You are a bearish devil's advocate analyst specializing in risk identification.
-For each ticker provided, construct the strongest possible bear/avoid case using
-the available fundamental data, technical chart analysis, and news sentiment.
-
-You must return ONLY valid JSON — no commentary outside the JSON structure.
-
-Return a JSON object with this exact structure:
-{
-  "cases": [
-    {
-      "ticker": "<SYMBOL>",
-      "stance": "bear",
-      "key_arguments": ["<argument 1>", "<argument 2>", ...],
-      "strongest_signal": "<the single most compelling bearish signal>",
-      "weakest_counter": "<the bull argument you find hardest to dismiss>",
-      "confidence": <float from 0.0 to 1.0>
-    }
-  ]
-}
-
-Guidelines:
-- Provide at least 3 key arguments per ticker, focusing on risks and downside catalysts
-- Look for overvaluation, technical breakdown signals, negative sentiment shifts
-- Be specific — cite actual indicator values, price levels, risk factors
-- Confidence reflects how strong the overall bear case is (0.7+ = compelling risk, 0.5-0.7 = moderate, <0.5 = weak)
-- Acknowledge the weakest_counter honestly — what makes the bull case hard to ignore?
-"""
-
-JUDGE_SYSTEM_PROMPT = """\
-You are a senior portfolio manager presiding over a bull/bear debate.
-Your job is to weigh both sides, consider the raw data, apply risk management
-rules, and produce final recommendations for each ticker.
-
-You must return ONLY valid JSON — no commentary outside the JSON structure.
-
-Return a JSON object with this exact structure:
-{
-  "recommendations": [
-    {
-      "ticker": "<SYMBOL>",
-      "action": "BUY" | "SHORT" | "HOLD" | "NO_TRADE" | "WATCH",
-      "confidence": <float from 0.0 to 1.0>,
-      "entry_price": <float or null>,
-      "stop_loss": <float or null>,
-      "take_profit": <float or null>,
-      "position_size_pct": <float, percentage of portfolio>,
-      "risk_reward_ratio": <float or null>,
-      "holding_period": "<e.g. 3-5 days, 1-2 weeks>",
-      "bull_case": {
-        "ticker": "<SYMBOL>",
-        "stance": "bull",
-        "key_arguments": ["..."],
-        "strongest_signal": "...",
-        "weakest_counter": "...",
-        "confidence": <float>
-      },
-      "bear_case": {
-        "ticker": "<SYMBOL>",
-        "stance": "bear",
-        "key_arguments": ["..."],
-        "strongest_signal": "...",
-        "weakest_counter": "...",
-        "confidence": <float>
-      },
-      "judge_reasoning": "<2-4 sentence synthesis explaining your decision>",
-      "key_factors": ["<factor 1>", "<factor 2>", ...],
-      "warnings": ["<risk warning 1>", ...],
-      "track_agreement": {
-        "perplexity_direction": "bullish" | "bearish" | "neutral",
-        "gemini_direction": "bullish" | "bearish" | "neutral",
-        "claude_direction": "bullish" | "bearish" | "neutral",
-        "agreement_score": <float from 0.0 to 1.0>,
-        "conflicts": ["<conflict description 1>", ...]
-      },
-      "confidence_adjustment": "<why confidence was raised or lowered>",
-      "entry_valid_window": "<how long this entry signal remains actionable, e.g. '1-2 hours', '1 trading day', '2-3 trading days'>"
-    }
-  ]
-}
-
-entry_valid_window guidance:
-- This tells the user how long after receiving this signal the entry price is still valid.
-- Scalp / intraday setups (15m, 1H charts): "1-2 hours" or "rest of session"
-- Swing setups (4H, D charts): "1-2 trading days"
-- Position / trend setups (D, W charts): "3-5 trading days"
-- If price is extended and a pullback entry is required: "valid on pullback to $X — no time limit but may not trigger"
-- For HOLD / WATCH / NO_TRADE: "N/A"
-- Be specific. The user needs to know whether to act now or set an alert.
-
-Decision framework:
-- BUY: Bull case significantly outweighs bear case, with favorable risk/reward
-- SHORT: Bear case dominates; bearish setup with favorable short risk/reward for active shorting
-- HOLD: Mixed signals, insufficient conviction, or wait-for-confirmation setup
-- NO_TRADE: Tracks fundamentally disagree on direction, or conditions make any entry reckless
-- WATCH: Interesting setup but not yet actionable — monitor for a trigger
-
-TRACK AGREEMENT DECISION RULES:
-- 3/3 tracks agree on direction → proceed with signal, confidence based on strength
-- 2/3 tracks agree, 1 dissents → proceed with LOWER confidence, note the dissent
-- All 3 tracks disagree → NO_TRADE. Do not force a direction.
-- 2/3 agree but numerical TA contradicts → WATCH. Flag the discrepancy.
-- Any signal where ADX < 20 and strategy requires trending market → NO_TRADE
-- Momentum score near zero (-0.2 to 0.2) → WATCH unless other signals are strong
-
-For track_agreement: assess each upstream analysis (Perplexity fundamentals,
-Gemini sentiment, Claude technicals) and classify its directional lean as
-"bullish", "bearish", or "neutral". The agreement_score should reflect how
-aligned the three tracks are (1.0 = all same direction, 0.5 = 2/3 agree,
-0.0 = all disagree). List specific conflicts in the conflicts array.
-
-confidence_adjustment must explain WHY you raised or lowered confidence from
-what the raw signal strength would suggest. Reference track agreement,
-risk flags, or historical patterns as justification.
-
-Confidence calibration:
-- 0.85+: Overwhelming signal alignment across all data sources
-- 0.70-0.85: Strong conviction with minor caveats
-- 0.55-0.70: Moderate conviction, proceed with caution
-- 0.40-0.55: Low conviction, likely HOLD or WATCH unless specific catalyst
-- <0.40: Very weak signal, default to NO_TRADE or WATCH
-
-Entry price rules (CRITICAL — MANDATORY for BUY and SHORT):
-- entry_price, stop_loss, and take_profit are REQUIRED (non-null) for ALL BUY
-  and SHORT recommendations. NEVER return null for these fields on BUY or SHORT.
-- The "Current/Last Price" in the TECHNICAL ANALYSIS section is the live market
-  price at the time of chart capture. Use it as the anchor for ALL price targets.
-- If recommending BUY and the current price IS at or near a favorable entry
-  zone (e.g. near support, pullback within uptrend), set entry_price at or
-  very close to the current price — this is an actionable NOW entry.
-- If recommending BUY but the current price is NOT at a favorable entry (e.g.
-  extended from support, mid-range), set entry_price at the nearest realistic
-  pullback level the stock is likely to retrace to, and note in warnings that
-  a limit order is required and the stock needs to pull back.
-- NEVER set an entry_price the stock has already traded through and is unlikely
-  to revisit in the near term. The user cannot enter at a price that's behind
-  the market.
-- For SHORT recommendations, entry_price represents the short entry level —
-  same anchoring logic applies. Prefer entries near resistance.
-- For HOLD recommendations, set entry_price to the price level at which you
-  would convert to BUY (the trigger price). Set stop_loss and take_profit
-  to null for HOLD.
-- For NO_TRADE and WATCH recommendations, set entry_price, stop_loss,
-  take_profit to null and position_size_pct to 0. For WATCH, optionally set
-  entry_price to the level that would trigger a re-evaluation.
-
-Risk management rules:
-- Position sizes should respect the provided risk parameters
-- entry_price, stop_loss, and take_profit MUST be set (non-null) for BUY and SHORT
-- risk_reward_ratio = (take_profit - entry) / (entry - stop_loss) — REQUIRED for BUY/SHORT
-- Reduce position_size_pct when confidence is low
-- Flag warnings for any unusual risks (earnings approaching, low liquidity, etc.)
-
-ATR-based stop loss (PREFERRED method when ATR data is available):
-- Look for the ATR indicator reading in the TECHNICAL ANALYSIS section. It will
-  appear as "ATR: <numeric value> (<signal>)" in the indicators list.
-- For BUY: stop_loss = entry_price - (1.5 x ATR) as a baseline. Adjust tighter
-  (1.0x ATR) for scalp/intraday strategies or wider (2.0x ATR) for swing/position
-  trades based on the strategy's trading style and the chart timeframe.
-- For SHORT: stop_loss = entry_price + (1.5 x ATR) as a baseline, with the same
-  style-based adjustments.
-- ALWAYS cross-check the ATR-derived stop against key_levels from the chart
-  analysis. If a strong support (for BUY) or resistance (for SHORT) level sits
-  between the entry and the ATR-derived stop, prefer the structural level as it
-  provides a more meaningful invalidation point.
-- If multiple timeframes are available, prefer the ATR from the primary
-  (longest swing) timeframe for stop placement.
-- If ATR data is not present in any chart analysis, fall back to placing stops
-  beyond the nearest key support/resistance level.
-
-Weighted bias score (multi-timeframe alignment metric):
-- The TECHNICAL ANALYSIS section includes a "Weighted bias score" for each
-  ticker with multiple timeframes analyzed. This is a numeric summary ranging
-  from -2.0 (all timeframes strongly bearish) to +2.0 (all strongly bullish).
-- Scores above +1.2: strong bullish alignment — supports BUY with elevated
-  confidence and full position sizing.
-- Scores below -1.2: strong bearish alignment — supports SHORT with conviction.
-- Scores between -0.8 and +0.8: mixed or neutral — suggests HOLD, reduced
-  position sizing, or wait-for-confirmation.
-- Scores between +0.8 and +1.2 or -0.8 and -1.2: moderate alignment — proceed
-  with caution, use smaller position size.
-
-Historical performance memory (when HISTORICAL PERFORMANCE section is present):
-- SHORT-TERM MEMORY reflects the last 14 days. It reveals active streaks and
-  temporary suppressions. Treat suppressions as strong warnings: if a pattern
-  is flagged "reduce confidence by 40%", multiply your confidence by 0.6 for
-  signals relying on that pattern.
-- LONG-TERM MEMORY is the statistical baseline across all history. Pattern
-  accuracy, sector win rates, and timeframe alignment stats represent durable
-  trends. Use them to calibrate confidence and position sizing.
-- When short-term and long-term conflict (e.g. a pattern has 70% long-term
-  win rate but 0% in the last 2 weeks), PRIORITIZE short-term for the next
-  1-2 recommendations. Recent performance better reflects current market
-  conditions. Add a warning noting the conflict.
-- "DO NOT FIRE" on single-TF alignment means you should default to HOLD
-  unless other data sources provide overwhelming evidence.
-"""
-
-
-BULL_SYSTEM_PROMPT_V2 = """\
 You are a bullish analyst receiving three INDEPENDENT research reports on the same
 ticker(s). These analysts did NOT communicate with each other. Your job is to find
 the most optimistic reading across all three tracks and construct the strongest
@@ -315,7 +83,7 @@ Guidelines:
 - Note when your bullish reading requires ignoring warnings from other tracks
 """
 
-BEAR_SYSTEM_PROMPT_V2 = """\
+BEAR_SYSTEM_PROMPT = """\
 You are a bearish devil's advocate analyst receiving three INDEPENDENT research
 reports on the same ticker(s). These analysts did NOT communicate with each other.
 Your job is to find the most pessimistic reading across all three tracks and
@@ -349,7 +117,7 @@ Guidelines:
 - Note when your bearish reading requires ignoring bullish signals from other tracks
 """
 
-JUDGE_SYSTEM_PROMPT_V2 = """\
+JUDGE_SYSTEM_PROMPT = """\
 You are a senior trading analyst receiving three INDEPENDENT research reports
 on the same ticker. These analysts did NOT communicate with each other.
 Your job is to synthesize their findings, identify agreements and conflicts,
@@ -727,7 +495,10 @@ def _format_sentiment_data(sentiments: list[SentimentAnalysis], tickers: list[st
 
         lines = [
             f"\n### {sa.ticker}",
-            f"Sentiment: {sa.sentiment_score:+.2f} [{sa.sentiment_bucket}] ({sa.sentiment_label})",
+            (
+                f"Sentiment: {sa.sentiment_score:+.2f} [{sa.sentiment_bucket}] "
+                f"({sa.sentiment_label}) (confidence: {sa.confidence:.2f})"
+            ),
         ]
         if sa.key_catalysts:
             catalyst_strs = [_format_catalyst(c) for c in sa.key_catalysts[:5]]
@@ -790,212 +561,8 @@ def _format_fmp_data(
     return format_fmp_for_gpt(fmp_context, tickers)
 
 
-def build_bull_prompt(
-    tickers: list[str],
-    screening: ScreeningResult | None,
-    charts: list[ChartAnalysis],
-    sentiments: list[SentimentAnalysis],
-    config: StrategyConfig,
-    fmp_context: dict[str, FmpEnrichedStock] | None = None,
-    live_quotes: dict[str, FmpQuote] | None = None,
-) -> str:
-    """Build the user prompt for the bull analyst.
-
-    Args:
-        tickers: List of ticker symbols to analyze.
-        screening: Perplexity screening result (or None if failed).
-        charts: List of ChartAnalysis from Claude (may be empty).
-        sentiments: List of SentimentAnalysis from Gemini (may be empty).
-        config: Strategy configuration with trading style.
-        fmp_context: FMP enriched stock data keyed by ticker (may be None).
-        live_quotes: Real-time FMP quotes keyed by ticker (may be None).
-
-    Returns:
-        Formatted user prompt string.
-    """
-    parts = [
-        f"Analyze the following {len(tickers)} tickers and build your bull case: "
-        f"{', '.join(tickers)}",
-    ]
-
-    if config.trading_style:
-        parts.append(f"\nTrading context: {config.trading_style}")
-
-    parts.append(f"\n{_format_data_availability(tickers, screening, charts, sentiments)}")
-    parts.append(f"\n## LIVE MARKET DATA (real-time)\n{_format_live_quotes(live_quotes, tickers)}")
-    parts.append(f"\n## FUNDAMENTALS (Perplexity)\n{_format_screening_data(screening, tickers)}")
-    parts.append(f"\n## QUANTITATIVE DATA (FMP)\n{_format_fmp_data(fmp_context, tickers)}")
-    parts.append(f"\n## TECHNICAL ANALYSIS (Claude)\n{_format_chart_data(charts, tickers)}")
-    parts.append(f"\n## NEWS SENTIMENT (Gemini)\n{_format_sentiment_data(sentiments, tickers)}")
-    parts.append("\nReturn your bull case as JSON matching the schema in your instructions.")
-
-    return "\n".join(parts)
-
-
-def build_bear_prompt(
-    tickers: list[str],
-    screening: ScreeningResult | None,
-    charts: list[ChartAnalysis],
-    sentiments: list[SentimentAnalysis],
-    config: StrategyConfig,
-    fmp_context: dict[str, FmpEnrichedStock] | None = None,
-    live_quotes: dict[str, FmpQuote] | None = None,
-) -> str:
-    """Build the user prompt for the bear analyst.
-
-    Args:
-        tickers: List of ticker symbols to analyze.
-        screening: Perplexity screening result (or None if failed).
-        charts: List of ChartAnalysis from Claude (may be empty).
-        sentiments: List of SentimentAnalysis from Gemini (may be empty).
-        config: Strategy configuration with trading style.
-        fmp_context: FMP enriched stock data keyed by ticker (may be None).
-        live_quotes: Real-time FMP quotes keyed by ticker (may be None).
-
-    Returns:
-        Formatted user prompt string.
-    """
-    parts = [
-        f"Analyze the following {len(tickers)} tickers and build your bear case: "
-        f"{', '.join(tickers)}",
-    ]
-
-    if config.trading_style:
-        parts.append(f"\nTrading context: {config.trading_style}")
-
-    parts.append(f"\n{_format_data_availability(tickers, screening, charts, sentiments)}")
-    parts.append(f"\n## LIVE MARKET DATA (real-time)\n{_format_live_quotes(live_quotes, tickers)}")
-    parts.append(f"\n## FUNDAMENTALS (Perplexity)\n{_format_screening_data(screening, tickers)}")
-    parts.append(f"\n## QUANTITATIVE DATA (FMP)\n{_format_fmp_data(fmp_context, tickers)}")
-    parts.append(f"\n## TECHNICAL ANALYSIS (Claude)\n{_format_chart_data(charts, tickers)}")
-    parts.append(f"\n## NEWS SENTIMENT (Gemini)\n{_format_sentiment_data(sentiments, tickers)}")
-    parts.append("\nReturn your bear case as JSON matching the schema in your instructions.")
-
-    return "\n".join(parts)
-
-
-def build_judge_prompt(
-    tickers: list[str],
-    screening: ScreeningResult | None,
-    charts: list[ChartAnalysis],
-    sentiments: list[SentimentAnalysis],
-    bull_cases: list[DebateCase] | None,
-    bear_cases: list[DebateCase] | None,
-    reflection_context: str,
-    config: StrategyConfig,
-    fmp_context: dict[str, FmpEnrichedStock] | None = None,
-    regime_context: str = "",
-    sector_consensus: str = "",
-    live_quotes: dict[str, FmpQuote] | None = None,
-) -> str:
-    """Build the user prompt for the judge/portfolio manager.
-
-    Args:
-        tickers: List of ticker symbols to analyze.
-        screening: Perplexity screening result (or None if failed).
-        charts: List of ChartAnalysis from Claude (may be empty).
-        sentiments: List of SentimentAnalysis from Gemini (may be empty).
-        bull_cases: Bull debate cases from GPT (or None if debate disabled/failed).
-        bear_cases: Bear debate cases from GPT (or None if debate disabled/failed).
-        reflection_context: Historical performance injection prompt (may be empty).
-        config: Strategy configuration with risk params.
-        fmp_context: FMP enriched stock data keyed by ticker (may be None).
-        regime_context: Pre-formatted market regime header block, or empty.
-        sector_consensus: Pre-formatted sector sentiment consensus block, or empty.
-        live_quotes: Real-time FMP quotes keyed by ticker (may be None).
-
-    Returns:
-        Formatted user prompt string.
-    """
-    rp = config.risk_params
-    parts = [
-        f"Produce final recommendations for: {', '.join(tickers)}",
-    ]
-
-    if regime_context:
-        parts.append(f"\n{regime_context}")
-
-    parts.extend(
-        [
-            "\n## RISK PARAMETERS",
-            f"- Max position size: {rp.max_position_pct}% of portfolio",
-            f"- Minimum risk/reward ratio: {rp.min_risk_reward}",
-            f"- Max portfolio risk: {rp.max_portfolio_risk_pct}%",
-        ]
-    )
-
-    if config.trading_style:
-        parts.append(f"- Trading style: {config.trading_style}")
-
-    if reflection_context:
-        parts.append(f"\n## HISTORICAL PERFORMANCE CONTEXT\n{reflection_context}")
-
-    parts.append(f"\n{_format_data_availability(tickers, screening, charts, sentiments)}")
-    parts.append(
-        f"\n## LIVE MARKET DATA (real-time)\n{_format_live_quotes(live_quotes, tickers)}"
-        "\nIMPORTANT: Use these LIVE prices for entry, stop-loss, and take-profit levels. "
-        "Other data sections may reflect earlier prices from when those stages ran."
-    )
-    parts.append(f"\n## FUNDAMENTALS (Perplexity)\n{_format_screening_data(screening, tickers)}")
-    parts.append(f"\n## QUANTITATIVE DATA (FMP)\n{_format_fmp_data(fmp_context, tickers)}")
-    parts.append(f"\n## TECHNICAL ANALYSIS (Claude)\n{_format_chart_data(charts, tickers)}")
-    parts.append(f"\n## NEWS SENTIMENT (Gemini)\n{_format_sentiment_data(sentiments, tickers)}")
-
-    if sector_consensus:
-        parts.append(f"\n## SECTOR SENTIMENT CONSENSUS\n{sector_consensus}")
-
-    if bull_cases:
-        bull_map = {bc.ticker: bc for bc in bull_cases}
-        bull_parts: list[str] = []
-        for ticker in tickers:
-            bc = bull_map.get(ticker)
-            if bc:
-                args = "\n".join(f"  - {a}" for a in bc.key_arguments)
-                bull_parts.append(
-                    f"\n### {ticker} (confidence: {bc.confidence:.2f})\n"
-                    f"Arguments:\n{args}\n"
-                    f"Strongest signal: {bc.strongest_signal}\n"
-                    f"Weakest counter: {bc.weakest_counter}"
-                )
-        if bull_parts:
-            parts.append(f"\n## BULL CASE ARGUMENTS\n{''.join(bull_parts)}")
-    else:
-        parts.append(
-            "\n## BULL CASE ARGUMENTS\nNo debate was conducted. "
-            "Perform your own internal bull analysis."
-        )
-
-    if bear_cases:
-        bear_map = {bc.ticker: bc for bc in bear_cases}
-        bear_parts: list[str] = []
-        for ticker in tickers:
-            bc = bear_map.get(ticker)
-            if bc:
-                args = "\n".join(f"  - {a}" for a in bc.key_arguments)
-                bear_parts.append(
-                    f"\n### {ticker} (confidence: {bc.confidence:.2f})\n"
-                    f"Arguments:\n{args}\n"
-                    f"Strongest signal: {bc.strongest_signal}\n"
-                    f"Weakest counter: {bc.weakest_counter}"
-                )
-        if bear_parts:
-            parts.append(f"\n## BEAR CASE ARGUMENTS\n{''.join(bear_parts)}")
-    else:
-        parts.append(
-            "\n## BEAR CASE ARGUMENTS\nNo debate was conducted. "
-            "Perform your own internal bear analysis."
-        )
-
-    parts.append(
-        "\nWeigh all evidence and produce your final recommendations as JSON "
-        "matching the schema in your instructions."
-    )
-
-    return "\n".join(parts)
-
-
 # ---------------------------------------------------------------------------
-# V2 Formatters (track-aware)
+# Formatters (track-aware)
 # ---------------------------------------------------------------------------
 
 
@@ -1071,11 +638,11 @@ def _format_risk_assessments(
 
 
 # ---------------------------------------------------------------------------
-# V2 Builder Functions (track-aware parallel architecture)
+# Builder Functions (track-aware parallel architecture)
 # ---------------------------------------------------------------------------
 
 
-def build_bull_prompt_v2(
+def build_bull_prompt(
     tickers: list[str],
     screening: ScreeningResult | None,
     charts: list[ChartAnalysis],
@@ -1086,7 +653,7 @@ def build_bull_prompt_v2(
     fmp_context: dict[str, FmpEnrichedStock] | None = None,
     live_quotes: dict[str, FmpQuote] | None = None,
 ) -> str:
-    """Build the v2 user prompt for the bull analyst with track-aware framing.
+    """Build the user prompt for the bull analyst with track-aware framing.
 
     Structures data as three independent tracks (A/B/C) so the bull analyst
     can draw the most optimistic reading from each.
@@ -1145,7 +712,7 @@ def build_bull_prompt_v2(
     return "\n".join(parts)
 
 
-def build_bear_prompt_v2(
+def build_bear_prompt(
     tickers: list[str],
     screening: ScreeningResult | None,
     charts: list[ChartAnalysis],
@@ -1156,7 +723,7 @@ def build_bear_prompt_v2(
     fmp_context: dict[str, FmpEnrichedStock] | None = None,
     live_quotes: dict[str, FmpQuote] | None = None,
 ) -> str:
-    """Build the v2 user prompt for the bear analyst with track-aware framing.
+    """Build the user prompt for the bear analyst with track-aware framing.
 
     Structures data as three independent tracks (A/B/C) so the bear analyst
     can draw the most pessimistic reading from each.
@@ -1215,7 +782,7 @@ def build_bear_prompt_v2(
     return "\n".join(parts)
 
 
-def build_judge_prompt_v2(
+def build_judge_prompt(
     tickers: list[str],
     screening: ScreeningResult | None,
     charts: list[ChartAnalysis],
@@ -1231,7 +798,7 @@ def build_judge_prompt_v2(
     sector_consensus: str = "",
     live_quotes: dict[str, FmpQuote] | None = None,
 ) -> str:
-    """Build the v2 judge prompt with track-aware conflict resolution.
+    """Build the judge prompt with track-aware conflict resolution.
 
     The judge receives three clearly-labeled independent track outputs plus
     raw numerical TA data for verification. The prompt structure forces the
@@ -1284,10 +851,18 @@ def build_judge_prompt_v2(
         parts.append(f"\n## HISTORICAL PERFORMANCE CONTEXT\n{reflection_context}")
 
     parts.append(f"\n{_format_data_availability(tickers, screening, charts, sentiments)}")
-    parts.append(
-        f"\n## LIVE MARKET DATA (real-time)\n{_format_live_quotes(live_quotes, tickers)}"
-        "\nIMPORTANT: Use these LIVE prices for entry, stop-loss, and take-profit levels."
-    )
+    live_block = _format_live_quotes(live_quotes, tickers)
+    if live_quotes:
+        parts.append(
+            f"\n## LIVE MARKET DATA (real-time)\n{live_block}"
+            "\nIMPORTANT: Use these LIVE prices for entry, stop-loss, and take-profit levels."
+        )
+    else:
+        parts.append(
+            "\n## LIVE MARKET DATA\nNo real-time quotes available. "
+            "Derive entry, stop-loss, and take-profit from the chart analysis "
+            "and numerical TA data above."
+        )
 
     # Three independent tracks — clearly labeled
     parts.append(
@@ -1382,30 +957,15 @@ def build_judge_prompt_v2(
 
 
 def get_bull_hash() -> str:
-    """Return the version hash of the v1 bull prompt."""
+    """Return the version hash of the bull prompt."""
     return prompt_hash(BULL_SYSTEM_PROMPT)
 
 
 def get_bear_hash() -> str:
-    """Return the version hash of the v1 bear prompt."""
+    """Return the version hash of the bear prompt."""
     return prompt_hash(BEAR_SYSTEM_PROMPT)
 
 
 def get_judge_hash() -> str:
-    """Return the version hash of the v1 judge prompt."""
+    """Return the version hash of the judge prompt."""
     return prompt_hash(JUDGE_SYSTEM_PROMPT)
-
-
-def get_bull_hash_v2() -> str:
-    """Return the version hash of the v2 bull prompt."""
-    return prompt_hash(BULL_SYSTEM_PROMPT_V2)
-
-
-def get_bear_hash_v2() -> str:
-    """Return the version hash of the v2 bear prompt."""
-    return prompt_hash(BEAR_SYSTEM_PROMPT_V2)
-
-
-def get_judge_hash_v2() -> str:
-    """Return the version hash of the v2 judge prompt."""
-    return prompt_hash(JUDGE_SYSTEM_PROMPT_V2)
