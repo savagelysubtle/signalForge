@@ -81,6 +81,7 @@ async def get_risk_status() -> str:
             "auto_execute_min_confidence": settings.auto_execute_min_confidence,
             "sector_concentration_enabled": settings.sector_concentration_enabled,
             "max_positions_per_sector": settings.max_positions_per_sector,
+            "regime_sizing_enabled": settings.regime_sizing_enabled,
         },
         indent=2,
     )

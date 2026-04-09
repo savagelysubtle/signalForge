@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from database.connection import get_db
 from middleware.auth import CurrentUser
@@ -17,6 +17,7 @@ from pipeline.schemas import (
     BrokerageOpenRequest,
     DailyOutcomeSummary,
     OutcomeCreate,
+    OutcomePatch,
     OutcomeResponse,
 )
 
@@ -57,6 +58,10 @@ def _build_outcome_response(o: dict[str, Any]) -> OutcomeResponse:
         exit_timestamp=str(o["exit_timestamp"]) if o.get("exit_timestamp") else None,
         stop_loss=o.get("stop_loss"),
         take_profit=o.get("take_profit"),
+        slippage_pct=o.get("slippage_pct"),
+        time_to_execution_minutes=o.get("time_to_execution_minutes"),
+        failure_mode=o.get("failure_mode"),
+        structured_analysis=o.get("structured_analysis"),
     )
 
 
@@ -130,6 +135,28 @@ async def create_brokerage_open_outcome(
 
     entry_ts = body.entry_timestamp or datetime.now(UTC).isoformat()
 
+    slip_pct: float | None = None
+    if body.signal_entry_price is not None and body.signal_entry_price > 0:
+        slip_pct = round(
+            (body.entry_price - body.signal_entry_price) / body.signal_entry_price * 100,
+            4,
+        )
+
+    tte_min: float | None = None
+    if body.signal_created_at:
+        try:
+            raw_sig = body.signal_created_at.replace("Z", "+00:00")
+            sig_dt = datetime.fromisoformat(raw_sig)
+            if sig_dt.tzinfo is None:
+                sig_dt = sig_dt.replace(tzinfo=UTC)
+            raw_ent = entry_ts.replace("Z", "+00:00")
+            ent_dt = datetime.fromisoformat(raw_ent)
+            if ent_dt.tzinfo is None:
+                ent_dt = ent_dt.replace(tzinfo=UTC)
+            tte_min = round((ent_dt - sig_dt).total_seconds() / 60.0, 2)
+        except (TypeError, ValueError):
+            tte_min = None
+
     outcome_id = uuid.uuid4().hex
     row = {
         "id": outcome_id,
@@ -156,6 +183,8 @@ async def create_brokerage_open_outcome(
         "exit_timestamp": None,
         "stop_loss": body.stop_loss,
         "take_profit": body.take_profit,
+        "slippage_pct": slip_pct,
+        "time_to_execution_minutes": tte_min,
     }
     await client.table("outcomes").insert(row).execute()
 
@@ -213,7 +242,7 @@ async def daily_outcome_summary(user_id: CurrentUser) -> DailyOutcomeSummary:
         await client.table("outcomes")
         .select("id")
         .eq("user_id", user_id)
-        .not_("entry_price", "is", "null")
+        .not_.is_("entry_price", "null")
         .is_("exit_price", "null")
         .is_("exit_timestamp", "null")
         .execute()
@@ -230,6 +259,60 @@ async def daily_outcome_summary(user_id: CurrentUser) -> DailyOutcomeSummary:
         opened_trades=opened_today,
         open_tracked_positions=open_tracked,
     )
+
+
+@router.get("/open", response_model=list[OutcomeResponse])
+async def list_open_outcomes(
+    user_id: CurrentUser,
+    source: str | None = Query(default=None),
+    limit: int = Query(100, ge=1, le=500),
+) -> list[OutcomeResponse]:
+    """List outcomes with no exit price (still-open journal rows)."""
+    client = await get_db()
+
+    q = (
+        client.table("outcomes")
+        .select("*")
+        .eq("user_id", user_id)
+        .is_("exit_price", "null")
+        .order("logged_at", desc=True)
+        .limit(limit)
+    )
+    if source:
+        q = q.eq("source", source)
+    resp = await q.execute()
+    raw_rows = resp.data or []
+    return [_build_outcome_response(cast(dict[str, Any], o)) for o in raw_rows]
+
+
+@router.patch("/{outcome_id}", response_model=OutcomeResponse)
+async def patch_outcome(
+    outcome_id: str,
+    body: OutcomePatch,
+    user_id: CurrentUser,
+) -> OutcomeResponse:
+    """Apply a partial update to an outcome (unset JSON fields are ignored)."""
+    client = await get_db()
+
+    existing = (
+        await client.table("outcomes")
+        .select("id")
+        .eq("id", outcome_id)
+        .eq("user_id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    if not existing or not existing.data:
+        raise HTTPException(status_code=404, detail="Outcome not found")
+
+    updates = body.model_dump(exclude_unset=True)
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields provided to update")
+
+    await client.table("outcomes").update(updates).eq("id", outcome_id).execute()
+
+    updated = await client.table("outcomes").select("*").eq("id", outcome_id).single().execute()
+    return _build_outcome_response(cast(dict[str, Any], updated.data))
 
 
 @router.post(
@@ -310,6 +393,10 @@ async def create_outcome(
         "exit_timestamp": body.exit_timestamp,
         "stop_loss": body.stop_loss,
         "take_profit": body.take_profit,
+        "slippage_pct": body.slippage_pct,
+        "time_to_execution_minutes": body.time_to_execution_minutes,
+        "failure_mode": body.failure_mode,
+        "structured_analysis": body.structured_analysis,
     }
     await client.table("outcomes").insert(row).execute()
 
@@ -394,6 +481,10 @@ async def update_outcome(
         "exit_timestamp": body.exit_timestamp,
         "stop_loss": body.stop_loss,
         "take_profit": body.take_profit,
+        "slippage_pct": body.slippage_pct,
+        "time_to_execution_minutes": body.time_to_execution_minutes,
+        "failure_mode": body.failure_mode,
+        "structured_analysis": body.structured_analysis,
     }
     await client.table("outcomes").update(updates).eq("id", outcome_id).execute()
 
