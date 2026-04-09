@@ -322,6 +322,53 @@ def _get_api_key() -> str:
     return key
 
 
+def equity_symbol_key(ticker: str) -> str:
+    """Normalize to bare uppercase US symbol for sector map keys."""
+    t = ticker.strip().upper()
+    return t.split(":", 1)[-1] if ":" in t else t
+
+
+async def fetch_stock_sectors(symbols: list[str]) -> dict[str, str]:
+    """Fetch GICS sector labels for equity symbols via FMP ``profile``.
+
+    Args:
+        symbols: Ticker strings (``AAPL`` or ``NASDAQ:AAPL``).
+
+    Returns:
+        Map of bare uppercase symbol to sector name. Failed lookups are omitted.
+        Returns an empty dict when the FMP API key is missing or all lookups fail.
+    """
+    try:
+        _get_api_key()
+    except RuntimeError:
+        logger.info("FMP API key not configured; sector lookup skipped")
+        return {}
+
+    unique = list({equity_symbol_key(s) for s in symbols if s and s.strip()})
+    if not unique:
+        return {}
+
+    async def one(sym: str) -> tuple[str, str] | None:
+        try:
+            fmp_sym = to_fmp_symbol(sym)
+            data = await _fmp_get("profile", {"symbol": fmp_sym})
+        except Exception as exc:
+            logger.warning("FMP profile failed for %s: %s", sym, exc)
+            return None
+        if isinstance(data, list) and data:
+            sector = (data[0].get("sector") or "").strip()
+            if sector:
+                return sym, sector
+        return None
+
+    results = await asyncio.gather(*[one(u) for u in unique])
+    out: dict[str, str] = {}
+    for r in results:
+        if r:
+            out[r[0]] = r[1]
+    return out
+
+
 async def _fmp_get(endpoint: str, params: dict[str, Any] | None = None) -> Any:
     """Make an authenticated GET request to the FMP stable API.
 

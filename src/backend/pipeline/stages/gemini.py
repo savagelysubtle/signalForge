@@ -47,7 +47,7 @@ _TRANSIENT_CODES = {429, 500, 502, 503}
 _API_MAX_RETRIES = 3
 
 
-@with_validation_retry(schema=SentimentAnalysis, max_retries=2)
+@with_validation_retry(schema=SentimentAnalysis, max_retries=2, provider="google")
 async def _call_gemini(
     system_prompt: str,
     user_prompt: str,

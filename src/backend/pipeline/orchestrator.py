@@ -1,4 +1,4 @@
-"""Pipeline execution engine.
+"""Pipeline execution engine (v2 — parallel tracks).
 
 Pipeline (parallel tracks):
   (FMP screening || Regime classification) →
@@ -23,7 +23,6 @@ from typing import Any, Literal, cast
 from supabase import AsyncClient
 
 from database.connection import get_db
-from pipeline.prompts.claude_chart import get_prompt_hash as claude_hash
 from pipeline.prompts.gemini_sentiment import get_prompt_hash as gemini_hash
 from pipeline.prompts.gpt_debate import (
     get_bear_hash,
@@ -45,6 +44,7 @@ from pipeline.schemas import (
     ScreenerOverrides,
     ScreeningResult,
     SentimentAnalysis,
+    StageError,
     StrategyConfig,
     TrackAgreement,
 )
@@ -334,8 +334,8 @@ async def _run_pipeline(
     try:
         fmp_candidates = await fmp_task
     except Exception as exc:
-        logger.warning(" FMP screening failed, continuing without: %s", exc)
-        result.stage_errors.append({"stage": "fmp", "error": str(exc), "type": type(exc).__name__})
+        logger.warning("FMP screening failed, continuing without: %s", exc)
+        result.stage_errors.append(StageError(stage="fmp", error=str(exc), type=type(exc).__name__))
         await _save_stage_output(
             run_id,
             {
@@ -364,7 +364,7 @@ async def _run_pipeline(
         regime, _regime_meta = await regime_task
     except Exception as exc:
         result.stage_errors.append(
-            {"stage": "regime", "error": str(exc), "type": type(exc).__name__}
+            StageError(stage="regime", error=str(exc), type=type(exc).__name__)
         )
         logger.warning(" Regime classifier failed: %s", exc)
 
@@ -427,7 +427,7 @@ async def _run_pipeline(
         )
     except Exception as exc:
         result.stage_errors.append(
-            {"stage": "perplexity", "error": str(exc), "type": type(exc).__name__}
+            StageError(stage="perplexity", error=str(exc), type=type(exc).__name__)
         )
         logger.exception(" Perplexity stage failed")
         stage_metadata = {
@@ -530,7 +530,7 @@ async def _run_pipeline(
             await _save_stage_output(run_id, tm)
     except Exception as exc:
         result.stage_errors.append(
-            {"stage": "numerical_ta", "error": str(exc), "type": type(exc).__name__}
+            StageError(stage="numerical_ta", error=str(exc), type=type(exc).__name__)
         )
         logger.warning(" Numerical TA stage failed: %s", exc)
 
@@ -599,11 +599,11 @@ async def _run_pipeline(
     if isinstance(gather_results[0], BaseException):
         logger.error(" Gemini track failed: %s", gather_results[0])
         result.stage_errors.append(
-            {
-                "stage": "gemini",
-                "error": str(gather_results[0]),
-                "type": type(gather_results[0]).__name__,
-            }
+            StageError(
+                stage="gemini",
+                error=str(gather_results[0]),
+                type=type(gather_results[0]).__name__,
+            )
         )
     else:
         gemini_result = gather_results[0]
@@ -611,11 +611,11 @@ async def _run_pipeline(
     if isinstance(gather_results[1], BaseException):
         logger.error(" Claude track failed: %s", gather_results[1])
         result.stage_errors.append(
-            {
-                "stage": "claude",
-                "error": str(gather_results[1]),
-                "type": type(gather_results[1]).__name__,
-            }
+            StageError(
+                stage="claude",
+                error=str(gather_results[1]),
+                type=type(gather_results[1]).__name__,
+            )
         )
     else:
         claude_result = gather_results[1]
@@ -660,7 +660,7 @@ async def _run_pipeline(
     except Exception as exc:
         logger.exception(" Risk post-filter failed")
         result.stage_errors.append(
-            {"stage": "risk_post_filter", "error": str(exc), "type": type(exc).__name__}
+            StageError(stage="risk_post_filter", error=str(exc), type=type(exc).__name__)
         )
         await _save_stage_output(
             run_id,
@@ -675,6 +675,7 @@ async def _run_pipeline(
 
     # ── Stage 4: GPT Synthesis (convergence point — track-aware) ─────────
     sector_consensus = _aggregate_sector_sentiment(sentiments, screening)
+    live_quotes_v2: dict = {}
     if ticker_symbols:
         try:
             reflection_context = await load_reflection_context(user_id)
@@ -717,7 +718,7 @@ async def _run_pipeline(
                 await _save_stage_output(run_id, gm)
         except Exception as exc:
             result.stage_errors.append(
-                {"stage": "gpt", "error": str(exc), "type": type(exc).__name__}
+                StageError(stage="gpt", error=str(exc), type=type(exc).__name__)
             )
             logger.exception("GPT stage failed")
 
@@ -732,12 +733,16 @@ async def _run_pipeline(
     if result.recommendations:
         try:
             result.recommendations = validate_risks(
-                result.recommendations, config, charts, fmp_context=fmp_map or None
+                result.recommendations,
+                config,
+                charts,
+                fmp_context=fmp_map or None,
+                live_quotes=live_quotes or None,
             )
         except Exception as exc:
-            logger.exception(" Risk validation failed, using unvalidated recommendations")
+            logger.exception("Risk validation failed, using unvalidated recommendations")
             result.stage_errors.append(
-                {"stage": "risk_validation", "error": str(exc), "type": type(exc).__name__}
+                StageError(stage="risk_validation", error=str(exc), type=type(exc).__name__)
             )
 
     # Preserve raw GPT confidence before any calibration modifies it
@@ -769,7 +774,7 @@ async def _run_pipeline(
                         stats.predictions_with_outcomes,
                     )
         except Exception:
-            logger.debug("ML calibration check failed, using deterministic", exc_info=True)
+            logger.warning("ML calibration check failed, using deterministic", exc_info=True)
 
         try:
             if use_ml_calibration:
@@ -819,7 +824,7 @@ async def _run_pipeline(
         except Exception as exc:
             logger.exception(" Confidence calibration failed, using raw confidence")
             result.stage_errors.append(
-                {"stage": "calibration", "error": str(exc), "type": type(exc).__name__}
+                StageError(stage="calibration", error=str(exc), type=type(exc).__name__)
             )
 
     # ML gate + shadow predictions (Phase 7.5)
@@ -890,7 +895,7 @@ async def _run_pipeline(
                 logger.info("ML gate complete (%d recs)", len(gate_coros))
         except Exception:
             gate_status = "error"
-            logger.debug("ML gate skipped", exc_info=True)
+            logger.warning("ML gate skipped", exc_info=True)
 
         gate_ms = int((datetime.now(tz=UTC) - gate_start).total_seconds() * 1000)
         await _save_stage_output(
@@ -922,7 +927,7 @@ async def _run_pipeline(
                 )
                 logger.info(" ML shadow predictions complete")
         except Exception:
-            logger.debug(" ML shadow skipped", exc_info=True)
+            logger.warning("ML shadow skipped", exc_info=True)
 
     # Save recommendations after all modifications (risk validation, ML gate)
     if result.recommendations:
@@ -930,7 +935,7 @@ async def _run_pipeline(
             await _save_recommendations(run_id, result.recommendations, user_id)
         except Exception:
             logger.exception(" Failed to save recommendations for run %s", run_id)
-            result.stage_errors.append({"stage": "save_recommendations", "error": "DB save failed"})
+            result.stage_errors.append(StageError(stage="save_recommendations", error="DB save failed"))
 
     # Annotated charts
     annotate_start = time.perf_counter()
@@ -1035,7 +1040,11 @@ async def _finalize(
                 "completed_at": datetime.now(tz=UTC).isoformat(),
                 "duration_seconds": result.total_duration_seconds,
                 "prompt_versions": json.dumps(result.prompt_versions),
-                "stage_errors": json.dumps(result.stage_errors) if result.stage_errors else None,
+                "stage_errors": (
+                    json.dumps([e.model_dump() for e in result.stage_errors])
+                    if result.stage_errors
+                    else None
+                ),
             }
         )
         .eq("id", run_id)

@@ -3,15 +3,24 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException
 
 from database.connection import get_db
 from middleware.auth import CurrentUser
-from pipeline.schemas import OutcomeCreate, OutcomeResponse
+from pipeline.schemas import (
+    BrokerageOpenRequest,
+    DailyOutcomeSummary,
+    OutcomeCreate,
+    OutcomeResponse,
+)
 
 router = APIRouter(prefix="/outcomes", tags=["outcomes"])
+
+_ET = ZoneInfo("America/New_York")
 
 
 def _build_outcome_response(o: dict[str, Any]) -> OutcomeResponse:
@@ -45,6 +54,174 @@ def _build_outcome_response(o: dict[str, Any]) -> OutcomeResponse:
     )
 
 
+@router.post("/brokerage-open", response_model=OutcomeResponse, status_code=201)
+async def create_brokerage_open_outcome(
+    body: BrokerageOpenRequest,
+    user_id: CurrentUser,
+) -> OutcomeResponse:
+    """Create or reuse a *following* decision and log an open IBKR position."""
+    client = await get_db()
+
+    rec_resp = (
+        await client.table("recommendations")
+        .select("id, ticker, user_id")
+        .eq("id", body.recommendation_id)
+        .eq("user_id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    if not rec_resp or not rec_resp.data:
+        raise HTTPException(status_code=404, detail="Recommendation not found")
+
+    rec = cast(dict[str, Any], rec_resp.data)
+    ticker = str(rec["ticker"])
+
+    dec_resp = (
+        await client.table("decisions")
+        .select("id, decision")
+        .eq("recommendation_id", body.recommendation_id)
+        .eq("user_id", user_id)
+        .maybe_single()
+        .execute()
+    )
+
+    decision_id: str
+    if dec_resp and dec_resp.data:
+        prior = cast(dict[str, Any], dec_resp.data)
+        if prior["decision"] != "following":
+            raise HTTPException(
+                status_code=409,
+                detail="Recommendation was passed — cannot attach brokerage outcome",
+            )
+        decision_id = str(prior["id"])
+    else:
+        decision_id = uuid.uuid4().hex
+        await (
+            client.table("decisions")
+            .insert(
+                {
+                    "id": decision_id,
+                    "user_id": user_id,
+                    "recommendation_id": body.recommendation_id,
+                    "decision": "following",
+                    "reason": "Auto-recorded from IBKR execution (MCP)",
+                    "reason_category": "brokerage",
+                }
+            )
+            .execute()
+        )
+
+    existing_o = (
+        await client.table("outcomes")
+        .select("id")
+        .eq("decision_id", decision_id)
+        .eq("user_id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    if existing_o and existing_o.data:
+        raise HTTPException(status_code=409, detail="Outcome already recorded for this decision")
+
+    entry_ts = body.entry_timestamp or datetime.now(UTC).isoformat()
+
+    outcome_id = uuid.uuid4().hex
+    row = {
+        "id": outcome_id,
+        "user_id": user_id,
+        "decision_id": decision_id,
+        "recommendation_id": body.recommendation_id,
+        "ticker": ticker,
+        "entry_price": body.entry_price,
+        "exit_price": None,
+        "shares": body.shares,
+        "pnl_dollars": None,
+        "pnl_percent": None,
+        "holding_days": None,
+        "exit_reason": "",
+        "notes": body.notes,
+        "source": "ibkr",
+        "brokerage_order_id": body.brokerage_order_id,
+        "commission": None,
+        "fees": None,
+        "currency": body.currency,
+        "gross_pnl": None,
+        "net_pnl": None,
+        "entry_timestamp": entry_ts,
+        "exit_timestamp": None,
+        "stop_loss": body.stop_loss,
+        "take_profit": body.take_profit,
+    }
+    await client.table("outcomes").insert(row).execute()
+
+    inserted = await client.table("outcomes").select("*").eq("id", outcome_id).single().execute()
+    return _build_outcome_response(cast(dict[str, Any], inserted.data))
+
+
+@router.get("/daily-summary", response_model=DailyOutcomeSummary)
+async def daily_outcome_summary(user_id: CurrentUser) -> DailyOutcomeSummary:
+    """Aggregate logged outcomes for the current US Eastern calendar day."""
+    client = await get_db()
+    now_et = datetime.now(tz=_ET)
+    day_start_et = now_et.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_end_et = day_start_et + timedelta(days=1)
+
+    all_resp = await client.table("outcomes").select("*").eq("user_id", user_id).execute()
+    rows = cast(list[dict[str, Any]], all_resp.data or [])
+
+    def _in_day(ts_val: str | None) -> bool:
+        if not ts_val:
+            return False
+        try:
+            raw = ts_val.replace("Z", "+00:00")
+            ts = datetime.fromisoformat(raw)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=UTC)
+            return day_start_et <= ts.astimezone(_ET) < day_end_et
+        except (TypeError, ValueError):
+            return False
+
+    closed_today: list[dict[str, Any]] = [
+        o for o in rows if o.get("exit_timestamp") and _in_day(str(o["exit_timestamp"]))
+    ]
+
+    wins = losses = be = 0
+    realized = 0.0
+    for o in closed_today:
+        pnl = o.get("net_pnl")
+        if pnl is None:
+            pnl = o.get("pnl_dollars")
+        pnl_f = float(pnl) if pnl is not None else 0.0
+        realized += pnl_f
+        if pnl_f > 0:
+            wins += 1
+        elif pnl_f < 0:
+            losses += 1
+        else:
+            be += 1
+
+    opened_today = sum(
+        1 for o in rows if o.get("entry_timestamp") and _in_day(str(o["entry_timestamp"]))
+    )
+    open_tracked = sum(
+        1
+        for o in rows
+        if o.get("entry_price") is not None
+        and o.get("exit_price") is None
+        and o.get("exit_timestamp") is None
+    )
+
+    return DailyOutcomeSummary(
+        trading_date_et=day_start_et.strftime("%Y-%m-%d"),
+        closed_trades=len(closed_today),
+        winning_trades=wins,
+        losing_trades=losses,
+        breakeven_trades=be,
+        realized_pnl_dollars=round(realized, 2),
+        opened_trades=opened_today,
+        open_tracked_positions=open_tracked,
+    )
+
+
 @router.post(
     "/decisions/{decision_id}/outcome",
     response_model=OutcomeResponse,
@@ -69,7 +246,7 @@ async def create_outcome(
     if not dec_resp or not dec_resp.data:
         raise HTTPException(status_code=404, detail="Decision not found")
 
-    dec = dec_resp.data
+    dec = cast(dict[str, Any], dec_resp.data)
     if dec["decision"] != "following":
         raise HTTPException(
             status_code=400,
@@ -94,7 +271,8 @@ async def create_outcome(
         .maybe_single()
         .execute()
     )
-    ticker = rec_resp.data["ticker"] if rec_resp and rec_resp.data else ""
+    rec_row = cast(dict[str, Any], rec_resp.data) if rec_resp and rec_resp.data else {}
+    ticker = str(rec_row.get("ticker", ""))
 
     outcome_id = uuid.uuid4().hex
     row = {
@@ -126,9 +304,7 @@ async def create_outcome(
     await client.table("outcomes").insert(row).execute()
 
     inserted = await client.table("outcomes").select("*").eq("id", outcome_id).single().execute()
-    o = inserted.data
-
-    return _build_outcome_response(o)
+    return _build_outcome_response(cast(dict[str, Any], inserted.data))
 
 
 @router.put("/{outcome_id}", response_model=OutcomeResponse)
@@ -175,9 +351,7 @@ async def update_outcome(
     await client.table("outcomes").update(updates).eq("id", outcome_id).execute()
 
     updated = await client.table("outcomes").select("*").eq("id", outcome_id).single().execute()
-    o = updated.data
-
-    return _build_outcome_response(o)
+    return _build_outcome_response(cast(dict[str, Any], updated.data))
 
 
 @router.get("", response_model=list[OutcomeResponse])
@@ -198,4 +372,5 @@ async def list_outcomes(
         .execute()
     )
 
-    return [_build_outcome_response(o) for o in resp.data]
+    raw_rows = resp.data or []
+    return [_build_outcome_response(cast(dict[str, Any], o)) for o in raw_rows]

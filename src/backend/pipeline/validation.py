@@ -19,6 +19,13 @@ from typing import TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from pipeline.circuit_breaker import (
+    CircuitOpenError,
+    check_provider,
+    record_failure,
+    record_success,
+)
+
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
@@ -92,6 +99,7 @@ def validate_llm_json(raw_text: str, schema: type[T]) -> T:  # noqa: UP047
 def with_validation_retry(  # noqa: UP047
     schema: type[T],
     max_retries: int = 2,
+    provider: str = "",
 ) -> Callable[
     [Callable[..., Awaitable[str]]],
     Callable[..., Awaitable[T | None]],
@@ -106,6 +114,8 @@ def with_validation_retry(  # noqa: UP047
     Args:
         schema: Pydantic model class to validate against.
         max_retries: Maximum number of retries on validation failure.
+        provider: LLM provider name for circuit breaker tracking
+            (e.g. "openai", "anthropic", "google", "perplexity").
 
     Returns:
         Decorator that wraps an async LLM call with validation + retry.
@@ -116,6 +126,14 @@ def with_validation_retry(  # noqa: UP047
     ) -> Callable[..., Awaitable[T | None]]:
         @wraps(fn)
         async def wrapper(*args: object, **kwargs: object) -> T | None:
+            # Circuit breaker: fast-fail if provider is down
+            breaker_provider = provider or fn.__module__.split(".")[-1]
+            try:
+                check_provider(breaker_provider)
+            except CircuitOpenError as exc:
+                logger.warning("Skipping %s: %s", fn.__name__, exc)
+                return None
+
             last_error: str = ""
 
             for attempt in range(1 + max_retries):
@@ -137,11 +155,15 @@ def with_validation_retry(  # noqa: UP047
                     raw_text = await fn(*args, **kwargs)
                     validated = validate_llm_json(raw_text, schema)
                     validated.__dict__["_retry_count"] = attempt
+                    record_success(breaker_provider)
                     return validated
                 except (ValueError, json.JSONDecodeError) as exc:
                     last_error = f"JSON parse error: {exc}"
                 except ValidationError as exc:
                     last_error = f"Schema validation error: {exc}"
+                except Exception as exc:
+                    last_error = f"Provider error: {exc}"
+                    record_failure(breaker_provider)
 
             logger.error(
                 "All %d attempts failed for %s. Last error: %s",
@@ -149,6 +171,7 @@ def with_validation_retry(  # noqa: UP047
                 fn.__name__,
                 last_error,
             )
+            record_failure(breaker_provider)
             return None
 
         return wrapper
