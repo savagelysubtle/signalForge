@@ -104,7 +104,17 @@ def build_regime_prompt(
 
     if sector_data:
         sector_lines = []
-        for sp in sorted(sector_data, key=lambda x: x.get("changesPercentage", 0), reverse=True):
+
+        def _sector_sort_key(row: dict) -> float:
+            raw = row.get("changesPercentage")
+            if raw is None:
+                return 0.0
+            try:
+                return float(raw)
+            except TypeError, ValueError:
+                return 0.0
+
+        for sp in sorted(sector_data, key=_sector_sort_key, reverse=True):
             pct = sp.get("changesPercentage")
             name = sp.get("sector", "Unknown")
             if pct is not None:

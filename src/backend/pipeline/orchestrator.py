@@ -192,7 +192,6 @@ async def run_pipeline(
         mode=mode,
         input_tickers=manual_tickers or [],
     )
-    cost_tracker = PipelineCostTracker()  # noqa: F841 — used in nested closures below
 
     client = await get_db()
     await (
@@ -293,6 +292,7 @@ async def _run_pipeline(
         Completed PipelineResult.
     """
     client = await get_db()
+    cost_tracker = PipelineCostTracker()
 
     # ── Stage 0 + 0.5: FMP Pre-Screening || Regime (CONCURRENT) ─────────
     # FMP screening and regime classification are independent — run in parallel
