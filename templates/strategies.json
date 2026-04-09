@@ -18,9 +18,18 @@
       "Supertrend"
     ],
     "chart_timeframe": "D",
-    "additional_timeframes": ["4H", "W"],
+    "additional_timeframes": [
+      "4H",
+      "W"
+    ],
     "short_timeframes": [],
-    "short_tf_indicators": ["VWAP", "EMA_9", "EMA_21", "RSI", "Volume"],
+    "short_tf_indicators": [
+      "VWAP",
+      "EMA_9",
+      "EMA_21",
+      "RSI",
+      "Volume"
+    ],
     "ta_focus": "52-week high breakout with volume confirmation, EMA 9 > 21 > 50 > 200 full bullish stack, ADX > 25 trend strength, Supertrend green, RSI 55-70 momentum zone, MACD positive histogram expanding",
     "news_recency": "today",
     "news_scope": "company",
@@ -64,7 +73,8 @@
       "weight_momentum": 45,
       "weight_sentiment": 25,
       "weight_quality": 15
-    }
+    },
+    "listing_currency": "CAD"
   },
   {
     "name": "EMA 50/200 Golden Cross Swing",
@@ -85,9 +95,18 @@
       "Bollinger_Bands"
     ],
     "chart_timeframe": "D",
-    "additional_timeframes": ["4H", "W"],
+    "additional_timeframes": [
+      "4H",
+      "W"
+    ],
     "short_timeframes": [],
-    "short_tf_indicators": ["EMA_21", "EMA_50", "MACD", "RSI", "Volume"],
+    "short_tf_indicators": [
+      "EMA_21",
+      "EMA_50",
+      "MACD",
+      "RSI",
+      "Volume"
+    ],
     "ta_focus": "EMA 50 above EMA 200 golden cross confirmed, price above both EMAs, ADX > 25 confirming trend strength, RSI 50-70 bullish zone, MACD above zero line with positive histogram, Bollinger Bands expanding on breakout, volume above average on up-days",
     "news_recency": "week",
     "news_scope": "company",
@@ -130,7 +149,8 @@
       "weight_momentum": 40,
       "weight_sentiment": 20,
       "weight_quality": 15
-    }
+    },
+    "listing_currency": "CAD"
   },
   {
     "name": "EMA 21 Pullback Swing",
@@ -151,9 +171,18 @@
       "Williams_R"
     ],
     "chart_timeframe": "D",
-    "additional_timeframes": ["4H", "W"],
+    "additional_timeframes": [
+      "4H",
+      "W"
+    ],
     "short_timeframes": [],
-    "short_tf_indicators": ["EMA_9", "EMA_21", "EMA_50", "RSI", "Volume"],
+    "short_tf_indicators": [
+      "EMA_9",
+      "EMA_21",
+      "EMA_50",
+      "RSI",
+      "Volume"
+    ],
     "ta_focus": "Price above EMA 50 and 200 uptrend confirmed, pullback touching or near 21 EMA on declining volume, RSI reset to 40-55 range from overbought without breaking below 40, MACD still above zero, Williams %R showing mild oversold -50 to -65 for entry timing, ADX above 20 confirming trend intact, bounce candle with volume expansion",
     "news_recency": "week",
     "news_scope": "company",
@@ -198,7 +227,8 @@
       "weight_momentum": 40,
       "weight_sentiment": 20,
       "weight_quality": 20
-    }
+    },
+    "listing_currency": "CAD"
   },
   {
     "name": "Bollinger Band Squeeze Breakout Swing",
@@ -219,7 +249,10 @@
       "Supertrend"
     ],
     "chart_timeframe": "D",
-    "additional_timeframes": ["4H", "W"],
+    "additional_timeframes": [
+      "4H",
+      "W"
+    ],
     "short_timeframes": [],
     "short_tf_indicators": [
       "EMA_21",
@@ -268,7 +301,8 @@
       "weight_momentum": 35,
       "weight_sentiment": 25,
       "weight_quality": 20
-    }
+    },
+    "listing_currency": "CAD"
   },
   {
     "name": "Mean Reversion",
@@ -289,9 +323,18 @@
       "Williams_R"
     ],
     "chart_timeframe": "4H",
-    "additional_timeframes": ["D", "W"],
+    "additional_timeframes": [
+      "D",
+      "W"
+    ],
     "short_timeframes": [],
-    "short_tf_indicators": ["VWAP", "EMA_21", "RSI", "Williams_R", "Volume"],
+    "short_tf_indicators": [
+      "VWAP",
+      "EMA_21",
+      "RSI",
+      "Williams_R",
+      "Volume"
+    ],
     "ta_focus": "RSI < 35 with bullish divergence vs price, Bollinger Band lower band touch or pierce with reversal candle, Supertrend about to flip green, Williams %R below -80 oversold, MACD histogram reducing on downside showing seller exhaustion, EMA 200 acting as support, volume spike on reversal day confirming buyers stepping in",
     "news_recency": "week",
     "news_scope": "company",
@@ -330,7 +373,8 @@
       "weight_momentum": 25,
       "weight_sentiment": 30,
       "weight_quality": 25
-    }
+    },
+    "listing_currency": "CAD"
   },
   {
     "name": "Value Accumulation",
@@ -351,9 +395,18 @@
       "Williams_R"
     ],
     "chart_timeframe": "4H",
-    "additional_timeframes": ["D", "W"],
+    "additional_timeframes": [
+      "D",
+      "W"
+    ],
     "short_timeframes": [],
-    "short_tf_indicators": ["VWAP", "EMA_21", "EMA_50", "RSI", "Volume"],
+    "short_tf_indicators": [
+      "VWAP",
+      "EMA_21",
+      "EMA_50",
+      "RSI",
+      "Volume"
+    ],
     "ta_focus": "Accumulation zones near EMA 200 or multi-month support, RSI reset below 45 from oversold bounce, MACD bullish divergence, Bollinger Bands lower band touch with reversal candle, ADX below 20 in base then rising on entry, volume expansion on green days vs red days accumulation signature",
     "news_recency": "month",
     "news_scope": "sector",
@@ -395,7 +448,8 @@
       "weight_momentum": 10,
       "weight_sentiment": 20,
       "weight_quality": 30
-    }
+    },
+    "listing_currency": "CAD"
   },
   {
     "name": "Earnings Play",
@@ -416,9 +470,19 @@
       "Williams_R"
     ],
     "chart_timeframe": "4H",
-    "additional_timeframes": ["D"],
-    "short_timeframes": ["1H"],
-    "short_tf_indicators": ["VWAP", "EMA_21", "RSI", "Williams_R", "Volume"],
+    "additional_timeframes": [
+      "D"
+    ],
+    "short_timeframes": [
+      "1H"
+    ],
+    "short_tf_indicators": [
+      "VWAP",
+      "EMA_21",
+      "RSI",
+      "Williams_R",
+      "Volume"
+    ],
     "ta_focus": "Pre-earnings Bollinger Band squeeze consolidation, price above EMA 50 and 200, ADX rising indicating building momentum, RSI 50-65 pre-catalyst coiling, MACD positive bias, volume decreasing during consolidation coiling, ATR expanding as earnings approach indicating IV pickup",
     "news_recency": "week",
     "news_scope": "company",
@@ -453,7 +517,8 @@
       "weight_momentum": 20,
       "weight_sentiment": 40,
       "weight_quality": 20
-    }
+    },
+    "listing_currency": "CAD"
   },
   {
     "name": "Intraday Scalp",
@@ -476,8 +541,17 @@
     "chart_timeframe": "4H",
     "secondary_timeframe": "4H",
     "additional_timeframes": [],
-    "short_timeframes": ["15m", "1H"],
-    "short_tf_indicators": ["VWAP", "EMA_9", "EMA_21", "RSI", "Volume"],
+    "short_timeframes": [
+      "15m",
+      "1H"
+    ],
+    "short_tf_indicators": [
+      "VWAP",
+      "EMA_9",
+      "EMA_21",
+      "RSI",
+      "Volume"
+    ],
     "ta_focus": "VWAP holds on 15m with EMA 9/21 bullish stack, Supertrend green confirming intraday bias, ADX > 20 confirming directional move not chop, RSI 50-65 for longs or 35-50 for shorts, MACD positive histogram on 15m, volume 2x+ average on entry candle, ATR-based stop sizing",
     "news_recency": "today",
     "news_scope": "company",
@@ -510,11 +584,12 @@
       "weight_momentum": 60,
       "weight_sentiment": 20,
       "weight_quality": 15
-    }
+    },
+    "listing_currency": "CAD"
   },
   {
     "name": "EMA Stack Momentum Intraday",
-    "description": "9/21/50 EMA stack with VWAP confirmation for intraday momentum entries on trending stocks. All three EMAs must be in bullish order above VWAP — this full-stack alignment is the primary quality filter elevating win rate to 60-65%.",
+    "description": "9/21/50 EMA stack with VWAP confirmation for intraday momentum entries on trending stocks. All three EMAs must be in bullish order above VWAP \u2014 this full-stack alignment is the primary quality filter elevating win rate to 60-65%.",
     "screening_prompt": "TSX NASDAQ NYSE stocks in play today high relative volume morning momentum breaking out above pre-market highs VWAP hold confirmed bullish EMA alignment large-cap mid-cap liquid names with strong sector tailwinds",
     "constraint_style": "tight",
     "max_tickers": 6,
@@ -532,9 +607,19 @@
     ],
     "chart_timeframe": "15m",
     "secondary_timeframe": "1H",
-    "additional_timeframes": ["1H"],
-    "short_timeframes": ["5m"],
-    "short_tf_indicators": ["EMA_9", "EMA_21", "VWAP", "RSI", "Volume"],
+    "additional_timeframes": [
+      "1H"
+    ],
+    "short_timeframes": [
+      "5m"
+    ],
+    "short_tf_indicators": [
+      "EMA_9",
+      "EMA_21",
+      "VWAP",
+      "RSI",
+      "Volume"
+    ],
     "ta_focus": "9/21/50 EMA bullish stack alignment above VWAP, Supertrend green, RSI 50-70 momentum zone, MACD histogram expanding, high-volume breakout candles, Williams %R not yet overbought above -20 on entry",
     "news_recency": "today",
     "news_scope": "company",
@@ -570,7 +655,8 @@
       "weight_momentum": 60,
       "weight_sentiment": 20,
       "weight_quality": 15
-    }
+    },
+    "listing_currency": "CAD"
   },
   {
     "name": "Opening Range Breakout",
@@ -592,9 +678,20 @@
     ],
     "chart_timeframe": "30m",
     "secondary_timeframe": "1H",
-    "additional_timeframes": ["1H"],
-    "short_timeframes": ["5m", "15m"],
-    "short_tf_indicators": ["EMA_9", "VWAP", "RSI", "Volume", "ATR"],
+    "additional_timeframes": [
+      "1H"
+    ],
+    "short_timeframes": [
+      "5m",
+      "15m"
+    ],
+    "short_tf_indicators": [
+      "EMA_9",
+      "VWAP",
+      "RSI",
+      "Volume",
+      "ATR"
+    ],
     "ta_focus": "30-minute opening range high/low levels as key breakout zones, breakout above ORH with volume 2x average, Supertrend direction matches breakout side, VWAP as secondary trend filter, RSI not overbought on breakout candle ideally 55-68, ATR-based stop placed below ORH level",
     "news_recency": "today",
     "news_scope": "company",
@@ -629,7 +726,8 @@
       "weight_momentum": 65,
       "weight_sentiment": 20,
       "weight_quality": 10
-    }
+    },
+    "listing_currency": "CAD"
   },
   {
     "name": "VWAP Reversal Scalp",
@@ -651,9 +749,19 @@
     ],
     "chart_timeframe": "15m",
     "secondary_timeframe": "1H",
-    "additional_timeframes": ["1H"],
-    "short_timeframes": ["5m"],
-    "short_tf_indicators": ["VWAP", "EMA_9", "RSI", "Volume", "Williams_R"],
+    "additional_timeframes": [
+      "1H"
+    ],
+    "short_timeframes": [
+      "5m"
+    ],
+    "short_tf_indicators": [
+      "VWAP",
+      "EMA_9",
+      "RSI",
+      "Volume",
+      "Williams_R"
+    ],
     "ta_focus": "VWAP pullback bounce long or VWAP rejection short, Supertrend confirms direction, Williams %R oversold below -80 for longs or overbought above -20 for shorts, green or red confirmation candle at VWAP with decreasing volume on pullback, MACD histogram positive or negative bias aligns with trade direction",
     "news_recency": "today",
     "news_scope": "company",
@@ -686,7 +794,8 @@
       "weight_momentum": 55,
       "weight_sentiment": 25,
       "weight_quality": 15
-    }
+    },
+    "listing_currency": "CAD"
   },
   {
     "name": "Crypto Swing",
@@ -707,9 +816,18 @@
       "Bollinger_Bands"
     ],
     "chart_timeframe": "D",
-    "additional_timeframes": ["4H", "W"],
+    "additional_timeframes": [
+      "4H",
+      "W"
+    ],
     "short_timeframes": [],
-    "short_tf_indicators": ["VWAP", "EMA_21", "EMA_50", "RSI", "Volume"],
+    "short_tf_indicators": [
+      "VWAP",
+      "EMA_21",
+      "EMA_50",
+      "RSI",
+      "Volume"
+    ],
     "ta_focus": "EMA 50/200 golden cross or bullish stack, Supertrend green on daily, RSI 50-70 momentum zone, MACD histogram positive and expanding, Bollinger Bands widening on breakout, volume above 20-day average on up days, ATR expanding indicating trend acceleration",
     "news_recency": "today",
     "news_scope": "sector",
@@ -738,7 +856,8 @@
       "weight_momentum": 55,
       "weight_sentiment": 30,
       "weight_quality": 15
-    }
+    },
+    "listing_currency": "CAD"
   },
   {
     "name": "Crypto Intraday Scalp",
@@ -761,8 +880,17 @@
     "chart_timeframe": "4H",
     "secondary_timeframe": "4H",
     "additional_timeframes": [],
-    "short_timeframes": ["15m", "1H"],
-    "short_tf_indicators": ["VWAP", "EMA_9", "EMA_21", "Williams_R", "Volume"],
+    "short_timeframes": [
+      "15m",
+      "1H"
+    ],
+    "short_tf_indicators": [
+      "VWAP",
+      "EMA_9",
+      "EMA_21",
+      "Williams_R",
+      "Volume"
+    ],
     "ta_focus": "VWAP holds on 15m chart with Supertrend green, Williams %R oversold bounce below -75 for long entries, RSI 45-65 momentum continuation zone, EMA 9 > 21 bullish micro-stack, MACD positive histogram on 15m, volume surge 2x+ on entry candle, ATR-based stops",
     "news_recency": "today",
     "news_scope": "sector",
@@ -790,6 +918,7 @@
       "weight_momentum": 65,
       "weight_sentiment": 20,
       "weight_quality": 15
-    }
+    },
+    "listing_currency": "CAD"
   }
 ]

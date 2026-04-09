@@ -130,11 +130,36 @@ export function SearchScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const isFirstRun = !isLoadingHistory && history.length === 0;
-
-  const allStrategies = [...templates, ...strategies].filter(
-    (s, i, arr) => arr.findIndex((t) => t.id === s.id) === i,
+  const allStrategies = useMemo(
+    () =>
+      [...templates, ...strategies].filter(
+        (s, i, arr) => arr.findIndex((t) => t.id === s.id) === i,
+      ),
+    [templates, strategies],
   );
+
+  /** Match prescreener country/exchange to strategy listing currency (equities only). */
+  useEffect(() => {
+    if (!selectedStrategy) return;
+    const s = allStrategies.find((x) => x.id === selectedStrategy);
+    if (!s?.fmp_screener || s.fmp_screener.is_crypto) {
+      setFilterCountry('');
+      setFilterExchange('');
+      return;
+    }
+    const lc =
+      s.listing_currency ??
+      (s.fmp_screener.country === 'US' ? 'USD' : 'CAD');
+    if (lc === 'USD') {
+      setFilterCountry('US');
+      setFilterExchange('');
+    } else {
+      setFilterCountry('CA');
+      setFilterExchange(s.fmp_screener.exchange?.trim() || 'TSX');
+    }
+  }, [selectedStrategy, allStrategies]);
+
+  const isFirstRun = !isLoadingHistory && history.length === 0;
 
   const GROUP_ORDER = ['Intraday', 'Swing', 'Mean Rev', 'Event', 'Value', 'Position', 'Crypto'] as const;
 

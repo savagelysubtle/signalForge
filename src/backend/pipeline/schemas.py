@@ -751,6 +751,10 @@ class StrategyConfig(BaseModel):
     recommended: bool = False
     strategy_type: str = "swing"
 
+    #: Primary listing currency for equities — drives FMP ``country`` / ``exchange``
+    #: for non-crypto screeners (USD → US markets, CAD → Canada / TSX).
+    listing_currency: Literal["USD", "CAD"] = "CAD"
+
 
 # ---------------------------------------------------------------------------
 # Risk Assessment (Pipeline v2 post-filter)

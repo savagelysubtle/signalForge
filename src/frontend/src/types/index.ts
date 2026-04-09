@@ -405,6 +405,8 @@ export interface StrategyConfig {
   is_template: boolean;
   recommended?: boolean;
   strategy_type?: string;
+  /** USD = US-listed equities (FMP US); CAD = Canada / TSX. */
+  listing_currency?: "USD" | "CAD";
 }
 
 // ---------------------------------------------------------------------------

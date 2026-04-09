@@ -107,6 +107,18 @@ function StrategyCard({ strategy, index }: { strategy: StrategyConfig; index: nu
       <div className="flex flex-wrap gap-2 text-xs">
         <span className="bg-bg-concrete px-2 py-1 rounded text-text-secondary border border-border-subtle font-display">Max Tickers: {strategy.max_tickers}</span>
         <span className="bg-bg-concrete px-2 py-1 rounded capitalize text-text-secondary border border-border-subtle font-body">Constraint: {strategy.constraint_style}</span>
+        {!strategy.fmp_screener?.is_crypto && (
+          <span className="bg-bg-concrete px-2 py-1 rounded text-text-secondary border border-border-subtle font-display">
+            Listings:{' '}
+            {strategy.listing_currency === 'USD'
+              ? 'USD (US)'
+              : strategy.listing_currency === 'CAD'
+                ? 'CAD (CA)'
+                : strategy.fmp_screener?.country === 'US'
+                  ? 'USD (US)'
+                  : 'CAD (CA)'}
+          </span>
+        )}
         <span className="bg-bg-concrete px-2 py-1 rounded text-text-secondary border border-border-subtle font-display">
           Charts: {[...new Set([strategy.chart_timeframe, ...(strategy.additional_timeframes ?? []), ...(strategy.short_timeframes ?? [])])].join(' / ')}
         </span>

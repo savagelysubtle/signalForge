@@ -11,12 +11,61 @@ import logging
 import re
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 from database.connection import get_db
 from pipeline.schemas import FmpScreenerConfig, RiskParams, StrategyConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _apply_listing_currency_to_screener(
+    fmp: FmpScreenerConfig | None, listing_currency: str
+) -> FmpScreenerConfig | None:
+    """Align FMP stock screener country/exchange with listing currency.
+
+    Crypto screeners are left unchanged. USD maps to US-listed equities without
+    a single-exchange constraint; CAD maps to Canada with TSX as default venue.
+
+    Args:
+        fmp: Existing screener config (may be None).
+        listing_currency: ``\"USD\"`` or ``\"CAD\"`` (case-insensitive).
+
+    Returns:
+        Updated config or None.
+    """
+    if fmp is None or fmp.is_crypto:
+        return fmp
+    lc = (listing_currency or "CAD").strip().upper()
+    if lc == "USD":
+        return fmp.model_copy(update={"country": "US", "exchange": None})
+    if lc == "CAD":
+        ex = fmp.exchange if fmp.exchange else "TSX"
+        return fmp.model_copy(update={"country": "CA", "exchange": ex})
+    return fmp
+
+
+def _infer_listing_currency(
+    row: dict[str, Any], fmp: FmpScreenerConfig | None
+) -> Literal["USD", "CAD"]:
+    """Resolve listing currency from DB column or FMP country fallback."""
+    raw = row.get("listing_currency")
+    if isinstance(raw, str) and raw.strip().upper() in ("USD", "CAD"):
+        return cast(Literal["USD", "CAD"], raw.strip().upper())
+    if fmp and not fmp.is_crypto and fmp.country:
+        c = fmp.country.strip().upper()
+        if c == "US":
+            return "USD"
+    return "CAD"
+
+
+def _sync_equity_screener_with_listing_currency(config: StrategyConfig) -> StrategyConfig:
+    """Return a copy with FMP screener matched to ``listing_currency``."""
+    updated = _apply_listing_currency_to_screener(config.fmp_screener, config.listing_currency)
+    if updated is config.fmp_screener:
+        return config
+    return config.model_copy(update={"fmp_screener": updated})
+
 
 _UUID_HEX_RE = re.compile(r"^[0-9a-f]{32}$")
 _UUID_DASHED_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -89,6 +138,8 @@ def _row_to_config(row: dict[str, Any]) -> StrategyConfig:
         if isinstance(fmp_raw, dict):
             fmp_screener = FmpScreenerConfig(**fmp_raw)
 
+    listing_currency = _infer_listing_currency(row, fmp_screener)
+
     return StrategyConfig(
         id=row["id"],
         name=row["name"],
@@ -112,6 +163,7 @@ def _row_to_config(row: dict[str, Any]) -> StrategyConfig:
         is_template=bool(row.get("is_template", False)),
         recommended=bool(row.get("recommended", False)),
         strategy_type=row.get("strategy_type") or "swing",
+        listing_currency=listing_currency,
     )
 
 
@@ -161,6 +213,7 @@ async def create_strategy(config: StrategyConfig, user_id: str) -> StrategyConfi
     """Create a new strategy."""
     client = await get_db()
     strategy_id = config.id or uuid.uuid4().hex
+    config = _sync_equity_screener_with_listing_currency(config)
 
     payload = {
         "id": strategy_id,
@@ -188,6 +241,7 @@ async def create_strategy(config: StrategyConfig, user_id: str) -> StrategyConfi
         "is_template": config.is_template,
         "recommended": config.recommended,
         "strategy_type": config.strategy_type,
+        "listing_currency": config.listing_currency,
     }
     await client.table("strategies").insert(payload).execute()
     config.id = strategy_id
@@ -228,6 +282,8 @@ async def update_strategy(strategy_id: str, config: StrategyConfig, user_id: str
     if row_data.get("user_id") not in (safe_id, "system"):
         raise ValueError("Strategy does not belong to this user")
 
+    config = _sync_equity_screener_with_listing_currency(config)
+
     payload = {
         "name": config.name,
         "description": config.description,
@@ -249,6 +305,7 @@ async def update_strategy(strategy_id: str, config: StrategyConfig, user_id: str
         "trading_style": config.trading_style,
         "risk_params": json.dumps(config.risk_params.model_dump()),
         "enable_debate": config.enable_debate,
+        "listing_currency": config.listing_currency,
     }
     await client.table("strategies").update(payload).eq("id", strategy_id).execute()
     config.id = strategy_id
@@ -317,8 +374,16 @@ async def ensure_defaults() -> None:
         tmpl.setdefault("is_template", True)
         risk = tmpl.pop("risk_params", {})
         fmp_raw = tmpl.pop("fmp_screener", None)
+        listing_raw = str(tmpl.pop("listing_currency", "CAD")).strip().upper()
+        listing_currency = listing_raw if listing_raw in ("USD", "CAD") else "CAD"
         fmp = FmpScreenerConfig(**fmp_raw) if isinstance(fmp_raw, dict) else None
-        config = StrategyConfig(**tmpl, risk_params=RiskParams(**risk), fmp_screener=fmp)
+        fmp = _apply_listing_currency_to_screener(fmp, listing_currency)
+        config = StrategyConfig(
+            **tmpl,
+            risk_params=RiskParams(**risk),
+            fmp_screener=fmp,
+            listing_currency=cast(Literal["USD", "CAD"], listing_currency),
+        )
 
         existing_id = existing_by_name.get(config.name)
         if existing_id:
@@ -345,6 +410,7 @@ async def ensure_defaults() -> None:
                 "enable_debate": config.enable_debate,
                 "recommended": config.recommended,
                 "strategy_type": config.strategy_type,
+                "listing_currency": config.listing_currency,
             }
             await client.table("strategies").update(payload).eq("id", existing_id).execute()
             updated += 1
