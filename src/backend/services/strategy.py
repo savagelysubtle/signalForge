@@ -13,10 +13,72 @@ import uuid
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from postgrest.exceptions import APIError
+from supabase import AsyncClient
+
 from database.connection import get_db
 from pipeline.schemas import FmpScreenerConfig, RiskParams, StrategyConfig
 
 logger = logging.getLogger(__name__)
+
+# None = not yet probed; True/False cached for process lifetime after first strategies write.
+_strategies_listing_currency_column: bool | None = None
+
+
+def _is_missing_listing_currency_column(exc: APIError) -> bool:
+    """Detect PostgREST schema cache error for unknown ``listing_currency`` column."""
+    if exc.code != "PGRST204" or not exc.message:
+        return False
+    return "listing_currency" in exc.message
+
+
+async def _write_strategies_row(
+    client: AsyncClient,
+    *,
+    operation: Literal["insert", "update"],
+    payload: dict[str, Any],
+    row_id: str | None = None,
+) -> None:
+    """Insert or update ``strategies``; omit ``listing_currency`` if the column is absent.
+
+    Supabase/PostgREST returns ``PGRST204`` until migration ``022`` is applied. We retry
+    without that key so startup template sync and local dev do not hard-fail.
+
+    Args:
+        client: Async Supabase client.
+        operation: ``insert`` or ``update``.
+        payload: Column dict (may include ``listing_currency``).
+        row_id: Strategy UUID when ``operation`` is ``update``.
+    """
+    global _strategies_listing_currency_column
+
+    async def _run(p: dict[str, Any]) -> None:
+        if operation == "insert":
+            await client.table("strategies").insert(p).execute()
+        else:
+            if not row_id:
+                raise ValueError("row_id required for update")
+            await client.table("strategies").update(p).eq("id", row_id).execute()
+
+    data = dict(payload)
+    if _strategies_listing_currency_column is False:
+        data.pop("listing_currency", None)
+
+    try:
+        await _run(data)
+        if data.get("listing_currency") is not None:
+            _strategies_listing_currency_column = True
+    except APIError as exc:
+        if not _is_missing_listing_currency_column(exc) or "listing_currency" not in payload:
+            raise
+        _strategies_listing_currency_column = False
+        data = {k: v for k, v in payload.items() if k != "listing_currency"}
+        logger.warning(
+            "strategies.listing_currency column missing (run database/migrations/"
+            "022_strategy_listing_currency.sql). Retrying write without it; FMP "
+            "screener in fmp_screener JSON still reflects listing market."
+        )
+        await _run(data)
 
 
 def _apply_listing_currency_to_screener(
@@ -29,7 +91,7 @@ def _apply_listing_currency_to_screener(
 
     Args:
         fmp: Existing screener config (may be None).
-        listing_currency: ``\"USD\"`` or ``\"CAD\"`` (case-insensitive).
+        listing_currency: ``"USD"`` or ``"CAD"`` (case-insensitive).
 
     Returns:
         Updated config or None.
@@ -243,7 +305,7 @@ async def create_strategy(config: StrategyConfig, user_id: str) -> StrategyConfi
         "strategy_type": config.strategy_type,
         "listing_currency": config.listing_currency,
     }
-    await client.table("strategies").insert(payload).execute()
+    await _write_strategies_row(client, operation="insert", payload=payload)
     config.id = strategy_id
     return config
 
@@ -307,7 +369,7 @@ async def update_strategy(strategy_id: str, config: StrategyConfig, user_id: str
         "enable_debate": config.enable_debate,
         "listing_currency": config.listing_currency,
     }
-    await client.table("strategies").update(payload).eq("id", strategy_id).execute()
+    await _write_strategies_row(client, operation="update", payload=payload, row_id=strategy_id)
     config.id = strategy_id
     return config
 
@@ -412,7 +474,9 @@ async def ensure_defaults() -> None:
                 "strategy_type": config.strategy_type,
                 "listing_currency": config.listing_currency,
             }
-            await client.table("strategies").update(payload).eq("id", existing_id).execute()
+            await _write_strategies_row(
+                client, operation="update", payload=payload, row_id=existing_id
+            )
             updated += 1
         else:
             await create_strategy(config, user_id="system")
