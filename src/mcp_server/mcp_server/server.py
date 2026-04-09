@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from mcp.server.fastmcp import FastMCP
 
-from mcp_server.tools import execution, pipeline, portfolio, risk
+from mcp_server.tools import execution, monitoring, pipeline, portfolio, reconciliation, risk
 
 mcp = FastMCP("signalforge")
 
@@ -29,6 +29,8 @@ mcp.tool()(pipeline.list_recent_runs)
 mcp.tool()(portfolio.get_account_summary)
 mcp.tool()(portfolio.get_positions)
 mcp.tool()(portfolio.get_open_orders)
+mcp.tool()(reconciliation.sync_brokerage_exits)
+mcp.tool()(monitoring.check_position_health)
 
 # ------------------------------------------------------------------
 # Execution tools — IBKR order placement (confirm-first)

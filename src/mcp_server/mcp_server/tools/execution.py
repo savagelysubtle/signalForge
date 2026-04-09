@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from mcp_server.backend.client import get_backend_client
-from mcp_server.config import settings
+from mcp_server.config import REGIME_POSITION_MULTIPLIERS, settings
 from mcp_server.ibkr.client import get_ibkr_client
 from mcp_server.ibkr.orders import (
     build_bracket_order,
@@ -22,6 +22,20 @@ from mcp_server.ibkr.portfolio import get_account_summary, get_positions
 from mcp_server.ibkr.risk_gates import record_order_placed, run_risk_gates
 
 logger = logging.getLogger(__name__)
+
+
+async def _regime_adjusted_quantity(base_qty: int) -> tuple[int, str, float]:
+    """Scale share count by backend heartbeat regime when enabled."""
+    if not settings.regime_sizing_enabled or base_qty <= 0:
+        return base_qty, "off", 1.0
+    try:
+        hb = await get_backend_client().get_market_heartbeat()
+        rt = str(hb.get("regime_type") or "")
+    except Exception as exc:
+        logger.warning("Regime heartbeat failed: %s", exc)
+        return base_qty, "heartbeat_error", 1.0
+    mult = REGIME_POSITION_MULTIPLIERS.get(rt, 1.0)
+    return max(0, int(base_qty * mult)), rt, mult
 
 
 async def preview_order(rec_id: str, size_override_pct: float | None = None) -> str:
@@ -59,7 +73,10 @@ async def preview_order(rec_id: str, size_override_pct: float | None = None) -> 
         size_override_pct if size_override_pct is not None else rec.get("position_size_pct", 0.0)
     )
     entry_price = rec["entry_price"]
-    quantity = calculate_quantity(equity, size_pct, entry_price, settings.max_position_size_pct)
+    base_quantity = calculate_quantity(
+        equity, size_pct, entry_price, settings.max_position_size_pct
+    )
+    quantity, regime_type, regime_mult = await _regime_adjusted_quantity(base_quantity)
 
     estimated_cost = quantity * entry_price
     risk_per_share = abs(entry_price - rec["stop_loss"])
@@ -83,9 +100,17 @@ async def preview_order(rec_id: str, size_override_pct: float | None = None) -> 
         "buying_power": account.get("buying_power", 0.0),
         "paper_account": settings.ibkr_paper,
         "order_type": "BRACKET (limit entry + stop loss + take profit)",
+        "base_quantity": base_quantity,
+        "regime_type": regime_type,
+        "regime_multiplier": regime_mult,
+        "regime_sizing_enabled": settings.regime_sizing_enabled,
     }
 
-    if quantity == 0:
+    if base_quantity > 0 and quantity == 0:
+        preview["warning"] = (
+            "Regime sizing reduced quantity to 0 — increase size or disable REGIME_SIZING_ENABLED"
+        )
+    elif quantity == 0:
         preview["warning"] = "Calculated quantity is 0 — position size too small for entry price"
 
     # Run risk gates
@@ -163,8 +188,19 @@ async def place_order(
         size_override_pct if size_override_pct is not None else rec.get("position_size_pct", 0.0)
     )
     entry_price = rec["entry_price"]
-    quantity = calculate_quantity(equity, size_pct, entry_price, settings.max_position_size_pct)
+    base_quantity = calculate_quantity(
+        equity, size_pct, entry_price, settings.max_position_size_pct
+    )
+    quantity, regime_type, regime_mult = await _regime_adjusted_quantity(base_quantity)
 
+    if base_quantity > 0 and quantity == 0:
+        return json.dumps(
+            {
+                "error": "Regime sizing reduced quantity to 0 — cannot place order",
+                "regime_type": regime_type,
+                "regime_multiplier": regime_mult,
+            }
+        )
     if quantity == 0:
         return json.dumps({"error": "Calculated quantity is 0 — cannot place order"})
 
@@ -219,6 +255,9 @@ async def place_order(
     outcome_note = ""
     try:
         bc = get_backend_client()
+        sig_px = rec.get("entry_price")
+        sig_px_f = float(sig_px) if sig_px is not None else None
+        created = rec.get("created_at")
         await bc.post_brokerage_open(
             {
                 "recommendation_id": rec_id,
@@ -230,6 +269,8 @@ async def place_order(
                 "currency": "USD",
                 "entry_timestamp": datetime.now(UTC).isoformat(),
                 "notes": "MCP IBKR bracket submission",
+                "signal_entry_price": sig_px_f,
+                "signal_created_at": str(created) if created else None,
             }
         )
         outcome_note = "Recorded open outcome in SignalForge (brokerage-open)."
@@ -251,6 +292,9 @@ async def place_order(
             "order_status": parent_trade.orderStatus.status,
             "auto_executed": allow_auto,
             "outcome_log": outcome_note,
+            "base_quantity": base_quantity,
+            "regime_type": regime_type,
+            "regime_multiplier": regime_mult,
         },
         indent=2,
     )
