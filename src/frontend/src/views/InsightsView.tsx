@@ -36,6 +36,7 @@ import {
   Calendar,
   Activity,
   Zap,
+  Trash2,
 } from "lucide-react";
 import { useInsights } from "../hooks/useInsights";
 import type { JournalFilters } from "../hooks/useInsights";
@@ -67,6 +68,7 @@ export function InsightsView() {
     updateOutcome,
     undoDecision,
     generateReflection,
+    deleteReflection,
     page,
     hasMore,
     pageSize,
@@ -321,6 +323,7 @@ export function InsightsView() {
           reflection={reflection}
           isGenerating={isGenerating}
           outcomeCount={overview?.total_outcomes ?? 0}
+          onDelete={deleteReflection}
         />
         {overview && <CalibrationPanel overview={overview} />}
       </div>
@@ -996,6 +999,7 @@ function RecommendationJournal({
 }) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showFilters, setShowFilters] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
   const CONFIDENCE_STOPS = [0, 25, 50, 75, 100];
@@ -1071,61 +1075,87 @@ function RecommendationJournal({
       transition={{ duration: 0.35, delay: 0.15 }}
       className="bg-bg-asphalt/80 backdrop-blur-sm border border-border-gutter rounded-lg overflow-hidden"
     >
-      <div className="px-5 py-3.5 border-b border-border-subtle flex items-center justify-between">
+      <button
+        onClick={() => setCollapsed(!collapsed)}
+        className="w-full px-5 py-3.5 border-b border-border-subtle flex items-center justify-between hover:bg-bg-steel/20 transition-colors cursor-pointer"
+      >
         <div className="flex items-center gap-2">
+          {collapsed ? (
+            <ChevronRight className="w-3.5 h-3.5 text-text-muted" />
+          ) : (
+            <ChevronDown className="w-3.5 h-3.5 text-text-muted" />
+          )}
           <BarChart3 className="w-4 h-4 text-accent-signal" />
           <h2 className="text-sm font-display font-semibold">Trade Journal</h2>
-        </div>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => setShowFilters(!showFilters)}
-            className={clsx(
-              "flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-display transition-all duration-200",
-              hasActiveFilters
-                ? "bg-accent-signal/15 text-accent-signal border border-accent-signal/30"
-                : "text-text-muted hover:text-text-secondary hover:bg-bg-steel/50 border border-transparent",
-            )}
-            aria-label="Toggle filters"
-          >
-            <SlidersHorizontal className="w-3 h-3" />
-            <span>Filters</span>
-            {hasActiveFilters && (
-              <span className="ml-0.5 w-4 h-4 rounded-full bg-accent-signal text-[10px] text-bg-void font-bold flex items-center justify-center">
-                {activeFilterCount}
-              </span>
-            )}
-          </button>
-          <span className="text-xs text-text-muted font-display">
-            {recommendations.length > 0
-              ? `${rangeStart}\u2013${rangeEnd}`
-              : "0 recommendations"}
-          </span>
-          {(page > 0 || hasMore) && (
-            <div className="flex items-center gap-1">
-              <button
-                onClick={onPrevPage}
-                disabled={page === 0}
-                className="p-1 rounded hover:bg-bg-surface disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                aria-label="Previous page"
-              >
-                <ChevronLeft className="w-3.5 h-3.5" />
-              </button>
-              <span className="text-xs text-text-muted font-mono min-w-[3ch] text-center">
-                {page + 1}
-              </span>
-              <button
-                onClick={onNextPage}
-                disabled={!hasMore}
-                className="p-1 rounded hover:bg-bg-surface disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                aria-label="Next page"
-              >
-                <ChevronRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
+          {collapsed && (
+            <span className="text-[10px] text-text-muted font-display ml-1">
+              {recommendations.length > 0
+                ? `${recommendations.length} recommendations`
+                : "0 recommendations"}
+            </span>
           )}
         </div>
-      </div>
+        {!collapsed && (
+          <div className="flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
+            <button
+              onClick={() => setShowFilters(!showFilters)}
+              className={clsx(
+                "flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-display transition-all duration-200",
+                hasActiveFilters
+                  ? "bg-accent-signal/15 text-accent-signal border border-accent-signal/30"
+                  : "text-text-muted hover:text-text-secondary hover:bg-bg-steel/50 border border-transparent",
+              )}
+              aria-label="Toggle filters"
+            >
+              <SlidersHorizontal className="w-3 h-3" />
+              <span>Filters</span>
+              {hasActiveFilters && (
+                <span className="ml-0.5 w-4 h-4 rounded-full bg-accent-signal text-[10px] text-bg-void font-bold flex items-center justify-center">
+                  {activeFilterCount}
+                </span>
+              )}
+            </button>
+            <span className="text-xs text-text-muted font-display">
+              {recommendations.length > 0
+                ? `${rangeStart}\u2013${rangeEnd}`
+                : "0 recommendations"}
+            </span>
+            {(page > 0 || hasMore) && (
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={onPrevPage}
+                  disabled={page === 0}
+                  className="p-1 rounded hover:bg-bg-surface disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  aria-label="Previous page"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                </button>
+                <span className="text-xs text-text-muted font-mono min-w-[3ch] text-center">
+                  {page + 1}
+                </span>
+                <button
+                  onClick={onNextPage}
+                  disabled={!hasMore}
+                  className="p-1 rounded hover:bg-bg-surface disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  aria-label="Next page"
+                >
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </button>
 
+      <AnimatePresence initial={false}>
+      {!collapsed && (
+      <motion.div
+        initial={{ height: 0, opacity: 0 }}
+        animate={{ height: "auto", opacity: 1 }}
+        exit={{ height: 0, opacity: 0 }}
+        transition={{ duration: 0.25 }}
+        className="overflow-hidden"
+      >
       {/* Filter bar */}
       <AnimatePresence>
         {showFilters && (
@@ -1303,6 +1333,9 @@ function RecommendationJournal({
           })}
         </div>
       )}
+      </motion.div>
+      )}
+      </AnimatePresence>
     </motion.div>
   );
 }
@@ -2396,12 +2429,16 @@ function ReflectionPanel({
   reflection,
   isGenerating,
   outcomeCount,
+  onDelete,
 }: {
   reflection: ReturnType<typeof useInsights>["reflection"];
   isGenerating: boolean;
   outcomeCount: number;
+  onDelete: () => Promise<void>;
 }) {
   const [showRawPrompt, setShowRawPrompt] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const sections = useMemo(() => {
     if (!reflection?.injection_prompt) return [];
@@ -2418,6 +2455,41 @@ function ReflectionPanel({
       <div className="px-5 py-3.5 border-b border-border-subtle flex items-center gap-2">
         <Brain className="w-4 h-4 text-accent-electric" />
         <h2 className="text-sm font-display font-semibold">AI Reflection</h2>
+        {reflection && !isGenerating && (
+          <div className="ml-auto flex items-center gap-2">
+            {confirmDelete ? (
+              <>
+                <span className="text-[10px] text-accent-loss font-display">Delete this reflection?</span>
+                <button
+                  onClick={async () => {
+                    setIsDeleting(true);
+                    await onDelete();
+                    setIsDeleting(false);
+                    setConfirmDelete(false);
+                  }}
+                  disabled={isDeleting}
+                  className="text-[10px] font-display font-semibold text-accent-loss hover:text-red-400 transition-colors"
+                >
+                  {isDeleting ? "Deleting..." : "Yes"}
+                </button>
+                <button
+                  onClick={() => setConfirmDelete(false)}
+                  className="text-[10px] font-display font-semibold text-text-muted hover:text-text-secondary transition-colors"
+                >
+                  No
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={() => setConfirmDelete(true)}
+                title="Delete reflection"
+                className="text-text-muted hover:text-accent-loss transition-colors"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="p-5">

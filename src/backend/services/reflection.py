@@ -888,8 +888,10 @@ def _format_short_term_memory(
     for pattern, stats in short_pattern_stats.items():
         total = stats["wins"] + stats["losses"]
         if total >= 2 and stats["wins"] == 0:
+            penalty = min(10 + (total - 2) * 10, 30)
             suppression_lines.append(
-                f"Pattern alert: {pattern} 0/{total} in last 2 weeks -- reduce confidence by 40%"
+                f"Pattern alert: {pattern} 0/{total} in last 2 weeks"
+                f" -- reduce confidence by {penalty}%"
             )
 
     for sector, s in short_sector_stats.items():
@@ -927,11 +929,14 @@ def _format_long_term_memory(metrics: dict, total_trades: int) -> list[str]:
         lines.append("PATTERN ACCURACY:")
         for pattern, stats in sorted(reportable.items(), key=lambda x: -x[1]["total"]):
             wr = stats["win_rate"]
-            annotation = ""
             if wr >= 70:
                 annotation = " -- increase confidence"
+            elif wr <= 15:
+                annotation = " -- reduce confidence by 30%"
+            elif wr <= 25:
+                annotation = " -- reduce confidence by 20%"
             elif wr <= 35:
-                annotation = " -- reduce confidence by 40%"
+                annotation = " -- reduce confidence by 10%"
             else:
                 annotation = " -- neutral"
             lines.append(f"  {pattern}: {stats['wins']}/{stats['total']} ({wr:.0f}%){annotation}")

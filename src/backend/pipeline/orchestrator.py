@@ -138,6 +138,61 @@ def _build_ml_dicts(
     return ta_dict, fmp_dict, regime_dict
 
 
+def _enrich_screening_fundamentals(
+    screening: ScreeningResult,
+    fmp_map: dict[str, FmpEnrichedStock],
+    live_quotes: dict,
+) -> None:
+    """Back-patch FundamentalData fields from FMP and live quotes.
+
+    Perplexity's anti-hallucination rule forces null for any unverified
+    metric, leaving market_cap, pe_ratio, price, etc. blank.  This fills
+    them from deterministic sources (FMP enrichment, live quotes) so the
+    frontend overview cards actually show data.
+
+    Mutates ``screening.tickers`` in place; only overwrites fields that
+    are still ``None``.
+    """
+    if not screening or not screening.tickers:
+        return
+
+    for td in screening.tickers:
+        key = canonical_ticker_match_key(td.ticker)
+
+        fmp = next(
+            (s for sym, s in fmp_map.items() if canonical_ticker_match_key(sym) == key),
+            None,
+        )
+        if fmp:
+            if td.market_cap is None and fmp.market_cap is not None:
+                if fmp.market_cap >= 1_000_000_000:
+                    td.market_cap = f"${fmp.market_cap / 1_000_000_000:.1f}B"
+                else:
+                    td.market_cap = f"${fmp.market_cap / 1_000_000:.0f}M"
+            if td.pe_ratio is None and fmp.pe_ratio is not None:
+                td.pe_ratio = round(fmp.pe_ratio, 2)
+            if td.sector in ("", None) and fmp.sector:
+                td.sector = fmp.sector
+            if td.price is None and fmp.price is not None:
+                td.price = fmp.price
+            if td.relative_volume is None and fmp.relative_volume is not None:
+                td.relative_volume = round(fmp.relative_volume, 2)
+            if td.free_cash_flow is None and fmp.fcf_per_share is not None:
+                td.free_cash_flow = f"${fmp.fcf_per_share:.2f}/sh"
+            if td.company_name in ("", None) and fmp.company_name:
+                td.company_name = fmp.company_name
+
+        quote = next(
+            (q for sym, q in live_quotes.items() if canonical_ticker_match_key(sym) == key),
+            None,
+        )
+        if quote:
+            if td.price is None and quote.price is not None:
+                td.price = quote.price
+            if td.price_change_pct is None and quote.changesPercentage is not None:
+                td.price_change_pct = round(quote.changesPercentage, 2)
+
+
 async def run_pipeline(
     *,
     run_id: str | None = None,
@@ -629,6 +684,21 @@ async def _run_pipeline(
         claude_live_quotes = await quotes_task
     except Exception as exc:
         logger.warning(" Live quote fetch for Claude failed (non-critical): %s", exc)
+
+    # ── Enrich screening fundamentals with FMP + live quotes ─────────────
+    if screening:
+        _enrich_screening_fundamentals(screening, fmp_map, claude_live_quotes)
+        try:
+            client = await get_db()
+            await (
+                client.table("stage_outputs")
+                .update({"raw_response": screening.model_dump_json()})
+                .eq("run_id", run_id)
+                .eq("stage", "perplexity")
+                .execute()
+            )
+        except Exception as exc:
+            logger.warning("Failed to update enriched screening: %s", exc)
 
     # ── Three Independent Parallel Tracks ────────────────────────────────
     # Track A: Perplexity results already collected above (screening)
@@ -1189,22 +1259,39 @@ async def _finalize(
     if result.meta:
         update_fields["meta"] = json.dumps(result.meta)
 
-    try:
-        await client.table("pipeline_runs").update(update_fields).eq("id", run_id).execute()
-    except APIError as exc:
-        if (
-            exc.code == "PGRST204"
-            and exc.message
-            and "meta" in exc.message
-            and "meta" in update_fields
-        ):
-            logger.warning(
-                "pipeline_runs.meta column missing; apply "
-                "database/migrations/023_pipeline_runs_meta.sql. Finalizing run without meta."
-            )
-            update_fields.pop("meta", None)
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
             await client.table("pipeline_runs").update(update_fields).eq("id", run_id).execute()
-        else:
+            break
+        except APIError as exc:
+            if (
+                exc.code in ("PGRST204", "42703")
+                and exc.message
+                and "meta" in exc.message
+                and "meta" in update_fields
+            ):
+                logger.warning(
+                    "pipeline_runs.meta column missing; apply "
+                    "database/migrations/023_pipeline_runs_meta.sql. Finalizing without meta."
+                )
+                update_fields.pop("meta", None)
+                continue
+            is_transient = str(exc.code) in ("504", "502", "503") or (
+                exc.message and "timeout" in exc.message.lower()
+            )
+            if is_transient and attempt < max_retries - 1:
+                wait = 2 ** (attempt + 1)
+                logger.warning(
+                    "Transient DB error finalizing run %s (attempt %d/%d), retrying in %ds: %s",
+                    run_id,
+                    attempt + 1,
+                    max_retries,
+                    wait,
+                    exc,
+                )
+                await asyncio.sleep(wait)
+                continue
             raise
 
     clear_run_symbol_cache(run_id)

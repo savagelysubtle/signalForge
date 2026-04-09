@@ -150,6 +150,17 @@ export function useInsights() {
     }
   }, []);
 
+  const deleteReflection = useCallback(async () => {
+    if (!reflection) return;
+    setError(null);
+    try {
+      await api.deleteReflection(reflection.id);
+      setReflection(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to delete reflection");
+    }
+  }, [reflection]);
+
   const nextPage = useCallback(() => fetchAll(pageRef.current + 1), [fetchAll]);
   const prevPage = useCallback(() => fetchAll(Math.max(0, pageRef.current - 1)), [fetchAll]);
   const goToPage = useCallback((p: number) => fetchAll(Math.max(0, p)), [fetchAll]);
@@ -176,6 +187,7 @@ export function useInsights() {
     updateOutcome,
     undoDecision,
     generateReflection,
+    deleteReflection,
     page,
     hasMore,
     pageSize: PAGE_SIZE,
