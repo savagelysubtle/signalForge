@@ -17,6 +17,7 @@ import logging
 import time
 
 from anthropic import AsyncAnthropic
+from anthropic.types import TextBlock, ThinkingConfigAdaptiveParam
 
 from pipeline.http_retry import with_transient_retry
 from pipeline.model_config import CLAUDE_MAX_TOKENS, CLAUDE_MODEL
@@ -111,10 +112,15 @@ async def _call_claude_vision(
 
     image_b64 = base64.b64encode(image_bytes).decode("utf-8")
 
+    _thinking: ThinkingConfigAdaptiveParam = {"type": "adaptive"}
+
     async with _semaphore:
         response = await client.messages.create(
             model=CLAUDE_MODEL,
             max_tokens=CLAUDE_MAX_TOKENS,
+            thinking=_thinking,
+            output_config={"effort": "high"},
+            temperature=1,
             system=system_prompt,
             messages=[
                 {
@@ -137,7 +143,11 @@ async def _call_claude_vision(
             ],
         )
 
-    return response.content[0].text
+    for block in response.content:
+        if isinstance(block, TextBlock):
+            return block.text
+    last = response.content[-1]
+    return last.text if isinstance(last, TextBlock) else ""
 
 
 async def _analyze_ticker(

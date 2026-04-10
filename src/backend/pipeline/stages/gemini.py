@@ -81,6 +81,8 @@ async def _call_gemini(
             contents=full_user_prompt,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
+                temperature=0.3,
+                thinking_config=types.ThinkingConfig(thinking_budget=4096),
                 tools=[types.Tool(google_search=types.GoogleSearch())],
             ),
         )

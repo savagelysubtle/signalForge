@@ -220,6 +220,8 @@ export interface Recommendation {
   /** Independent ML before GPT (training / transparency) */
   pre_gpt_ml_probability: number | null;
   pre_gpt_ml_direction: "UP" | "DOWN" | "FLAT" | null;
+  /** Expected value: confidence * R:R - (1 - confidence) */
+  expected_value: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -405,6 +407,8 @@ export interface StrategyConfig {
   is_template: boolean;
   recommended?: boolean;
   strategy_type?: string;
+  /** How long (hours) a signal from this strategy stays actionable. */
+  signal_half_life_hours?: number;
   /** USD = US-listed equities (FMP US); CAD = Canada / TSX. */
   listing_currency?: "USD" | "CAD";
 }

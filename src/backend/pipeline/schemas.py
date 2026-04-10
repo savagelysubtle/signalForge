@@ -462,6 +462,12 @@ class Recommendation(BaseModel):
     )
     pre_gpt_ml_direction: Literal["UP", "DOWN", "FLAT"] | None = None
 
+    # Expected value: confidence * R:R - (1 - confidence)
+    expected_value: float | None = Field(
+        default=None,
+        description="Expected value per unit risk: confidence * R:R - (1 - confidence)",
+    )
+
 
 class DebateCaseList(BaseModel):
     """Wrapper for batch bull/bear debate output from GPT."""
@@ -750,6 +756,9 @@ class StrategyConfig(BaseModel):
     is_template: bool = False
     recommended: bool = False
     strategy_type: str = "swing"
+
+    # Signal freshness: how long (hours) a signal from this strategy stays actionable
+    signal_half_life_hours: int = 48
 
     #: Primary listing currency for equities — drives FMP ``country`` / ``exchange``
     #: for non-crypto screeners (USD → US markets, CAD → Canada / TSX).

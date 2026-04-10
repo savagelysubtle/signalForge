@@ -3,10 +3,10 @@
 Decomposes the GPT-assigned confidence into weighted sub-components,
 then applies deterministic penalty rules based on numerical TA state,
 track agreement, and historical pattern accuracy. The final confidence
-is a blend of the original GPT confidence (40%) and the calibrated
-TA-based score (60%), preserving qualitative signal while grounding it
+is a blend of the original GPT confidence (60%) and the calibrated
+TA-based score (40%), preserving qualitative signal while grounding it
 in numerical reality. A ``SignalStrength`` position-sizing hint is
-derived from the blended score.
+derived from the blended score, with a confidence floor when tracks agree.
 
 Auto-threshold rules (starting points -- Phase 6 feedback loop tunes over time):
   - EMA cross age > 5 candles on daily:    -0.15
@@ -49,13 +49,29 @@ _TREND_FOLLOWING_TYPES = frozenset(
 )
 
 
-def _classify_signal_strength(confidence: float) -> SignalStrength:
-    """Map calibrated confidence to a position-sizing hint."""
-    if confidence >= 0.7:
+def _classify_signal_strength(
+    confidence: float,
+    regime_context: str = "",
+) -> SignalStrength:
+    """Map calibrated confidence to a position-sizing hint.
+
+    Thresholds shift based on market regime: bullish regimes lower the bar
+    (more signals are actionable), bearish regimes raise it.
+    """
+    regime_lower = regime_context.lower() if regime_context else ""
+
+    if "bull" in regime_lower or "trending_bull" in regime_lower:
+        strong, moderate, weak = 0.65, 0.45, 0.25
+    elif "bear" in regime_lower or "trending_bear" in regime_lower:
+        strong, moderate, weak = 0.75, 0.55, 0.35
+    else:
+        strong, moderate, weak = 0.70, 0.50, 0.30
+
+    if confidence >= strong:
         return SignalStrength.STRONG
-    if confidence >= 0.5:
+    if confidence >= moderate:
         return SignalStrength.MODERATE
-    if confidence >= 0.3:
+    if confidence >= weak:
         return SignalStrength.WEAK
     return SignalStrength.NO_EDGE
 
@@ -275,7 +291,7 @@ def calibrate_recommendation(
     """Apply structured confidence calibration to a single recommendation.
 
     Preserves the original GPT confidence in ``raw_gpt_confidence``, then
-    blends it with the calibrated score (40% GPT + 60% calibrated) and sets
+    blends it with the calibrated score (60% GPT + 40% calibrated) and sets
     ``confidence_breakdown`` and ``signal_strength``.
 
     Args:
@@ -291,7 +307,7 @@ def calibrate_recommendation(
     """
     if rec.action in ("NO_TRADE", "HOLD"):
         rec.raw_gpt_confidence = rec.confidence
-        rec.signal_strength = _classify_signal_strength(rec.confidence)
+        rec.signal_strength = _classify_signal_strength(rec.confidence, regime_context)
         return rec
 
     all_penalties: list[str] = []
@@ -334,13 +350,28 @@ def calibrate_recommendation(
 
     rec.raw_gpt_confidence = rec.confidence
 
-    # Blend: 40% GPT qualitative signal + 60% TA-based calibrated score
-    blended = 0.4 * rec.confidence + 0.6 * calibrated
+    # Blend: 60% GPT qualitative signal + 40% TA-based calibrated score
+    blended = 0.6 * rec.confidence + 0.4 * calibrated
     blended = round(max(0.0, min(1.0, blended)), 4)
+
+    # Confidence floor: prevent excessive reduction when tracks agree
+    agreement_score = rec.track_agreement.agreement_score if rec.track_agreement else 0.0
+    if agreement_score >= 0.8 and blended < 0.55:
+        all_penalties.append(f"floor_applied: {blended:.4f}->0.55 (3/3 tracks agree)")
+        logger.info(
+            "Confidence floor 0.55 applied for %s (agreement=%.2f)", rec.ticker, agreement_score
+        )
+        blended = 0.55
+    elif agreement_score >= 0.5 and blended < 0.45:
+        all_penalties.append(f"floor_applied: {blended:.4f}->0.45 (2/3 tracks agree)")
+        logger.info(
+            "Confidence floor 0.45 applied for %s (agreement=%.2f)", rec.ticker, agreement_score
+        )
+        blended = 0.45
 
     rec.confidence = blended
     rec.confidence_breakdown = breakdown
-    rec.signal_strength = _classify_signal_strength(blended)
+    rec.signal_strength = _classify_signal_strength(blended, regime_context)
 
     if all_penalties:
         penalty_summary = "; ".join(all_penalties)

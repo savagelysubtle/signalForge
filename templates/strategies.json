@@ -35,6 +35,7 @@
     "news_scope": "company",
     "trading_style": "Day to swing trader, 2-5 day holds",
     "strategy_type": "swing",
+    "signal_half_life_hours": 48,
     "recommended": false,
     "risk_params": {
       "max_position_pct": 5.0,
@@ -112,6 +113,7 @@
     "news_scope": "company",
     "trading_style": "Swing trader, 1-4 week holds, trend following",
     "strategy_type": "swing",
+    "signal_half_life_hours": 48,
     "recommended": true,
     "risk_params": {
       "max_position_pct": 6.0,
@@ -188,6 +190,7 @@
     "news_scope": "company",
     "trading_style": "Swing trend continuation, 5-20 day holds",
     "strategy_type": "swing",
+    "signal_half_life_hours": 48,
     "recommended": false,
     "risk_params": {
       "max_position_pct": 6.0,
@@ -266,6 +269,7 @@
     "news_scope": "company",
     "trading_style": "Swing trader, 5-15 day holds targeting band expansion",
     "strategy_type": "swing",
+    "signal_half_life_hours": 48,
     "recommended": false,
     "risk_params": {
       "max_position_pct": 5.0,
@@ -340,6 +344,7 @@
     "news_scope": "company",
     "trading_style": "Swing trader, 3-7 day holds",
     "strategy_type": "mean_reversion",
+    "signal_half_life_hours": 48,
     "recommended": true,
     "risk_params": {
       "max_position_pct": 4.0,
@@ -412,6 +417,7 @@
     "news_scope": "sector",
     "trading_style": "Position trader, 2-8 week holds",
     "strategy_type": "value",
+    "signal_half_life_hours": 120,
     "recommended": true,
     "risk_params": {
       "max_position_pct": 8.0,
@@ -488,6 +494,7 @@
     "news_scope": "company",
     "trading_style": "Event-driven, 1-5 day holds around earnings",
     "strategy_type": "event",
+    "signal_half_life_hours": 48,
     "recommended": true,
     "risk_params": {
       "max_position_pct": 3.0,
@@ -557,6 +564,7 @@
     "news_scope": "company",
     "trading_style": "Intraday scalper, 15 min to 2 hour holds",
     "strategy_type": "intraday",
+    "signal_half_life_hours": 3,
     "recommended": false,
     "risk_params": {
       "max_position_pct": 3.0,
@@ -625,6 +633,7 @@
     "news_scope": "company",
     "trading_style": "Intraday momentum, 15-min to 2-hour holds",
     "strategy_type": "intraday",
+    "signal_half_life_hours": 3,
     "recommended": true,
     "risk_params": {
       "max_position_pct": 3.0,
@@ -697,6 +706,7 @@
     "news_scope": "company",
     "trading_style": "Intraday breakout, 30-min to 3-hour holds",
     "strategy_type": "intraday",
+    "signal_half_life_hours": 3,
     "recommended": false,
     "risk_params": {
       "max_position_pct": 3.0,
@@ -767,6 +777,7 @@
     "news_scope": "company",
     "trading_style": "Intraday VWAP scalper, 15-min to 90-min holds",
     "strategy_type": "intraday",
+    "signal_half_life_hours": 2,
     "recommended": false,
     "risk_params": {
       "max_position_pct": 2.5,
@@ -833,6 +844,7 @@
     "news_scope": "sector",
     "trading_style": "Crypto swing trader, 3-14 day holds",
     "strategy_type": "crypto_swing",
+    "signal_half_life_hours": 24,
     "recommended": true,
     "risk_params": {
       "max_position_pct": 3.0,
@@ -896,6 +908,7 @@
     "news_scope": "sector",
     "trading_style": "Crypto intraday scalper, 15 min to 2 hour holds",
     "strategy_type": "crypto_intraday",
+    "signal_half_life_hours": 4,
     "recommended": true,
     "risk_params": {
       "max_position_pct": 2.0,

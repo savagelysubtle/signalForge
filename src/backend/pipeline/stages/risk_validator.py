@@ -1,8 +1,10 @@
 """Stage 4.7: Deterministic risk validator.
 
 Pure Python rules that flag (not block) risk violations on each
-Recommendation after GPT synthesis. Violations are informational —
-the user makes the final call via the FeedbackTab.
+Recommendation after GPT synthesis. Includes hard overrides:
+- R:R below strategy minimum → override to WATCH
+- Missing entry prices on BUY/SHORT → override to WATCH
+- ADX < 20 on trend-following strategies → override to WATCH
 """
 
 from __future__ import annotations
@@ -11,15 +13,23 @@ import logging
 import re
 from typing import TYPE_CHECKING
 
-from pipeline.schemas import ChartAnalysis, Recommendation, RiskAssessment, StrategyConfig
+from pipeline.schemas import (
+    ChartAnalysis,
+    MultiTimeframeTechnical,
+    Recommendation,
+    RecommendationAction,
+    RiskAssessment,
+    StrategyConfig,
+)
 
 if TYPE_CHECKING:
     from services.fmp_service import FmpEnrichedStock, FmpQuote
 
 logger = logging.getLogger(__name__)
 
-# Maximum allowed deviation from live quote price (as a fraction)
 _MAX_PRICE_DEVIATION = 0.10  # 10%
+
+_TREND_FOLLOWING_TYPES = frozenset({"swing", "momentum", "trend", "breakout", "position"})
 
 
 def _check_price_sanity(
@@ -91,13 +101,14 @@ def validate_risks(
     fmp_context: dict[str, FmpEnrichedStock] | None = None,
     live_quotes: dict[str, FmpQuote] | None = None,
     risk_assessments: list[RiskAssessment] | None = None,
+    ta_snapshots: list[MultiTimeframeTechnical] | None = None,
 ) -> list[Recommendation]:
     """Run deterministic risk checks on each recommendation.
 
     Attaches ``risk_violations`` and sets ``risk_approved`` on each
-    recommendation. Also scales ``position_size_pct`` inversely with
-    risk_score from the risk post-filter, and hard-blocks extreme
-    fundamental risk (distressed Altman Z-score or very low Piotroski).
+    recommendation. Includes hard overrides that convert BUY/SHORT to
+    WATCH when quantitative thresholds are violated (R:R < min, missing
+    entry prices, ADX < 20 on trend strategies).
 
     Args:
         recommendations: GPT-produced recommendations to validate.
@@ -106,17 +117,22 @@ def validate_risks(
         fmp_context: FMP enriched stock data keyed by ticker.
         live_quotes: Live price quotes keyed by ticker for price sanity checks.
         risk_assessments: Per-ticker risk assessments from the risk post-filter.
+        ta_snapshots: Numerical TA data for ADX/momentum checks.
 
     Returns:
         The same list with risk fields populated in-place.
     """
     rp = config.risk_params
     _risk_map = {ra.ticker: ra for ra in (risk_assessments or [])}
+    _ta_map: dict[str, MultiTimeframeTechnical] = {}
+    if ta_snapshots:
+        for snap in ta_snapshots:
+            _ta_map[snap.ticker.upper()] = snap
 
     for rec in recommendations:
         violations: list[str] = []
 
-        if rec.action == "HOLD":
+        if rec.action in ("HOLD", "NO_TRADE"):
             rec.risk_violations = violations
             rec.risk_approved = True
             continue
@@ -124,18 +140,75 @@ def validate_risks(
         # Price sanity check against live quotes
         violations.extend(_check_price_sanity(rec, live_quotes))
 
-        if rec.risk_reward_ratio is not None and rec.risk_reward_ratio < rp.min_risk_reward:
+        # --- Hard overrides: BUY/SHORT → WATCH ---
+
+        # Override 1: Missing entry setup on BUY/SHORT
+        if rec.action in ("BUY", "SHORT"):
+            missing_prices = []
+            if rec.entry_price is None:
+                missing_prices.append("entry_price")
+            if rec.stop_loss is None:
+                missing_prices.append("stop_loss")
+            if rec.take_profit is None:
+                missing_prices.append("take_profit")
+            if missing_prices:
+                violations.append(f"Missing {', '.join(missing_prices)} — overriding to WATCH")
+                logger.warning(
+                    "Override %s→WATCH for %s: missing %s",
+                    rec.action,
+                    rec.ticker,
+                    ", ".join(missing_prices),
+                )
+                rec.action = RecommendationAction.WATCH
+
+        # Override 2: R:R below strategy minimum → WATCH
+        if (
+            rec.action in ("BUY", "SHORT")
+            and rec.risk_reward_ratio is not None
+            and rec.risk_reward_ratio < rp.min_risk_reward
+        ):
             violations.append(
-                f"R:R ratio {rec.risk_reward_ratio:.1f} below minimum {rp.min_risk_reward:.1f}"
+                f"R:R {rec.risk_reward_ratio:.1f} < {rp.min_risk_reward:.1f} minimum "
+                f"— overriding to WATCH"
             )
+            logger.info(
+                "Override %s→WATCH for %s: R:R %.1f < %.1f",
+                rec.action,
+                rec.ticker,
+                rec.risk_reward_ratio,
+                rp.min_risk_reward,
+            )
+            rec.action = RecommendationAction.WATCH
+
+        # Override 3: ADX < 20 on trend-following strategy → WATCH
+        ta = _ta_map.get(rec.ticker.upper())
+        if rec.action in ("BUY", "SHORT") and ta and ta.primary:
+            adx = ta.primary.adx
+            if adx < 20 and config.strategy_type in _TREND_FOLLOWING_TYPES:
+                violations.append(
+                    f"No trend detected (ADX {adx:.1f} < 20) for "
+                    f"{config.strategy_type} strategy — overriding to WATCH"
+                )
+                logger.info(
+                    "Override %s→WATCH for %s: ADX %.1f < 20",
+                    rec.action,
+                    rec.ticker,
+                    adx,
+                )
+                rec.action = RecommendationAction.WATCH
+
+        # Warning: Momentum near zero (informational, no override)
+        if rec.action in ("BUY", "SHORT") and ta and ta.primary:
+            mom = ta.primary.momentum_score
+            if -0.2 <= mom <= 0.2:
+                violations.append(f"Momentum near zero ({mom:+.2f})")
+
+        # --- Standard violation checks ---
 
         if rec.position_size_pct > rp.max_position_pct:
             violations.append(
                 f"Position size {rec.position_size_pct:.1f}% exceeds max {rp.max_position_pct:.1f}%"
             )
-
-        if rec.confidence < 0.45:
-            violations.append(f"Low conviction: confidence {rec.confidence:.0%} on a {rec.action}")
 
         atr = _parse_atr_from_charts(rec.ticker, charts)
         if atr and atr > 0 and rec.entry_price and rec.stop_loss:
@@ -151,6 +224,28 @@ def validate_risks(
                     f"Stop loss too wide: {sl_distance:.2f} is {ratio:.1f}x ATR "
                     f"(max 2.5x ATR = {atr * 2.5:.2f})"
                 )
+
+        # ATR-based position sizing (volatility-adjusted)
+        if (
+            atr
+            and atr > 0
+            and rec.action in ("BUY", "SHORT")
+            and rec.entry_price
+            and rec.entry_price > 0
+        ):
+            atr_mult = {"intraday": 1.0, "crypto_intraday": 1.0}.get(config.strategy_type, 1.5)
+            dollar_risk_per_share = atr * atr_mult
+            max_risk_pct = rp.max_portfolio_risk_pct / max(rp.max_position_pct / 2, 1.0)
+            atr_based_pct = round(
+                (max_risk_pct / (dollar_risk_per_share / rec.entry_price * 100)), 2
+            )
+            atr_capped = min(atr_based_pct, rp.max_position_pct)
+            if atr_capped < rec.position_size_pct:
+                violations.append(
+                    f"ATR-based sizing: {rec.position_size_pct:.1f}% → "
+                    f"{atr_capped:.1f}% (ATR={atr:.2f})"
+                )
+                rec.position_size_pct = atr_capped
 
         if fmp_context:
             fmp_data = fmp_context.get(rec.ticker)
@@ -196,11 +291,15 @@ def validate_risks(
             )
 
     total_flagged = sum(1 for r in recommendations if not r.risk_approved)
+    overridden = sum(
+        1 for r in recommendations if r.action == "WATCH" and r.raw_gpt_confidence is not None
+    )
     if total_flagged:
         logger.info(
-            "Risk validation: %d/%d recommendations flagged",
+            "Risk validation: %d/%d flagged, %d overridden to WATCH",
             total_flagged,
             len(recommendations),
+            overridden,
         )
 
     return recommendations

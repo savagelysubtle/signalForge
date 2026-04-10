@@ -1,22 +1,17 @@
-"""Post-ML-gate confidence adjustment: blend displayed confidence with ML uncertainty."""
+"""Post-ML-gate confidence adjustment: blend displayed confidence with ML uncertainty.
+
+Runs after the calibration engine. Signal strength is NOT reassigned here —
+the orchestrator re-applies signal strength after all confidence modifications
+are complete, using the regime-aware classifier from confidence_calibration.
+"""
 
 from __future__ import annotations
 
 import logging
 
-from pipeline.schemas import Recommendation, SignalStrength
+from pipeline.schemas import Recommendation
 
 logger = logging.getLogger(__name__)
-
-
-def _signal_strength_from_confidence(confidence: float) -> SignalStrength:
-    if confidence >= 0.7:
-        return SignalStrength.STRONG
-    if confidence >= 0.5:
-        return SignalStrength.MODERATE
-    if confidence >= 0.3:
-        return SignalStrength.WEAK
-    return SignalStrength.NO_EDGE
 
 
 def blend_confidence_with_ml(rec: Recommendation) -> None:
@@ -39,14 +34,14 @@ def blend_confidence_with_ml(rec: Recommendation) -> None:
     before = rec.confidence
 
     if rec.ml_blocked:
-        capped = min(rec.confidence, max(0.12, p * 0.65 + 0.08))
+        capped = min(rec.confidence, max(0.20, p * 0.65 + 0.08))
         rec.confidence = max(0.05, min(1.0, capped))
         note = f"ML gate block: confidence capped ({before:.2f}->{rec.confidence:.2f}, p={p:.2f})"
     else:
         conviction = abs(p - 0.5) * 2.0
         base_mult = 0.65 + 0.35 * conviction
         amb_mult = 1.0 - 0.12 * ambiguity
-        mult = base_mult * amb_mult
+        mult = max(0.80, base_mult * amb_mult)
         rec.confidence = max(0.05, min(1.0, rec.confidence * mult))
         note = (
             f"ML uncertainty blend: x{mult:.2f} ({before:.2f}->{rec.confidence:.2f}, "
@@ -55,6 +50,5 @@ def blend_confidence_with_ml(rec: Recommendation) -> None:
 
     existing = (rec.confidence_adjustment or "").strip()
     rec.confidence_adjustment = f"{existing} | {note}" if existing else note
-    rec.signal_strength = _signal_strength_from_confidence(rec.confidence)
 
     logger.debug("ML confidence blend %s: %s", rec.ticker, note)

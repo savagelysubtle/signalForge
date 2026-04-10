@@ -702,20 +702,23 @@ async def _run_pipeline(
 
     # ── Three Independent Parallel Tracks ────────────────────────────────
     # Track A: Perplexity results already collected above (screening)
-    # Track B: Gemini (FMP context + Perplexity highlights, no raw articles)
+    # Track B: Gemini (FMP context + Perplexity article URLs/highlights)
     # Track C: Claude (numerical TA + chart + live quotes — NO sentiment)
 
+    ticker_news: dict[str, list[str]] | None = None
     ticker_highlights: dict[str, list[str]] | None = None
     if screening and screening.tickers:
+        _news = {t.ticker: t.news_urls for t in screening.tickers if t.news_urls}
         _hl = {t.ticker: t.key_highlights for t in screening.tickers if t.key_highlights}
+        ticker_news = _news or None
         ticker_highlights = _hl or None
 
     async def _track_b_gemini() -> tuple[list[SentimentAnalysis], list[dict]]:
-        """Track B: Gemini sentiment enriched with FMP + Perplexity highlights."""
+        """Track B: Gemini sentiment enriched with Perplexity links/highlights + FMP."""
         sentiments_b, meta_b = await run_sentiment(
             ticker_symbols,
             config,
-            ticker_news=None,
+            ticker_news=ticker_news,
             fmp_context=fmp_map or None,
             ticker_highlights=ticker_highlights,
             regime_context=regime_context,
@@ -964,6 +967,7 @@ async def _run_pipeline(
                 fmp_context=fmp_map or None,
                 live_quotes=live_quotes or None,
                 risk_assessments=risk_assessments or None,
+                ta_snapshots=ta_snapshots or None,
             )
         except Exception as exc:
             logger.exception("Risk validation failed, using unvalidated recommendations")
@@ -1108,6 +1112,33 @@ async def _run_pipeline(
         for rec in result.recommendations:
             blend_confidence_with_ml(rec)
 
+        # Re-apply confidence floor after ML blend — track consensus overrides ML crush
+        for rec in result.recommendations:
+            if rec.action in ("BUY", "SHORT", "WATCH"):
+                ag = rec.track_agreement.agreement_score if rec.track_agreement else 0.0
+                if ag >= 0.8 and rec.confidence < 0.55:
+                    logger.info(
+                        "Post-ML floor 0.55 for %s (agreement=%.2f, was %.2f)",
+                        rec.ticker,
+                        ag,
+                        rec.confidence,
+                    )
+                    rec.confidence = 0.55
+                elif ag >= 0.5 and rec.confidence < 0.45:
+                    logger.info(
+                        "Post-ML floor 0.45 for %s (agreement=%.2f, was %.2f)",
+                        rec.ticker,
+                        ag,
+                        rec.confidence,
+                    )
+                    rec.confidence = 0.45
+
+        # Re-apply regime-aware signal strength after all confidence modifications
+        from services.confidence_calibration import _classify_signal_strength
+
+        for rec in result.recommendations:
+            rec.signal_strength = _classify_signal_strength(rec.confidence, regime_context)
+
         # 7.5b: ML shadow — full model comparison (non-blocking)
         try:
             from ml.inference import ml_model_available
@@ -1127,6 +1158,33 @@ async def _run_pipeline(
                 logger.info(" ML shadow predictions complete")
         except Exception:
             logger.warning("ML shadow skipped", exc_info=True)
+
+    # Stamp entry_valid_window from strategy half-life if GPT left it empty
+    half_life = config.signal_half_life_hours
+    for rec in result.recommendations:
+        if not rec.entry_valid_window and rec.action in ("BUY", "SHORT", "WATCH"):
+            if half_life <= 4:
+                rec.entry_valid_window = f"{half_life} hours"
+            elif half_life <= 48:
+                days = half_life / 24
+                rec.entry_valid_window = f"{days:.0f}-{days + 1:.0f} trading days"
+            else:
+                days = half_life / 24
+                rec.entry_valid_window = f"{days:.0f} trading days"
+
+    # Expected value calculation (Phase 8)
+    for rec in result.recommendations:
+        if (
+            rec.action in ("BUY", "SHORT")
+            and rec.risk_reward_ratio is not None
+            and rec.risk_reward_ratio > 0
+        ):
+            ev = rec.confidence * rec.risk_reward_ratio - (1.0 - rec.confidence)
+            rec.expected_value = round(ev, 4)
+            if ev > 0.3:
+                rec.key_factors.append(f"Positive expected value: {ev:.2f}")
+            elif ev < 0:
+                rec.warnings.append(f"Negative expected value: {ev:.2f}")
 
     # Save recommendations after all modifications (risk validation, ML gate)
     if result.recommendations:
@@ -1460,9 +1518,11 @@ async def _save_recommendations(
             "ml_conformal_set": json.dumps(rec.ml_conformal_set) if rec.ml_conformal_set else None,
             "pre_gpt_ml_probability": rec.pre_gpt_ml_probability,
             "pre_gpt_ml_direction": rec.pre_gpt_ml_direction,
+            "confidence_adjustment": rec.confidence_adjustment or "",
             "track_agreement": rec.track_agreement.model_dump_json()
             if rec.track_agreement
             else None,
+            "expected_value": rec.expected_value,
         }
         for rec in recommendations
     ]
