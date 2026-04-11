@@ -119,13 +119,10 @@ async def run_ml_gate(
             reason="no_independent_model",
         )
 
-    context: dict[str, Any] = {
-        "strategy_type": strategy_type,
-        "market_regime": regime_context.get("regime_type", "unknown")
-        if regime_context
-        else "unknown",
-        "vix_level": regime_context.get("vix_estimate") if regime_context else None,
-    }
+    from ml.feature_mapper import build_context_features
+
+    sector = fmp_features.get("sector") if fmp_features else None
+    context = build_context_features(strategy_type, regime_context, sector=sector)
 
     features = build_feature_vector(
         ta_features,

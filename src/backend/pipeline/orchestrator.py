@@ -117,19 +117,18 @@ def _build_ml_dicts(
     Returns:
         Tuple of (ta_dict, fmp_dict, regime_dict).
     """
-    from ml.feature_mapper import map_snapshot_to_flat_features
+    from ml.feature_mapper import map_fmp_to_features, map_multi_tf_to_features
 
     ta_dict: dict[str, dict[str, Any]] = {}
     for snap in ta_snapshots:
-        if hasattr(snap, "ticker") and hasattr(snap, "primary") and snap.primary:
-            ta_dict[snap.ticker] = map_snapshot_to_flat_features(snap.primary.model_dump())
-        elif hasattr(snap, "ticker"):
-            ta_dict[snap.ticker] = {}
+        if hasattr(snap, "ticker"):
+            ta_dict[snap.ticker] = map_multi_tf_to_features(snap.model_dump())
 
     fmp_dict: dict[str, dict[str, Any]] = {}
     if fmp_map:
         for sym, stock in fmp_map.items():
-            fmp_dict[sym] = stock.model_dump() if hasattr(stock, "model_dump") else {}
+            raw = stock.model_dump() if hasattr(stock, "model_dump") else {}
+            fmp_dict[sym] = map_fmp_to_features(raw)
 
     regime_dict: dict[str, Any] | None = None
     if regime:
