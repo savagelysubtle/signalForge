@@ -134,12 +134,12 @@ export interface TrackAgreement {
 }
 
 export interface ConfidenceBreakdown {
-  track_agreement: number; // 0.00–0.30
-  technical_strength: number; // 0.00–0.20
-  trend_alignment: number; // 0.00–0.20
-  historical_pattern: number; // 0.00–0.20
-  regime_fit: number; // 0.00–0.10
-  total: number; // 0.0–1.0
+  prior_base_rate: number; // starting probability from strategy/regime lookup
+  setup_quality_score: number; // net effect of boosters (-0.15 to +0.15)
+  ml_agreement: "agree" | "disagree" | "neutral" | "unavailable";
+  llm_conviction: "low" | "medium" | "high" | null;
+  win_probability: number; // final calibrated probability
+  confidence_drivers: string[]; // top factors, e.g. "Strong RVOL (+6%)"
   penalties_applied: string[];
 }
 
@@ -222,6 +222,22 @@ export interface Recommendation {
   pre_gpt_ml_direction: "UP" | "DOWN" | "FLAT" | null;
   /** Expected value: confidence * R:R - (1 - confidence) */
   expected_value: number | null;
+
+  // Confidence Engine v2 fields
+  /** Calibrated probability from prior + boosters + ML blend */
+  win_probability: number | null;
+  /** Net effect of positive/negative evidence boosters */
+  setup_quality_score: number | null;
+  /** GPT ordinal conviction bucket */
+  llm_conviction: "low" | "medium" | "high" | null;
+  /** Starting probability from strategy/regime prior table */
+  prior_base_rate: number | null;
+  /** Shadow confidence from v2 engine (validation before cutover) */
+  confidence_v2: number | null;
+  /** Setup archetype label from strategy's allowed list */
+  setup_type: string | null;
+  /** Top factors that moved the number */
+  confidence_drivers: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -411,6 +427,8 @@ export interface StrategyConfig {
   signal_half_life_hours?: number;
   /** USD = US-listed equities (FMP US); CAD = Canada / TSX. */
   listing_currency?: "USD" | "CAD";
+  /** Allowed setup types for this strategy */
+  setup_archetypes?: string[];
 }
 
 // ---------------------------------------------------------------------------

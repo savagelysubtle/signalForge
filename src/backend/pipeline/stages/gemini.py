@@ -44,7 +44,10 @@ def _get_client() -> genai.Client:
             raise RuntimeError(
                 "Google API key not configured. Set GOOGLE_API_KEY in .env (see .env.example)."
             )
-        _gemini_client = genai.Client(api_key=api_key)
+        _gemini_client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(timeout=90_000),
+        )
     return _gemini_client
 
 

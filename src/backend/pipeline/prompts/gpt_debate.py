@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 
 BULL_PROMPT_VERSION = "v6"
 BEAR_PROMPT_VERSION = "v6"
-JUDGE_PROMPT_VERSION = "v16"
+JUDGE_PROMPT_VERSION = "v20"
 
 _BIAS_SCORE: dict[str, int] = {
     "strongly_bullish": 2,
@@ -131,6 +131,10 @@ reports on the same ticker(s). These analysts did NOT communicate with each
 other. Your job is to assess all evidence on its merits and produce a final
 recommendation with actionable trade setups.
 
+CRITICAL: You MUST produce EXACTLY ONE recommendation per ticker listed in the
+request. Every ticker gets a recommendation — use NO_TRADE if you see no edge.
+Do NOT skip any ticker.
+
 Track disagreements should inform your analysis — they provide nuance, not
 automatic downgrades. Weigh each track by its relevance to the strategy type
 and current market context.
@@ -144,6 +148,8 @@ Return a JSON object with this exact structure:
       "ticker": "<SYMBOL>",
       "action": "BUY" | "SHORT" | "HOLD" | "NO_TRADE" | "WATCH",
       "confidence": <float from 0.0 to 1.0>,
+      "llm_conviction": "low" | "medium" | "high",
+      "setup_type": "<setup archetype label, e.g. 'vwap_reclaim_long', 'ema_pullback_continuation', 'breakout_retest'>",
       "entry_price": <float or null>,
       "stop_loss": <float or null>,
       "take_profit": <float or null>,
@@ -228,8 +234,17 @@ Decision framework:
 - HOLD: Mixed signals but leaning directional — wait for confirmation trigger
 - NO_TRADE: Tracks fundamentally disagree on direction with no resolution
 - WATCH: Setup is developing but needs a specific trigger. You MUST provide:
-  entry_price (trigger level), entry_trigger (the event/price that activates),
-  invalidation_conditions (what kills the setup), and entry_valid_window.
+  setup_type (the specific setup archetype, e.g. "vwap_reclaim_long", "ema_pullback_continuation"),
+  entry_price (trigger level), entry_trigger (the exact event or price condition,
+  e.g. "Break above $184.50 with volume > 1.5x average"),
+  invalidation_conditions (what cancels the setup entirely),
+  entry_valid_window (when the setup expires, e.g. "next 2 trading sessions").
+  judge_reasoning MUST include a "why_not_now" explanation — what specific condition
+  is missing that prevents immediate entry.
+  key_factors MUST include confirmation checklist items the user should monitor.
+  A WATCH is a developing setup with a clearly defined path to entry. If you
+  cannot explain what you are waiting for with a specific trigger, level, and
+  invalidation, output NO_TRADE instead.
   WATCH is NOT a trash bin — it means "I see a trade forming, here is exactly
   what to look for."
 
@@ -256,12 +271,29 @@ deterministic risk screener flagged this ticker as high-risk. You MAY override
 this if the qualitative evidence is compelling, but you MUST acknowledge the
 flag and explain your reasoning.
 
-Confidence calibration:
-- 0.75+: Strong alignment across tracks and numerical data
-- 0.60-0.75: Good conviction with minor caveats
-- 0.45-0.60: Moderate conviction, most tracks agree
-- 0.30-0.45: Low conviction — consider whether setup needs time to develop (WATCH)
-- <0.30: Very weak — no edge visible
+Confidence & conviction:
+Your confidence value is a rough starting estimate only. The final probability is
+computed deterministically by the backend using regime priors, evidence boosters,
+and ML agreement. Do NOT treat your confidence as the final word — focus on the
+qualitative conviction instead.
+
+llm_conviction guidance:
+- "high": Tracks converge, setup is textbook, risk/reward is compelling
+- "medium": Most evidence supports the thesis with minor caveats
+- "low": Thesis is plausible but material uncertainty remains
+
+CRITICAL — confidence means DIRECTIONAL TRADE CONVICTION, not certainty in your
+verdict. A high-confidence NO_TRADE is a contradiction. Use this scale:
+- BUY/SHORT 0.60-0.85: Strong directional edge with supporting evidence
+- BUY/SHORT 0.45-0.60: Moderate edge, some caveats
+- WATCH 0.30-0.50: Setup developing but not actionable yet
+- NO_TRADE 0.05-0.25: No directional edge visible
+- HOLD 0.20-0.35: Existing position, mixed signals
+
+setup_type: Label each recommendation with a descriptive setup archetype string
+(e.g. "vwap_reclaim_long", "ema_pullback_continuation", "breakout_retest",
+"gap_fill_short", "range_bound_no_trade"). Use the strategy's allowed archetypes
+when available. For NO_TRADE, use a descriptive label like "no_setup_identified".
 
 Entry price rules (CRITICAL — MANDATORY for BUY and SHORT):
 - entry_price, stop_loss, and take_profit are REQUIRED (non-null) for ALL BUY
@@ -306,53 +338,8 @@ Risk management rules:
 - Target R:R >= 2:1. If the chart structure does not support 2:1, use WATCH.
 - Flag warnings for any unusual risks (earnings, low liquidity, etc.)
 
-## EXAMPLE OUTPUT (redacted for brevity)
-{
-  "recommendations": [
-    {
-      "ticker": "EXAMPLE",
-      "action": "BUY",
-      "confidence": 0.72,
-      "entry_price": 185.50,
-      "stop_loss": 179.20,
-      "take_profit": 198.00,
-      "position_size_pct": 3.0,
-      "risk_reward_ratio": 1.98,
-      "holding_period": "3-5 days",
-      "bull_case": {
-        "ticker": "EXAMPLE",
-        "stance": "bull",
-        "key_arguments": ["Track A: revenue growth 22% YoY with expanding margins", "Track C: ascending triangle on daily, RSI 52 with room to run", "Track B: sentiment score 0.6 driven by analyst upgrades"],
-        "strongest_signal": "Track C: breakout above $184 resistance with volume confirmation (RVOL 1.8x)",
-        "weakest_counter": "Track B: sector rotation risk flagged by Gemini (-0.3 sector sentiment)",
-        "confidence": 0.78
-      },
-      "bear_case": {
-        "ticker": "EXAMPLE",
-        "stance": "bear",
-        "key_arguments": ["Earnings in 5 days creates binary event risk", "RSI approaching overbought on weekly timeframe"],
-        "strongest_signal": "Earnings proximity — historical post-earnings drawdown of 8%",
-        "weakest_counter": "Strong institutional buying in last 2 weeks suggests smart money is positioned",
-        "confidence": 0.45
-      },
-      "judge_reasoning": "Track C technical breakout is the primary driver, confirmed by Track A fundamental strength. Track B sector headwinds are acknowledged but ticker-specific catalysts outweigh. Reduced position size due to earnings proximity.",
-      "key_factors": ["Ascending triangle breakout with volume", "22% revenue growth", "Earnings in 5 days (risk)"],
-      "warnings": ["Binary event risk from upcoming earnings", "Weekly RSI approaching overbought"],
-      "track_agreement": {
-        "perplexity_direction": "bullish",
-        "gemini_direction": "neutral",
-        "claude_direction": "bullish",
-        "agreement_score": 0.65,
-        "conflicts": ["Gemini sector sentiment bearish while ticker-specific fundamentals bullish"]
-      },
-      "confidence_adjustment": "Lowered from 0.78 to 0.72 due to earnings proximity and Gemini sector headwinds. Track C and A alignment prevented further reduction.",
-      "entry_trigger": "limit",
-      "scaling_plan": "50% at $185.50 limit, add 50% on successful retest of $184 breakout level",
-      "invalidation_conditions": ["Price drops below $182 (triangle support)", "Pre-earnings guidance warning"],
-      "entry_valid_window": "1-2 trading days"
-    }
-  ]
-}
+The output schema is enforced by the API — follow it exactly. Focus on quality
+of analysis, not formatting.
 """
 
 
@@ -403,6 +390,10 @@ def _format_screening_data(screening: ScreeningResult | None, tickers: list[str]
 
     ticker_map = {t.ticker: t for t in screening.tickers}
     parts: list[str] = []
+
+    if screening.screening_summary:
+        parts.append(f"**Screening Overview:** {screening.screening_summary}\n")
+
     for ticker in tickers:
         fd = ticker_map.get(ticker)
         if not fd:
@@ -789,6 +780,27 @@ def _build_debate_side_prompt(
     if config.trading_style:
         parts.append(f"\nTrading context: {config.trading_style}")
 
+    # Active strategy contract — forces bull/bear to evaluate under this strategy
+    archetypes_str = ", ".join(config.setup_archetypes) if config.setup_archetypes else "any"
+    contract_lines = [
+        "\n## ACTIVE STRATEGY CONTRACT",
+        f"Strategy: {config.name or 'Unnamed'}",
+        f"Type: {config.strategy_type or 'general'}",
+        f"Style: {config.trading_style or 'unspecified'}",
+        f"Setup Archetypes: {archetypes_str}",
+    ]
+    if config.ta_focus:
+        contract_lines.append(f"TA Focus: {config.ta_focus}")
+    contract_lines.extend(
+        [
+            "",
+            "IMPORTANT: Evaluate each ticker under this specific strategy.",
+            "- Only argue for setups that match the strategy's archetypes",
+            "- If the ticker does not fit this strategy's playbook, acknowledge it",
+        ]
+    )
+    parts.extend(contract_lines)
+
     parts.append(f"\n{_format_data_availability(tickers, screening, charts, sentiments)}")
     parts.append(f"\n## LIVE MARKET DATA (real-time)\n{_format_live_quotes(live_quotes, tickers)}")
 
@@ -973,23 +985,35 @@ def build_judge_prompt(
     """
     rp = config.risk_params
     parts = [
-        f"Produce final recommendations for: {', '.join(tickers)}",
+        f"Produce EXACTLY {len(tickers)} recommendations, one for each ticker: "
+        f"{', '.join(tickers)}",
         "",
         "You are receiving THREE INDEPENDENT analysis reports. The analysts did "
         "NOT communicate with each other. Assess all evidence on its merits.",
     ]
 
-    # Strategy identity — gives the judge awareness of the strategy archetype
-    strategy_lines = ["\n## STRATEGY CONTEXT"]
+    # Strategy contract — grounds GPT in the active strategy
+    archetypes_str = ", ".join(config.setup_archetypes) if config.setup_archetypes else "any"
+    contract_lines = ["\n## ACTIVE STRATEGY CONTRACT"]
     strategy_label = config.name or "Unnamed"
     if config.strategy_type:
         strategy_label += f" ({config.strategy_type})"
-    strategy_lines.append(f"- Strategy: {strategy_label}")
+    contract_lines.append(f"Strategy: {strategy_label}")
     if config.description:
-        strategy_lines.append(f"- Description: {config.description}")
+        contract_lines.append(f"Description: {config.description}")
     if config.trading_style:
-        strategy_lines.append(f"- Trading style: {config.trading_style}")
-    parts.extend(strategy_lines)
+        contract_lines.append(f"Style: {config.trading_style}")
+    contract_lines.append(f"Setup Archetypes: {archetypes_str}")
+    if config.ta_focus:
+        contract_lines.append(f"TA Focus: {config.ta_focus}")
+    contract_lines.extend(
+        [
+            "",
+            "Only recommend setups matching the archetypes above.",
+            "Label setup_type from the allowed list. If no fit, output NO_TRADE.",
+        ]
+    )
+    parts.extend(contract_lines)
 
     if regime_context:
         parts.append(f"\n{regime_context}")

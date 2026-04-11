@@ -92,9 +92,9 @@ logger = logging.getLogger(__name__)
 STAGE_TIMEOUTS: dict[str, float] = {
     "fmp": 90.0,
     "perplexity": 180.0,
-    "gemini": 120.0,
+    "gemini": 240.0,
     "claude": 360.0,
-    "gpt": 360.0,
+    "gpt": 600.0,
     "annotate": 60.0,
 }
 
@@ -117,10 +117,14 @@ def _build_ml_dicts(
     Returns:
         Tuple of (ta_dict, fmp_dict, regime_dict).
     """
+    from ml.feature_mapper import map_snapshot_to_flat_features
+
     ta_dict: dict[str, dict[str, Any]] = {}
     for snap in ta_snapshots:
-        if hasattr(snap, "ticker") and hasattr(snap, "primary"):
-            ta_dict[snap.ticker] = snap.primary.model_dump() if snap.primary else {}
+        if hasattr(snap, "ticker") and hasattr(snap, "primary") and snap.primary:
+            ta_dict[snap.ticker] = map_snapshot_to_flat_features(snap.primary.model_dump())
+        elif hasattr(snap, "ticker"):
+            ta_dict[snap.ticker] = {}
 
     fmp_dict: dict[str, dict[str, Any]] = {}
     if fmp_map:
@@ -226,6 +230,13 @@ async def run_pipeline(
     """
     run_id = run_id or uuid.uuid4().hex
     start = time.perf_counter()
+
+    # Load regime-aware priors if not already loaded
+    from services.prior_service import is_loaded as priors_loaded
+    from services.prior_service import load_prior_table
+
+    if not priors_loaded():
+        load_prior_table()
 
     if manual_tickers:
         manual_tickers = normalize_tickers(manual_tickers)
@@ -950,10 +961,12 @@ async def _run_pipeline(
             )
             logger.exception("GPT stage failed")
 
-    # Track agreement (Gemini + Claude + GPT consensus)
+    # Track agreement (Perplexity + Gemini + Claude — true 3-track consensus)
     for rec in result.recommendations:
         try:
-            rec.track_agreement = _compute_track_agreement(rec, sentiments, charts)
+            rec.track_agreement = _compute_track_agreement(
+                rec, sentiments, charts, screening=result.screening
+            )
         except Exception as exc:
             logger.warning("Track agreement failed for %s: %s", rec.ticker, exc)
 
@@ -980,6 +993,26 @@ async def _run_pipeline(
         for rec in result.recommendations:
             if rec.raw_gpt_confidence is None:
                 rec.raw_gpt_confidence = rec.confidence
+
+        # Clamp confidence by action — GPT often interprets confidence as
+        # "certainty in its verdict" rather than "directional trade conviction."
+        # NO_TRADE should be low (no edge), WATCH moderate (developing setup).
+        _ACTION_CONFIDENCE_CAPS: dict[str, float] = {
+            "NO_TRADE": 0.25,
+            "HOLD": 0.35,
+            "WATCH": 0.55,
+        }
+        for rec in result.recommendations:
+            cap = _ACTION_CONFIDENCE_CAPS.get(rec.action)
+            if cap is not None and rec.confidence > cap:
+                logger.info(
+                    "Clamped %s %s confidence %.2f -> %.2f",
+                    rec.ticker,
+                    rec.action,
+                    rec.confidence,
+                    cap,
+                )
+                rec.confidence = cap
 
     # Confidence calibration (Phase 7)
     if result.recommendations:
@@ -1172,14 +1205,15 @@ async def _run_pipeline(
                 days = half_life / 24
                 rec.entry_valid_window = f"{days:.0f} trading days"
 
-    # Expected value calculation (Phase 8)
+    # Expected value calculation — uses win_probability when available, falls back to confidence
     for rec in result.recommendations:
         if (
             rec.action in ("BUY", "SHORT")
             and rec.risk_reward_ratio is not None
             and rec.risk_reward_ratio > 0
         ):
-            ev = rec.confidence * rec.risk_reward_ratio - (1.0 - rec.confidence)
+            prob = rec.win_probability if rec.win_probability is not None else rec.confidence
+            ev = prob * rec.risk_reward_ratio - (1.0 - prob)
             rec.expected_value = round(ev, 4)
             if ev > 0.3:
                 rec.key_factors.append(f"Positive expected value: {ev:.2f}")
@@ -1523,6 +1557,15 @@ async def _save_recommendations(
             if rec.track_agreement
             else None,
             "expected_value": rec.expected_value,
+            "win_probability": rec.win_probability,
+            "setup_quality_score": rec.setup_quality_score,
+            "llm_conviction": rec.llm_conviction,
+            "prior_base_rate": rec.prior_base_rate,
+            "confidence_v2": rec.confidence_v2,
+            "setup_type": rec.setup_type,
+            "confidence_drivers": json.dumps(rec.confidence_drivers)
+            if rec.confidence_drivers
+            else None,
         }
         for rec in recommendations
     ]
@@ -1695,31 +1738,67 @@ def _aggregate_sector_sentiment(
     return "\n".join(lines)
 
 
+def _derive_perplexity_direction(
+    screening: ScreeningResult | None,
+    ticker: str,
+) -> Literal["bullish", "bearish", "neutral"]:
+    """Derive Perplexity's directional lean from fundamental data heuristics.
+
+    Uses key_highlights vs risk_factors count and revenue growth sign.
+    """
+    if not screening:
+        return "neutral"
+
+    fd = None
+    for t in screening.tickers:
+        if t.ticker == ticker:
+            fd = t
+            break
+    if fd is None:
+        return "neutral"
+
+    highlights = len(fd.key_highlights)
+    risks = len(fd.risk_factors)
+
+    revenue_positive = False
+    if fd.revenue_growth:
+        try:
+            cleaned = fd.revenue_growth.replace("%", "").replace("+", "").strip()
+            revenue_positive = float(cleaned) > 0
+        except ValueError, AttributeError:
+            pass
+
+    if highlights > risks and revenue_positive:
+        return "bullish"
+    if risks > highlights:
+        return "bearish"
+    if highlights > risks:
+        return "bullish"
+
+    return "neutral"
+
+
 def _compute_track_agreement(
     rec: Recommendation,
     sentiments: list[SentimentAnalysis],
     charts: list[ChartAnalysis],
+    screening: ScreeningResult | None = None,
 ) -> TrackAgreement:
-    """Compute multi-track agreement between GPT, Gemini, and Claude for one ticker.
+    """Compute true 3-track agreement: Perplexity + Gemini + Claude.
 
-    Compares the independent Gemini sentiment and Claude chart bias against
-    GPT's final action to measure consensus across the pipeline tracks.
+    All three directions are derived deterministically from upstream data.
+    GPT's action is NOT one of the tracks — it is the consumer of agreement.
 
     Args:
         rec: The GPT recommendation for a single ticker.
         sentiments: All Gemini sentiment analyses from the pipeline run.
         charts: All Claude chart analyses from the pipeline run.
+        screening: Perplexity screening result (may be None).
 
     Returns:
         Populated TrackAgreement with directions, score, and conflict details.
     """
-    gpt_dir: Literal["bullish", "bearish", "neutral"]
-    if rec.action == RecommendationAction.BUY:
-        gpt_dir = "bullish"
-    elif rec.action == RecommendationAction.SHORT:
-        gpt_dir = "bearish"
-    else:
-        gpt_dir = "neutral"
+    perplexity_dir = _derive_perplexity_direction(screening, rec.ticker)
 
     gemini_dir: Literal["bullish", "bearish", "neutral"] = "neutral"
     for sa in sentiments:
@@ -1740,8 +1819,17 @@ def _compute_track_agreement(
                 claude_dir = "bearish"
             break
 
+    gpt_dir: Literal["bullish", "bearish", "neutral"]
+    if rec.action == RecommendationAction.BUY:
+        gpt_dir = "bullish"
+    elif rec.action == RecommendationAction.SHORT:
+        gpt_dir = "bearish"
+    else:
+        gpt_dir = "neutral"
+
     if gpt_dir == "neutral":
         return TrackAgreement(
+            perplexity_direction=perplexity_dir,
             gemini_direction=gemini_dir,
             claude_direction=claude_dir,
             agreement_score=0.5,
@@ -1749,7 +1837,11 @@ def _compute_track_agreement(
 
     aligned: list[str] = []
     dissenting: list[str] = []
-    track_dirs = {"gemini": gemini_dir, "claude": claude_dir}
+    track_dirs = {
+        "perplexity": perplexity_dir,
+        "gemini": gemini_dir,
+        "claude": claude_dir,
+    }
     for name, direction in track_dirs.items():
         if direction == "neutral":
             continue
@@ -1763,6 +1855,7 @@ def _compute_track_agreement(
     conflicts = [f"{name} ({track_dirs[name]}) vs GPT ({gpt_dir})" for name in dissenting]
 
     return TrackAgreement(
+        perplexity_direction=perplexity_dir,
         gemini_direction=gemini_dir,
         claude_direction=claude_dir,
         agreement_score=score,

@@ -50,6 +50,8 @@ from typing import TYPE_CHECKING, Any
 from dotenv import load_dotenv
 
 if TYPE_CHECKING:
+    import pandas as pd
+
     from ml_training.data.storage import ParquetStore
     from ml_training.pipeline.training_loop import TrainingRoundResult
 
@@ -690,6 +692,189 @@ def cmd_retrain_meta(args: argparse.Namespace) -> None:
         cmd_promote(promote_args)
 
 
+def cmd_compute_priors(args: argparse.Namespace) -> None:
+    """Compute empirical base-rate priors grouped by strategy, regime, and signal direction.
+
+    Produces two JSON artefacts next to the datasets directory:
+    - ``prior_table.json`` — per-cell base rates with small-sample fallback
+    - ``booster_magnitudes.json`` — conditional lift estimates for key features
+
+    Args:
+        args: CLI namespace with ``data_dir``.
+    """
+    import pandas as pd
+
+    from ml_training.data.storage import ParquetStore
+
+    store = ParquetStore(Path(args.data_dir))
+    strategy_names = store.list_strategy_datasets()
+
+    if not strategy_names:
+        logger.warning("No per-strategy datasets found. Run build-dataset first.")
+        print("No per-strategy datasets found. Run build-dataset first.")
+        return
+
+    frames: list[pd.DataFrame] = []
+    for name in strategy_names:
+        df = store.load_dataset(f"{name}_features")
+        if not df.empty:
+            frames.append(df)
+            logger.debug("Loaded %s: %d rows", name, len(df))
+
+    if not frames:
+        print("All strategy datasets are empty. Nothing to compute.")
+        return
+
+    combined = pd.concat(frames, ignore_index=True)
+    logger.info("Combined %d strategy datasets -> %d total rows", len(frames), len(combined))
+
+    target_col = "triple_barrier_label"
+    group_cols = ["strategy_type", "market_regime", "primary_signal"]
+
+    for col in [target_col, *group_cols]:
+        if col not in combined.columns:
+            print(
+                f"Required column '{col}' not found in datasets. Available: {list(combined.columns)[:20]}"
+            )
+            return
+
+    global_rate = float(combined[target_col].mean())
+    global_n = len(combined)
+
+    strategy_marginals = (
+        combined.groupby("strategy_type")[target_col]
+        .agg(["mean", "count"])
+        .rename(columns={"mean": "base_rate", "count": "sample_size"})
+    )
+
+    grouped = (
+        combined.groupby(group_cols)[target_col]
+        .agg(["mean", "count"])
+        .rename(columns={"mean": "base_rate", "count": "sample_size"})
+        .reset_index()
+    )
+
+    fallback_strategy = 0
+    fallback_global = 0
+
+    for idx, row in grouped.iterrows():
+        n = row["sample_size"]
+        if n < 10:
+            grouped.at[idx, "base_rate"] = global_rate
+            grouped.at[idx, "sample_size"] = global_n
+            fallback_global += 1
+        elif n < 30:
+            st = row["strategy_type"]
+            if st in strategy_marginals.index:
+                grouped.at[idx, "base_rate"] = strategy_marginals.loc[st, "base_rate"]
+                grouped.at[idx, "sample_size"] = int(strategy_marginals.loc[st, "sample_size"])
+            else:
+                grouped.at[idx, "base_rate"] = global_rate
+                grouped.at[idx, "sample_size"] = global_n
+                fallback_global += 1
+            fallback_strategy += 1
+
+    signal_map = {1: "long", -1: "short", 0: "neutral"}
+    grouped["direction"] = grouped["primary_signal"].map(lambda v: signal_map.get(int(v), str(v)))
+    grouped.rename(columns={"market_regime": "regime"}, inplace=True)
+
+    prior_records = grouped[
+        ["strategy_type", "regime", "direction", "base_rate", "sample_size"]
+    ].to_dict(orient="records")
+    for rec in prior_records:
+        rec["base_rate"] = round(float(rec["base_rate"]), 6)
+        rec["sample_size"] = int(rec["sample_size"])
+
+    out_dir = Path(args.data_dir).resolve().parent
+    prior_path = out_dir / "prior_table.json"
+    prior_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(prior_path, "w") as f:
+        json.dump(prior_records, f, indent=2)
+
+    total_cells = len(grouped)
+    print(f"\nPrior table: {total_cells} cells computed")
+    print(f"  Fallback to strategy marginal: {fallback_strategy}")
+    print(f"  Fallback to global rate:       {fallback_global}")
+    print(f"  Global base rate:              {global_rate:.4f} (n={global_n})")
+    print(f"  Saved -> {prior_path}")
+
+    _compute_booster_magnitudes(combined, target_col, global_rate, out_dir)
+
+
+def _compute_booster_magnitudes(
+    df: pd.DataFrame,
+    target_col: str,
+    global_base_rate: float,
+    out_dir: Path,
+) -> None:
+    """Compute conditional lift for key features and export as JSON.
+
+    For each feature, splits on the median and measures
+    ``P(win | above_median) - global_base_rate``, capped at +/- 0.08.
+
+    Args:
+        df: Combined training dataframe.
+        target_col: Binary target column name.
+        global_base_rate: Overall win rate across all data.
+        out_dir: Directory to write ``booster_magnitudes.json`` into.
+    """
+    import numpy as np
+
+    feature_specs: list[tuple[str, str]] = [
+        ("volume_ratio", "volume_ratio > median"),
+        ("adx", "adx > median"),
+        ("rsi", "rsi > median"),
+        ("momentum_score", "momentum_score > median"),
+        ("trend_alignment", "trend_alignment > median"),
+    ]
+
+    magnitude_cap = 0.08
+    records: list[dict[str, object]] = []
+
+    for feat, condition_label in feature_specs:
+        if feat not in df.columns:
+            logger.debug("Feature '%s' not in dataset, skipping booster calc", feat)
+            continue
+
+        col = df[feat].dropna()
+        if len(col) < 30:
+            continue
+
+        threshold = float(np.median(col))
+        mask_strong = df[feat] > threshold
+        mask_weak = df[feat] <= threshold
+
+        strong_subset = df.loc[mask_strong, target_col]
+        weak_subset = df.loc[mask_weak, target_col]
+
+        if len(strong_subset) < 10 or len(weak_subset) < 10:
+            continue
+
+        strong_rate = float(strong_subset.mean())
+        raw_lift = strong_rate - global_base_rate
+        capped = max(-magnitude_cap, min(magnitude_cap, raw_lift))
+
+        records.append(
+            {
+                "feature": feat,
+                "strong_condition": condition_label,
+                "estimated_lift": round(capped, 6),
+                "capped_at": magnitude_cap if abs(raw_lift) > magnitude_cap else None,
+            }
+        )
+
+    booster_path = out_dir / "booster_magnitudes.json"
+    with open(booster_path, "w") as f:
+        json.dump(records, f, indent=2)
+
+    print(f"\nBooster magnitudes: {len(records)} features analysed")
+    for rec in records:
+        cap_tag = " (capped)" if rec["capped_at"] else ""
+        print(f"  {rec['feature']}: lift={rec['estimated_lift']:+.4f}{cap_tag}")
+    print(f"  Saved -> {booster_path}")
+
+
 def cmd_resolve_shadow(args: argparse.Namespace) -> None:
     """Resolve shadow prediction outcomes from Supabase against local price data."""
     import pandas as pd
@@ -974,6 +1159,14 @@ def main() -> None:
         "--auto-promote", action="store_true", help="Auto-promote passing models"
     )
     p_retrain.set_defaults(func=cmd_retrain_meta)
+
+    # compute-priors
+    p_priors = sub.add_parser(
+        "compute-priors",
+        help="Compute regime-aware base rate priors from training data",
+    )
+    p_priors.add_argument("--data-dir", default="data/raw", help="Root data directory")
+    p_priors.set_defaults(func=cmd_compute_priors)
 
     # resolve-shadow
     p_shadow = sub.add_parser("resolve-shadow", help="Resolve shadow prediction outcomes")

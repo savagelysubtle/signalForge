@@ -54,22 +54,37 @@ class TrackAgreement(BaseModel):
 
 
 class ConfidenceBreakdown(BaseModel):
-    """Structured confidence decomposition into weighted sub-components.
+    """Structured confidence decomposition for the v2 confidence engine.
 
-    Each component contributes a portion of the total 0.0-1.0 score:
-      track_agreement:    0.00-0.30  (agreement across Perplexity/Gemini/Claude)
-      technical_strength: 0.00-0.20  (momentum score + ADX)
-      trend_alignment:    0.00-0.20  (multi-timeframe agreement)
-      historical_pattern: 0.00-0.20  (similar trade outcome history)
-      regime_fit:         0.00-0.10  (strategy-regime compatibility)
+    Replaces the fixed-weight sub-component model with a prior→boosters→ML
+    architecture. Each field represents a distinct contributor to the final
+    ``win_probability``.
     """
 
-    track_agreement: float = Field(default=0.0, ge=0.0, le=0.3)
-    technical_strength: float = Field(default=0.0, ge=0.0, le=0.2)
-    trend_alignment: float = Field(default=0.0, ge=0.0, le=0.2)
-    historical_pattern: float = Field(default=0.0, ge=0.0, le=0.2)
-    regime_fit: float = Field(default=0.0, ge=0.0, le=0.1)
-    total: float = Field(default=0.0, ge=0.0, le=1.0)
+    prior_base_rate: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Starting probability from strategy/regime lookup table",
+    )
+    setup_quality_score: float = Field(
+        default=0.0,
+        ge=-0.15,
+        le=0.15,
+        description="Net effect of positive/negative evidence boosters",
+    )
+    ml_agreement: Literal["agree", "disagree", "neutral", "unavailable"] = "unavailable"
+    llm_conviction: Literal["low", "medium", "high"] | None = None
+    win_probability: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Final calibrated probability used for EV and sizing",
+    )
+    confidence_drivers: list[str] = Field(
+        default_factory=list,
+        description="Top 2-3 factors that moved the number, e.g. 'Strong RVOL (+6%)'",
+    )
     penalties_applied: list[str] = Field(default_factory=list)
 
 
@@ -385,6 +400,50 @@ class DebateCase(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0, default=0.5)
 
 
+class GptJudgeRecommendation(BaseModel):
+    """Slim GPT judge output schema — only fields the LLM should produce.
+
+    Backend-computed fields (ML gate, confidence v2, signal freshness, etc.)
+    are NOT included here. After parsing, these are mapped to the full
+    ``Recommendation`` model.
+    """
+
+    ticker: str
+
+    @field_validator("ticker", mode="before")
+    @classmethod
+    def _clean_ticker(cls, v: str) -> str:
+        return normalize_ticker(v) if isinstance(v, str) else v
+
+    action: RecommendationAction
+    confidence: float = Field(ge=0.0, le=1.0)
+    llm_conviction: Literal["low", "medium", "high"] | None = None
+    setup_type: str | None = None
+    entry_price: float | None = None
+    stop_loss: float | None = None
+    take_profit: float | None = None
+    position_size_pct: float = 0.0
+    risk_reward_ratio: float | None = None
+    holding_period: str = ""
+    bull_case: DebateCase | None = None
+    bear_case: DebateCase | None = None
+    judge_reasoning: str = ""
+    key_factors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    track_agreement: TrackAgreement | None = None
+    confidence_adjustment: str = ""
+    entry_trigger: str | None = None
+    scaling_plan: str | None = None
+    invalidation_conditions: list[str] = Field(default_factory=list)
+    entry_valid_window: str = ""
+
+
+class GptJudgeRecommendationList(BaseModel):
+    """Wrapper for batch judge output from GPT (slim schema)."""
+
+    recommendations: list[GptJudgeRecommendation]
+
+
 class Recommendation(BaseModel):
     """Final judge recommendation for a single ticker."""
 
@@ -466,6 +525,42 @@ class Recommendation(BaseModel):
     expected_value: float | None = Field(
         default=None,
         description="Expected value per unit risk: confidence * R:R - (1 - confidence)",
+    )
+
+    # Confidence Engine v2 fields
+    win_probability: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Calibrated probability from prior + boosters + ML blend",
+    )
+    setup_quality_score: float | None = Field(
+        default=None,
+        description="Net effect of positive/negative evidence boosters",
+    )
+    llm_conviction: Literal["low", "medium", "high"] | None = Field(
+        default=None,
+        description="GPT's ordinal conviction bucket (replaces numeric authority)",
+    )
+    prior_base_rate: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Starting probability from strategy/regime prior table",
+    )
+    confidence_v2: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Shadow confidence from v2 engine (for validation before cutover)",
+    )
+    setup_type: str | None = Field(
+        default=None,
+        description="Setup archetype label from strategy's allowed list",
+    )
+    confidence_drivers: list[str] = Field(
+        default_factory=list,
+        description="Top factors that moved the number, e.g. 'Strong RVOL (+6%)'",
     )
 
 
@@ -759,6 +854,9 @@ class StrategyConfig(BaseModel):
 
     # Signal freshness: how long (hours) a signal from this strategy stays actionable
     signal_half_life_hours: int = 48
+
+    # Allowed setup types for this strategy (WATCH/BUY/SHORT must match one)
+    setup_archetypes: list[str] = Field(default_factory=list)
 
     #: Primary listing currency for equities — drives FMP ``country`` / ``exchange``
     #: for non-crypto screeners (USD → US markets, CAD → Canada / TSX).

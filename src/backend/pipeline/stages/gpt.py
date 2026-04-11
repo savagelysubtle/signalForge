@@ -36,9 +36,9 @@ from pipeline.schemas import (
     ChartAnalysis,
     DebateCase,
     DebateCaseList,
+    GptJudgeRecommendationList,
     MultiTimeframeTechnical,
     Recommendation,
-    RecommendationList,
     RiskAssessment,
     ScreeningResult,
     SentimentAnalysis,
@@ -51,6 +51,8 @@ from services.keyring_service import get_api_key
 logger = logging.getLogger(__name__)
 
 _semaphore = asyncio.Semaphore(3)
+_GPT_REASONING_EFFORT = "high"
+_GPT_MAX_COMPLETION_TOKENS = 16_384
 
 
 def _openai_strict_schema(model: type[BaseModel]) -> dict[str, Any]:
@@ -100,9 +102,9 @@ _DEBATE_RESPONSE_FORMAT: dict[str, Any] = {
 _RECOMMENDATION_RESPONSE_FORMAT: dict[str, Any] = {
     "type": "json_schema",
     "json_schema": {
-        "name": "RecommendationList",
+        "name": "GptJudgeRecommendationList",
         "strict": True,
-        "schema": _openai_strict_schema(RecommendationList),
+        "schema": _openai_strict_schema(GptJudgeRecommendationList),
     },
 }
 
@@ -114,7 +116,7 @@ def _get_client() -> AsyncOpenAI:
         raise RuntimeError(
             "OpenAI API key not configured. Set OPENAI_API_KEY in .env (see .env.example)."
         )
-    return AsyncOpenAI(api_key=api_key)
+    return AsyncOpenAI(api_key=api_key, timeout=300.0)
 
 
 @with_validation_retry(schema=DebateCaseList, max_retries=2, provider="openai")
@@ -167,7 +169,7 @@ async def _call_gpt_bear(
     )
 
 
-@with_validation_retry(schema=RecommendationList, max_retries=2, provider="openai")
+@with_validation_retry(schema=GptJudgeRecommendationList, max_retries=2, provider="openai")
 async def _call_gpt_judge(
     system_prompt: str,
     user_prompt: str,
@@ -188,7 +190,6 @@ async def _call_gpt_judge(
         system_prompt,
         user_prompt,
         error_context=error_context,
-        temperature=0.2,
         response_format=_RECOMMENDATION_RESPONSE_FORMAT,
     )
 
@@ -199,7 +200,6 @@ async def _call_gpt(
     user_prompt: str,
     *,
     error_context: str = "",
-    temperature: float = 0.2,
     response_format: dict[str, Any] | None = None,
 ) -> str:
     """Make a single GPT API call.
@@ -208,7 +208,6 @@ async def _call_gpt(
         system_prompt: System instruction for the role.
         user_prompt: User message with all data.
         error_context: Appended on retries for self-correction.
-        temperature: Sampling temperature for GPT completions.
         response_format: Optional strict JSON schema for structured outputs.
 
     Returns:
@@ -226,8 +225,8 @@ async def _call_gpt(
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": full_user_prompt},
         ],
-        "temperature": temperature,
-        "max_completion_tokens": 8192,
+        "reasoning_effort": _GPT_REASONING_EFFORT,
+        "max_completion_tokens": _GPT_MAX_COMPLETION_TOKENS,
     }
     if response_format:
         api_kwargs["response_format"] = response_format
@@ -352,6 +351,21 @@ async def run_debate(
                     rec.ticker,
                     ", ".join(missing),
                 )
+
+    # Backfill any tickers GPT skipped with NO_TRADE
+    returned_tickers = {rec.ticker for rec in recommendations}
+    for ticker in tickers:
+        if ticker not in returned_tickers:
+            logger.warning("GPT skipped %s — backfilling as NO_TRADE", ticker)
+            recommendations.append(
+                Recommendation(
+                    ticker=ticker,
+                    action="NO_TRADE",
+                    confidence=0.10,
+                    judge_reasoning="GPT did not produce a recommendation for this ticker.",
+                    key_factors=["Skipped by GPT synthesis"],
+                )
+            )
 
     logger.info(
         "GPT debate: %d recommendations for %d tickers (debate=%s, ml_escalation=%s)",
@@ -556,7 +570,10 @@ async def _run_judge_phase(
             metadata["status"] = "success"
             metadata["raw_response"] = result.model_dump_json()
             metadata["retry_count"] = getattr(result, "_retry_count", 0)
-            return result.recommendations, metadata
+            recommendations = [
+                Recommendation(**gpt_rec.model_dump()) for gpt_rec in result.recommendations
+            ]
+            return recommendations, metadata
 
         metadata["status"] = "validation_failed"
         return [], metadata

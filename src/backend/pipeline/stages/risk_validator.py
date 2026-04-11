@@ -280,6 +280,42 @@ def validate_risks(
                         f"(risk_score={ra.risk_score:.2f})"
                     )
 
+        # --- WATCH completeness enforcement ---
+        if rec.action == "WATCH":
+            watch_issues: list[str] = []
+            if not rec.entry_trigger:
+                watch_issues.append("missing entry_trigger")
+            if not rec.entry_price:
+                watch_issues.append("missing entry_price (trigger level)")
+            if not rec.invalidation_conditions:
+                watch_issues.append("missing invalidation_conditions")
+            if not rec.entry_valid_window:
+                watch_issues.append("missing entry_valid_window")
+
+            if watch_issues:
+                violations.append(
+                    f"Vague WATCH — overriding to NO_TRADE: {', '.join(watch_issues)}"
+                )
+                logger.info(
+                    "Override WATCH→NO_TRADE for %s: %s",
+                    rec.ticker,
+                    ", ".join(watch_issues),
+                )
+                rec.action = RecommendationAction.NO_TRADE
+
+        # --- Setup archetype enforcement ---
+        archetypes = config.setup_archetypes
+        if (
+            archetypes
+            and rec.setup_type
+            and rec.action in ("BUY", "SHORT", "WATCH")
+            and rec.setup_type not in archetypes
+        ):
+            violations.append(
+                f"Setup type '{rec.setup_type}' not in strategy archetypes "
+                f"({', '.join(archetypes[:3])}...) -- flagged"
+            )
+
         rec.risk_violations = violations
         rec.risk_approved = len(violations) == 0
 
@@ -292,11 +328,13 @@ def validate_risks(
 
     total_flagged = sum(1 for r in recommendations if not r.risk_approved)
     overridden = sum(
-        1 for r in recommendations if r.action == "WATCH" and r.raw_gpt_confidence is not None
+        1
+        for r in recommendations
+        if r.action in ("WATCH", "NO_TRADE") and r.raw_gpt_confidence is not None
     )
     if total_flagged:
         logger.info(
-            "Risk validation: %d/%d flagged, %d overridden to WATCH",
+            "Risk validation: %d/%d flagged, %d overridden to WATCH/NO_TRADE",
             total_flagged,
             len(recommendations),
             overridden,

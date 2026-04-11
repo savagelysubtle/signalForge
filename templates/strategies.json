@@ -36,6 +36,12 @@
     "trading_style": "Day to swing trader, 2-5 day holds",
     "strategy_type": "swing",
     "signal_half_life_hours": 48,
+    "setup_archetypes": [
+      "momentum_breakout_long",
+      "52wk_high_continuation",
+      "volume_surge_breakout",
+      "trend_acceleration"
+    ],
     "recommended": false,
     "risk_params": {
       "max_position_pct": 5.0,
@@ -114,6 +120,12 @@
     "trading_style": "Swing trader, 1-4 week holds, trend following",
     "strategy_type": "swing",
     "signal_half_life_hours": 48,
+    "setup_archetypes": [
+      "golden_cross_breakout",
+      "ema_stack_continuation",
+      "pullback_to_50ema_support",
+      "macd_momentum_confirmation"
+    ],
     "recommended": true,
     "risk_params": {
       "max_position_pct": 6.0,
@@ -191,6 +203,12 @@
     "trading_style": "Swing trend continuation, 5-20 day holds",
     "strategy_type": "swing",
     "signal_half_life_hours": 48,
+    "setup_archetypes": [
+      "ema21_pullback_bounce",
+      "trend_continuation_hold",
+      "higher_low_reentry",
+      "volume_dry_up_reload"
+    ],
     "recommended": false,
     "risk_params": {
       "max_position_pct": 6.0,
@@ -270,6 +288,12 @@
     "trading_style": "Swing trader, 5-15 day holds targeting band expansion",
     "strategy_type": "swing",
     "signal_half_life_hours": 48,
+    "setup_archetypes": [
+      "bb_squeeze_breakout_long",
+      "bb_squeeze_breakdown_short",
+      "volatility_expansion_entry",
+      "coil_release_momentum"
+    ],
     "recommended": false,
     "risk_params": {
       "max_position_pct": 5.0,
@@ -345,6 +369,13 @@
     "trading_style": "Swing trader, 3-7 day holds",
     "strategy_type": "mean_reversion",
     "signal_half_life_hours": 48,
+    "setup_archetypes": [
+      "oversold_bounce_long",
+      "rsi_divergence_reversal",
+      "bb_lower_band_reclaim",
+      "support_hold_reversal",
+      "exhaustion_reversal_short"
+    ],
     "recommended": true,
     "risk_params": {
       "max_position_pct": 4.0,
@@ -418,6 +449,12 @@
     "trading_style": "Position trader, 2-8 week holds",
     "strategy_type": "value",
     "signal_half_life_hours": 120,
+    "setup_archetypes": [
+      "value_accumulation_long",
+      "insider_buying_support",
+      "discount_to_intrinsic_value",
+      "fundamental_turnaround"
+    ],
     "recommended": true,
     "risk_params": {
       "max_position_pct": 8.0,
@@ -495,6 +532,12 @@
     "trading_style": "Event-driven, 1-5 day holds around earnings",
     "strategy_type": "event",
     "signal_half_life_hours": 48,
+    "setup_archetypes": [
+      "pre_earnings_momentum",
+      "earnings_squeeze_breakout",
+      "catalyst_anticipation_long",
+      "post_guidance_continuation"
+    ],
     "recommended": true,
     "risk_params": {
       "max_position_pct": 3.0,
@@ -565,6 +608,12 @@
     "trading_style": "Intraday scalper, 15 min to 2 hour holds",
     "strategy_type": "intraday",
     "signal_half_life_hours": 3,
+    "setup_archetypes": [
+      "vwap_reclaim_scalp_long",
+      "momentum_surge_scalp",
+      "gap_and_go_continuation",
+      "catalyst_momentum_scalp"
+    ],
     "recommended": false,
     "risk_params": {
       "max_position_pct": 3.0,
@@ -634,6 +683,12 @@
     "trading_style": "Intraday momentum, 15-min to 2-hour holds",
     "strategy_type": "intraday",
     "signal_half_life_hours": 3,
+    "setup_archetypes": [
+      "ema_stack_breakout_long",
+      "ema_stack_breakdown_short",
+      "vwap_hold_momentum",
+      "pullback_to_9ema_reload"
+    ],
     "recommended": true,
     "risk_params": {
       "max_position_pct": 3.0,
@@ -707,6 +762,12 @@
     "trading_style": "Intraday breakout, 30-min to 3-hour holds",
     "strategy_type": "intraday",
     "signal_half_life_hours": 3,
+    "setup_archetypes": [
+      "orb_breakout_long",
+      "orb_breakdown_short",
+      "orb_retest_continuation",
+      "failed_orb_reversal"
+    ],
     "recommended": false,
     "risk_params": {
       "max_position_pct": 3.0,
@@ -778,6 +839,12 @@
     "trading_style": "Intraday VWAP scalper, 15-min to 90-min holds",
     "strategy_type": "intraday",
     "signal_half_life_hours": 2,
+    "setup_archetypes": [
+      "vwap_bounce_long",
+      "vwap_rejection_short",
+      "vwap_hold_continuation",
+      "vwap_reclaim_reversal"
+    ],
     "recommended": false,
     "risk_params": {
       "max_position_pct": 2.5,
@@ -845,6 +912,12 @@
     "trading_style": "Crypto swing trader, 3-14 day holds",
     "strategy_type": "crypto_swing",
     "signal_half_life_hours": 24,
+    "setup_archetypes": [
+      "crypto_golden_cross_swing",
+      "crypto_breakout_momentum",
+      "crypto_pullback_to_ema",
+      "crypto_supertrend_flip"
+    ],
     "recommended": true,
     "risk_params": {
       "max_position_pct": 3.0,
@@ -909,6 +982,12 @@
     "trading_style": "Crypto intraday scalper, 15 min to 2 hour holds",
     "strategy_type": "crypto_intraday",
     "signal_half_life_hours": 4,
+    "setup_archetypes": [
+      "crypto_vwap_bounce_scalp",
+      "crypto_momentum_surge",
+      "crypto_williams_oversold_bounce",
+      "crypto_supertrend_continuation"
+    ],
     "recommended": true,
     "risk_params": {
       "max_position_pct": 2.0,
