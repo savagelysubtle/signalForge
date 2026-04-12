@@ -1542,6 +1542,7 @@ async def _save_recommendations(
             "signal_generated_at": rec.signal_generated_at,
             "price_at_signal": rec.price_at_signal,
             "entry_valid_window": rec.entry_valid_window,
+            "confidence_label": rec.confidence_label,
             "raw_gpt_confidence": rec.raw_gpt_confidence,
             "raw_gpt_position_size_pct": rec.raw_gpt_position_size_pct,
             "ml_probability": rec.ml_probability,

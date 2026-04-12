@@ -34,6 +34,7 @@ from pipeline.prompts.gpt_debate import (
 )
 from pipeline.schemas import (
     ChartAnalysis,
+    ConfidenceLabel,
     DebateCase,
     DebateCaseList,
     GptJudgeRecommendationList,
@@ -362,6 +363,7 @@ async def run_debate(
                     ticker=ticker,
                     action="NO_TRADE",
                     confidence=0.10,
+                    confidence_label=ConfidenceLabel.C1_VERY_LOW,
                     judge_reasoning="GPT did not produce a recommendation for this ticker.",
                     key_factors=["Skipped by GPT synthesis"],
                 )

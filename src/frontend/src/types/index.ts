@@ -120,6 +120,65 @@ export interface SentimentAnalysis {
 }
 
 // ---------------------------------------------------------------------------
+// Confidence Label (categorical LLM output → deterministic numeric mapping)
+// ---------------------------------------------------------------------------
+
+export type ConfidenceLabel =
+  | "c0_no_confidence"
+  | "c1_very_low"
+  | "c2_low"
+  | "c3_slightly_low"
+  | "c4_lean_low"
+  | "c5_neutral"
+  | "c6_lean_high"
+  | "c7_slightly_high"
+  | "c8_high"
+  | "c9_very_high"
+  | "c10_max_confidence";
+
+export const CONFIDENCE_LABEL_MAP: Record<ConfidenceLabel, number> = {
+  c0_no_confidence: 0,
+  c1_very_low: 10,
+  c2_low: 20,
+  c3_slightly_low: 30,
+  c4_lean_low: 40,
+  c5_neutral: 50,
+  c6_lean_high: 60,
+  c7_slightly_high: 70,
+  c8_high: 80,
+  c9_very_high: 90,
+  c10_max_confidence: 100,
+} as const;
+
+export const CONFIDENCE_LABEL_DISPLAY: Record<ConfidenceLabel, string> = {
+  c0_no_confidence: "No Confidence",
+  c1_very_low: "Very Low",
+  c2_low: "Low",
+  c3_slightly_low: "Slightly Low",
+  c4_lean_low: "Lean Low",
+  c5_neutral: "Neutral",
+  c6_lean_high: "Lean High",
+  c7_slightly_high: "Slightly High",
+  c8_high: "High",
+  c9_very_high: "Very High",
+  c10_max_confidence: "Max Confidence",
+} as const;
+
+/**
+ * Convert a confidence label to its display percentage (0-100).
+ * Falls back to rounding the raw numeric confidence if label is absent.
+ */
+export function confidenceLabelToPercent(
+  label: ConfidenceLabel | null | undefined,
+  fallbackFloat?: number,
+): number {
+  if (label && label in CONFIDENCE_LABEL_MAP) {
+    return CONFIDENCE_LABEL_MAP[label];
+  }
+  return fallbackFloat !== undefined ? Math.round(fallbackFloat * 100) : 0;
+}
+
+// ---------------------------------------------------------------------------
 // Recommendation Action + Track Agreement
 // ---------------------------------------------------------------------------
 
@@ -174,14 +233,16 @@ export interface DebateCase {
   key_arguments: string[];
   strongest_signal: string;
   weakest_counter: string;
-  confidence: number; // 0.0 to 1.0
+  confidence_label: ConfidenceLabel;
+  confidence: number; // derived from confidence_label via CONFIDENCE_LABEL_MAP
 }
 
 export interface Recommendation {
   id: string;
   ticker: string;
   action: RecommendationAction;
-  confidence: number; // 0.0 to 1.0
+  confidence: number; // 0.0 to 1.0 (post-calibration numeric value)
+  confidence_label: ConfidenceLabel | null; // categorical GPT output (before calibration)
   entry_price: number | null;
   stop_loss: number | null;
   take_profit: number | null;

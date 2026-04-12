@@ -422,6 +422,7 @@ async def _load_recommendations(
                 else [],
                 pre_gpt_ml_probability=r.get("pre_gpt_ml_probability"),
                 pre_gpt_ml_direction=r.get("pre_gpt_ml_direction"),
+                confidence_label=r.get("confidence_label"),
             )
         )
     return recs

@@ -26,9 +26,9 @@ from utils.hashing import prompt_hash
 if TYPE_CHECKING:
     from services.fmp_service import FmpEnrichedStock, FmpQuote
 
-BULL_PROMPT_VERSION = "v6"
-BEAR_PROMPT_VERSION = "v6"
-JUDGE_PROMPT_VERSION = "v20"
+BULL_PROMPT_VERSION = "v7"
+BEAR_PROMPT_VERSION = "v7"
+JUDGE_PROMPT_VERSION = "v21"
 
 _BIAS_SCORE: dict[str, int] = {
     "strongly_bullish": 2,
@@ -68,10 +68,21 @@ Return a JSON object with this exact structure:
       "key_arguments": ["<argument 1>", "<argument 2>", ...],
       "strongest_signal": "<the single most compelling bullish signal>",
       "weakest_counter": "<the bear argument you find hardest to dismiss>",
-      "confidence": <float from 0.0 to 1.0>
+      "confidence_label": "<one of the allowed labels below>",
+      "confidence": <float — will be auto-derived, set to 0.5 as placeholder>
     }
   ]
 }
+
+confidence_label must be EXACTLY one of these ordered labels:
+  "c0_no_confidence", "c1_very_low", "c2_low", "c3_slightly_low",
+  "c4_lean_low", "c5_neutral", "c6_lean_high", "c7_slightly_high",
+  "c8_high", "c9_very_high", "c10_max_confidence"
+
+Choose the label that best matches your conviction in the setup:
+- c8_high or above: Very confident in this setup
+- c6_lean_high to c7_slightly_high: Moderate conviction in this setup
+- c5_neutral or below: Not confident in this setup
 
 Guidelines:
 - Provide at least 3 key arguments per ticker, drawing from the most bullish
@@ -80,8 +91,6 @@ Guidelines:
   from the track data. Quote numbers, not vague claims.
 - When tracks disagree, find the strongest bullish evidence and argue it
 - The strongest_signal should name which track it comes from and cite numbers
-- Confidence reflects how strong the overall bull case is across tracks
-  (0.7+ = compelling, 0.5-0.7 = moderate, <0.5 = weak)
 - Note when your bullish reading requires ignoring warnings from other tracks
 - If INDEPENDENT ML PRIOR (Track D) appears: it uses only numerical TA, FMP, and
   regime - not LLM narrative. Treat it as a fourth independent signal. You may
@@ -105,10 +114,21 @@ Return a JSON object with this exact structure:
       "key_arguments": ["<argument 1>", "<argument 2>", ...],
       "strongest_signal": "<the single most compelling bearish signal>",
       "weakest_counter": "<the bull argument you find hardest to dismiss>",
-      "confidence": <float from 0.0 to 1.0>
+      "confidence_label": "<one of the allowed labels below>",
+      "confidence": <float — will be auto-derived, set to 0.5 as placeholder>
     }
   ]
 }
+
+confidence_label must be EXACTLY one of these ordered labels:
+  "c0_no_confidence", "c1_very_low", "c2_low", "c3_slightly_low",
+  "c4_lean_low", "c5_neutral", "c6_lean_high", "c7_slightly_high",
+  "c8_high", "c9_very_high", "c10_max_confidence"
+
+Choose the label that best matches your conviction in the bear case:
+- c8_high or above: Tracks converge bearishly with compelling risk evidence
+- c6_lean_high to c7_slightly_high: Moderate bear case with some caveats
+- c5_neutral or below: Weak bear case, bullish signals dominate
 
 Guidelines:
 - Provide at least 3 key arguments per ticker, drawing from the most bearish
@@ -117,8 +137,6 @@ Guidelines:
   from the track data. Quote numbers, not vague claims.
 - When tracks disagree, find the strongest bearish evidence and argue it
 - The strongest_signal should name which track it comes from and cite numbers
-- Confidence reflects how strong the overall bear case is across tracks
-  (0.7+ = compelling risk, 0.5-0.7 = moderate, <0.5 = weak)
 - Note when your bearish reading requires ignoring bullish signals from other tracks
 - If INDEPENDENT ML PRIOR (Track D) appears: it uses only numerical TA, FMP, and
   regime - not LLM narrative. Treat it as a fourth independent signal. You may
@@ -147,7 +165,8 @@ Return a JSON object with this exact structure:
     {
       "ticker": "<SYMBOL>",
       "action": "BUY" | "SHORT" | "HOLD" | "NO_TRADE" | "WATCH",
-      "confidence": <float from 0.0 to 1.0>,
+      "confidence_label": "<one of the allowed labels below>",
+      "confidence": <float — auto-derived from label, set to 0.5 as placeholder>,
       "llm_conviction": "low" | "medium" | "high",
       "setup_type": "<setup archetype label, e.g. 'vwap_reclaim_long', 'ema_pullback_continuation', 'breakout_retest'>",
       "entry_price": <float or null>,
@@ -162,7 +181,8 @@ Return a JSON object with this exact structure:
         "key_arguments": ["..."],
         "strongest_signal": "...",
         "weakest_counter": "...",
-        "confidence": <float>
+        "confidence_label": "<label>",
+        "confidence": 0.5
       },
       "bear_case": {
         "ticker": "<SYMBOL>",
@@ -170,7 +190,8 @@ Return a JSON object with this exact structure:
         "key_arguments": ["..."],
         "strongest_signal": "...",
         "weakest_counter": "...",
-        "confidence": <float>
+        "confidence_label": "<label>",
+        "confidence": 0.5
       },
       "judge_reasoning": "<2-4 sentence synthesis explaining your decision>",
       "key_factors": ["<factor 1>", "<factor 2>", ...],
@@ -271,24 +292,27 @@ deterministic risk screener flagged this ticker as high-risk. You MAY override
 this if the qualitative evidence is compelling, but you MUST acknowledge the
 flag and explain your reasoning.
 
-Confidence & conviction:
-Your confidence value is a rough starting estimate only. The final probability is
-computed deterministically by the backend using regime priors, evidence boosters,
-and ML agreement. Do NOT treat your confidence as the final word — focus on the
-qualitative conviction instead.
+confidence_label must be EXACTLY one of these ordered labels:
+  "c0_no_confidence", "c1_very_low", "c2_low", "c3_slightly_low",
+  "c4_lean_low", "c5_neutral", "c6_lean_high", "c7_slightly_high",
+  "c8_high", "c9_very_high", "c10_max_confidence"
+
+The backend maps these labels to numeric values deterministically — you do NOT
+choose a float. The final probability is computed by the backend using regime
+priors, evidence boosters, and ML agreement. Focus on picking the label that
+best matches your qualitative conviction.
 
 llm_conviction guidance:
 - "high": Tracks converge, setup is textbook, risk/reward is compelling
 - "medium": Most evidence supports the thesis with minor caveats
 - "low": Thesis is plausible but material uncertainty remains
 
-CRITICAL — confidence means DIRECTIONAL TRADE CONVICTION, not certainty in your
-verdict. A high-confidence NO_TRADE is a contradiction. Use this scale:
-- BUY/SHORT 0.60-0.85: Strong directional edge with supporting evidence
-- BUY/SHORT 0.45-0.60: Moderate edge, some caveats
-- WATCH 0.30-0.50: Setup developing but not actionable yet
-- NO_TRADE 0.05-0.25: No directional edge visible
-- HOLD 0.20-0.35: Existing position, mixed signals
+CRITICAL — confidence_label means DIRECTIONAL TRADE CONVICTION, not certainty
+in your verdict. A high-confidence NO_TRADE is a contradiction. Use this scale:
+- BUY/SHORT c6_lean_high to c9_very_high: Directional edge with evidence
+- WATCH c3_slightly_low to c5_neutral: Setup developing, not actionable yet
+- NO_TRADE c0_no_confidence to c2_low: No directional edge visible
+- HOLD c2_low to c4_lean_low: Existing position, mixed signals
 
 setup_type: Label each recommendation with a descriptive setup archetype string
 (e.g. "vwap_reclaim_long", "ema_pullback_continuation", "breakout_retest",
@@ -1099,7 +1123,7 @@ def build_judge_prompt(
             if bc:
                 args = "\n".join(f"  - {a}" for a in bc.key_arguments)
                 bull_parts.append(
-                    f"\n### {ticker} (confidence: {bc.confidence:.2f})\n"
+                    f"\n### {ticker} (conviction: {bc.confidence_label})\n"
                     f"Arguments:\n{args}\n"
                     f"Strongest signal: {bc.strongest_signal}\n"
                     f"Weakest counter: {bc.weakest_counter}"
@@ -1121,7 +1145,7 @@ def build_judge_prompt(
             if bc:
                 args = "\n".join(f"  - {a}" for a in bc.key_arguments)
                 bear_parts.append(
-                    f"\n### {ticker} (confidence: {bc.confidence:.2f})\n"
+                    f"\n### {ticker} (conviction: {bc.confidence_label})\n"
                     f"Arguments:\n{args}\n"
                     f"Strongest signal: {bc.strongest_signal}\n"
                     f"Weakest counter: {bc.weakest_counter}"
