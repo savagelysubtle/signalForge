@@ -30,6 +30,64 @@ class RecommendationAction(StrEnum):
 
 
 # ---------------------------------------------------------------------------
+# Confidence Label Enum (replaces raw float from LLM output)
+# ---------------------------------------------------------------------------
+
+
+class ConfidenceLabel(StrEnum):
+    """Ordered confidence labels for LLM output.
+
+    LLMs produce one of these categorical labels instead of a raw float.
+    The ``CONFIDENCE_LABEL_MAP`` below converts to a deterministic numeric
+    value owned by the application, not the model.
+    """
+
+    C0_NO_CONFIDENCE = "c0_no_confidence"
+    C1_VERY_LOW = "c1_very_low"
+    C2_LOW = "c2_low"
+    C3_SLIGHTLY_LOW = "c3_slightly_low"
+    C4_LEAN_LOW = "c4_lean_low"
+    C5_NEUTRAL = "c5_neutral"
+    C6_LEAN_HIGH = "c6_lean_high"
+    C7_SLIGHTLY_HIGH = "c7_slightly_high"
+    C8_HIGH = "c8_high"
+    C9_VERY_HIGH = "c9_very_high"
+    C10_MAX_CONFIDENCE = "c10_max_confidence"
+
+
+CONFIDENCE_LABEL_MAP: dict[ConfidenceLabel, float] = {
+    ConfidenceLabel.C0_NO_CONFIDENCE: 0.00,
+    ConfidenceLabel.C1_VERY_LOW: 0.10,
+    ConfidenceLabel.C2_LOW: 0.20,
+    ConfidenceLabel.C3_SLIGHTLY_LOW: 0.30,
+    ConfidenceLabel.C4_LEAN_LOW: 0.40,
+    ConfidenceLabel.C5_NEUTRAL: 0.50,
+    ConfidenceLabel.C6_LEAN_HIGH: 0.60,
+    ConfidenceLabel.C7_SLIGHTLY_HIGH: 0.70,
+    ConfidenceLabel.C8_HIGH: 0.80,
+    ConfidenceLabel.C9_VERY_HIGH: 0.90,
+    ConfidenceLabel.C10_MAX_CONFIDENCE: 1.00,
+}
+
+
+def confidence_label_to_float(label: ConfidenceLabel | str) -> float:
+    """Convert a confidence label to its mapped float value.
+
+    Args:
+        label: A ``ConfidenceLabel`` member or its string value.
+
+    Returns:
+        The deterministic float value from ``CONFIDENCE_LABEL_MAP``.
+
+    Raises:
+        ValueError: If the label is not a valid ``ConfidenceLabel``.
+    """
+    if isinstance(label, str):
+        label = ConfidenceLabel(label)
+    return CONFIDENCE_LABEL_MAP[label]
+
+
+# ---------------------------------------------------------------------------
 # Track Agreement (v2 pipeline — independent track alignment)
 # ---------------------------------------------------------------------------
 
@@ -397,7 +455,14 @@ class DebateCase(BaseModel):
     key_arguments: list[str] = Field(default_factory=list)
     strongest_signal: str = ""
     weakest_counter: str = ""
+    confidence_label: ConfidenceLabel = ConfidenceLabel.C5_NEUTRAL
     confidence: float = Field(ge=0.0, le=1.0, default=0.5)
+
+    @model_validator(mode="after")
+    def _sync_confidence_from_label(self) -> DebateCase:
+        """Derive numeric confidence from the label if the default wasn't overridden."""
+        self.confidence = confidence_label_to_float(self.confidence_label)
+        return self
 
 
 class GptJudgeRecommendation(BaseModel):
@@ -406,6 +471,10 @@ class GptJudgeRecommendation(BaseModel):
     Backend-computed fields (ML gate, confidence v2, signal freshness, etc.)
     are NOT included here. After parsing, these are mapped to the full
     ``Recommendation`` model.
+
+    GPT outputs ``confidence_label`` (a categorical string from
+    ``ConfidenceLabel``) instead of a raw float. The numeric ``confidence``
+    is derived deterministically via ``CONFIDENCE_LABEL_MAP``.
     """
 
     ticker: str
@@ -416,8 +485,16 @@ class GptJudgeRecommendation(BaseModel):
         return normalize_ticker(v) if isinstance(v, str) else v
 
     action: RecommendationAction
-    confidence: float = Field(ge=0.0, le=1.0)
+    confidence_label: ConfidenceLabel
+    confidence: float = Field(ge=0.0, le=1.0, default=0.5)
     llm_conviction: Literal["low", "medium", "high"] | None = None
+
+    @model_validator(mode="after")
+    def _sync_confidence_from_label(self) -> GptJudgeRecommendation:
+        """Derive numeric confidence from the label."""
+        self.confidence = confidence_label_to_float(self.confidence_label)
+        return self
+
     setup_type: str | None = None
     entry_price: float | None = None
     stop_loss: float | None = None
@@ -457,6 +534,10 @@ class Recommendation(BaseModel):
         return normalize_ticker(v) if isinstance(v, str) else v
 
     confidence: float = Field(ge=0.0, le=1.0)
+    confidence_label: ConfidenceLabel | None = Field(
+        default=None,
+        description="Categorical confidence label from GPT (before calibration)",
+    )
     entry_price: float | None = None
     stop_loss: float | None = None
     take_profit: float | None = None

@@ -6,6 +6,7 @@ import type {
   SignalStrength,
   FundamentalData,
 } from '../../types';
+import { confidenceLabelToPercent, CONFIDENCE_LABEL_DISPLAY } from '../../types';
 import { ConfidenceBreakdown, buildConfidenceBreakdownView } from './ConfidenceBreakdown';
 import { motion, AnimatePresence } from 'motion/react';
 import { ShieldAlert, ChevronDown, ChevronUp, Ban, Eye, Gauge, Clock, AlertTriangle, BrainCircuit, ShieldOff } from 'lucide-react';
@@ -129,6 +130,11 @@ function ConfidenceBreakdownPanel({ recommendation }: { recommendation: Recommen
         <div className="flex flex-wrap items-center gap-2 mb-4 text-xs text-text-muted font-body">
           <span>
             GPT raw: <span className="font-mono tabular-nums">{Math.round(rawConfidence * 100)}%</span>
+            {recommendation.confidence_label && (
+              <span className="ml-1 text-text-secondary">
+                ({CONFIDENCE_LABEL_DISPLAY[recommendation.confidence_label]})
+              </span>
+            )}
           </span>
           {view.win_probability != null && (
             <>
@@ -310,7 +316,7 @@ function DebateCaseSection({ debateCase, title }: { debateCase: DebateCase; titl
         <div className="flex items-center gap-3">
           <span className={clsx('text-sm font-semibold font-body', stanceColor)}>{title}</span>
           <span className={clsx('text-xs font-display px-2 py-0.5 rounded', stanceBg, stanceColor)}>
-            {(debateCase.confidence * 100).toFixed(0)}% confident
+            {CONFIDENCE_LABEL_DISPLAY[debateCase.confidence_label] ?? `${(debateCase.confidence * 100).toFixed(0)}%`}
           </span>
         </div>
         <span className="text-text-muted text-sm">{isOpen ? '\u25B2' : '\u25BC'}</span>
