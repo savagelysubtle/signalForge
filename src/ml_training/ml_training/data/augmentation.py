@@ -4,6 +4,10 @@ Provides time series augmentation methods to expand training datasets while
 preserving statistical properties and avoiding overfitting. Uses jitter
 (Gaussian noise) as the primary augmentation technique, with SMOTE-like
 interpolation for minority class balancing.
+
+Feature-aware: categorical features are excluded from jitter, bounded
+features are clipped to valid ranges, and a joint-distribution check
+(pairwise Pearson correlation) supplements the per-column KS test.
 """
 
 from __future__ import annotations
@@ -18,6 +22,8 @@ from sklearn.neighbors import NearestNeighbors
 logger = logging.getLogger(__name__)
 
 METADATA_COLS = {"ticker", "date", "strategy_id", "strategy_type", "timeframe", "close"}
+
+_CORR_SHIFT_THRESHOLD = 0.15
 
 
 class TimeSeriesAugmenter:
@@ -95,6 +101,17 @@ class TimeSeriesAugmenter:
         if exclude_cols:
             exclude_set.update(exclude_cols)
 
+        try:
+            from ml_training.features.feature_spec import (
+                BOUNDED_FEATURES,
+                CATEGORICAL_FEATURE_NAMES,
+            )
+
+            exclude_set |= CATEGORICAL_FEATURE_NAMES
+            self._bounds = BOUNDED_FEATURES
+        except ImportError:
+            self._bounds = {}
+
         numeric_cols = [
             col for col in df.select_dtypes(include=[np.number]).columns if col not in exclude_set
         ]
@@ -169,6 +186,7 @@ class TimeSeriesAugmenter:
                 )
                 augmented[col] = sampled[col].values + noise
 
+        self._clip_bounded(augmented, numeric_cols)
         return augmented
 
     def _smote_augment(
@@ -229,7 +247,9 @@ class TimeSeriesAugmenter:
 
             synthetic_samples.append(synthetic_row)
 
-        return pd.DataFrame(synthetic_samples)
+        result = pd.DataFrame(synthetic_samples)
+        self._clip_bounded(result, numeric_cols)
+        return result
 
     def _validate_quality(
         self,
@@ -282,4 +302,50 @@ class TimeSeriesAugmenter:
             f"Quality validation passed: {len(failed_features)}/{len(numeric_cols)} "
             f"features ({failure_rate:.1%}) failed KS test"
         )
+
+        return self._validate_joint_distribution(original, augmented, numeric_cols)
+
+    def _clip_bounded(self, df: pd.DataFrame, numeric_cols: list[str]) -> None:
+        """Clip augmented values to their valid ranges using the feature spec."""
+        bounds = getattr(self, "_bounds", {})
+        for col in numeric_cols:
+            if col in bounds:
+                lo, hi = bounds[col]
+                if lo is not None or hi is not None:
+                    df[col] = df[col].clip(lower=lo, upper=hi)
+
+    def _validate_joint_distribution(
+        self,
+        original: pd.DataFrame,
+        augmented: pd.DataFrame,
+        numeric_cols: list[str],
+    ) -> bool:
+        """Check that pairwise correlations are preserved after augmentation.
+
+        Computes Pearson correlation matrices on a subset of numeric columns
+        and rejects the batch if the mean absolute difference exceeds the
+        threshold.
+        """
+        check_cols = [c for c in numeric_cols if c in original.columns and c in augmented.columns]
+        if len(check_cols) < 3:
+            return True
+
+        check_cols = check_cols[:30]
+
+        try:
+            orig_corr = original[check_cols].corr(numeric_only=True)
+            aug_corr = pd.concat([original, augmented])[check_cols].corr(numeric_only=True)
+            diff = (orig_corr - aug_corr).abs()
+            mean_shift = diff.values[np.triu_indices_from(diff.values, k=1)].mean()
+
+            if mean_shift > _CORR_SHIFT_THRESHOLD:
+                logger.warning(
+                    "Joint distribution check failed: mean correlation shift %.3f (threshold %.3f)",
+                    mean_shift,
+                    _CORR_SHIFT_THRESHOLD,
+                )
+                return False
+        except Exception:
+            logger.debug("Joint distribution check skipped due to error", exc_info=True)
+
         return True

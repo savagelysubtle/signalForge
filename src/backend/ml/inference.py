@@ -280,6 +280,26 @@ def build_feature_vector(
     return features
 
 
+def _warn_missing_features(
+    feature_names: list[str],
+    features: dict[str, Any],
+) -> None:
+    """Log a warning if a significant portion of model features are missing."""
+    try:
+        from ml_training.features.feature_spec import is_training_only, validate_feature_coverage
+
+        missing = validate_feature_coverage(feature_names, features)
+        inference_missing = [m for m in missing if not is_training_only(m)]
+        if inference_missing:
+            logger.warning(
+                "Model expects %d inference-available features that are missing: %s",
+                len(inference_missing),
+                inference_missing[:10],
+            )
+    except ImportError:
+        pass
+
+
 def run_prediction(
     ticker: str,
     strategy_type: str,
@@ -312,6 +332,8 @@ def run_prediction(
     conformal = model.get("conformal")
     label_encoder = model.get("label_encoder")
     metadata = model.get("metadata")
+
+    _warn_missing_features(feature_names, features)
 
     import pandas as pd
 

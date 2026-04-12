@@ -85,6 +85,243 @@
 
 ---
 
+## Upcoming: Inference-Only Retraining (2026-04-11)
+
+### Problem Identified
+
+All 19 production models produce **identical predictions for every ticker** at
+live inference. Root cause: models were trained on ~64 features, but only ~29 are
+available at inference time. The remaining ~35 features (TSFresh, FFD, HMM regime
+probabilities, rolling price stats) are computed from historical time series
+during training but cannot be reproduced from a single live `TechnicalSnapshot`.
+At inference, these features are `NaN`, causing LightGBM to route all inputs down
+the same default tree path regardless of actual TA values.
+
+**Evidence:** `test_ml_gate.py` confirmed that 12 numeric features (RSI, ADX,
+MACD histogram, volume ratio, momentum, EMA distances) were correctly mapped and
+distinct across tickers, yet `run_prediction()` returned identical probabilities
+(0.483826) for all inputs. Feature vector inspection showed 35/64 features as
+`BOTH NaN`.
+
+### What Changed (code)
+
+| Area | Change | Files |
+|---|---|---|
+| Feature registry | Added `TRAINING_ONLY_FEATURES` frozenset (13 explicit features) + `TRAINING_ONLY_PREFIXES = ("tsf_",)` to catch ~30 TSFresh features by prefix. Added `is_training_only_feature()` helper. | `engineering.py` |
+| Feature column filter | `_identify_feature_columns()` now accepts `inference_only=True` param that excludes all training-only features from the training dataset | `predictor.py` |
+| Training loop | `TrainingLoopConfig.inference_only` field threaded to `PredictionModel` and `_prune_features()` | `training_loop.py` |
+| Hyperparameter tuning | `HyperparameterTuner` accepts `inference_only` param, applied in both `search()` and `search_optuna()` | `hyperparameter_tuning.py` |
+| CLI | `--inference-only` flag added to both `train` and `tune` subcommands | `cli.py` |
+| Data acquisition defaults | Default timeframes now include `15m` and `W`; intraday lookback set to 183 days (6 months) | `acquisition.py`, `cli.py` |
+
+### Features Excluded by `--inference-only`
+
+| Category | Features | Count | Reason |
+|---|---|---|---|
+| FFD | `ffd_close`, `ffd_return_1d` | 2 | Requires full price history for fractional differencing weights |
+| HMM regime | `hmm_regime`, `hmm_regime_prob_{bear,neutral,bull}` | 4 | Requires fitted HMM on VIX/SPY/breadth time series |
+| TSFresh | All `tsf_*` prefixed features | ~30 | Requires 20-bar rolling window of raw OHLCV |
+| Rolling price stats | `price_change_5d`, `price_change_20d`, `bollinger_width`, `volatility_20d`, `distance_from_20d_high`, `distance_from_20d_low` | 6 | Require multi-day rolling windows |
+| Cross-sectional | `sector_relative_strength` | 1 | Requires computing breadth across entire universe |
+
+### Features Retained (~29 expected at inference)
+
+| Category | Features | Count |
+|---|---|---|
+| Core TA | `rsi_14`, `rsi_zone`, `macd_histogram`, `macd_slope`, `adx`, `atr_pct`, `volume_ratio`, `volume_trend`, `momentum_score`, `price_vs_ema_{9,21,50,200}`, `ema_stack_score`, `ema_spread_pct`, `high_low_range`, `gap_pct`, `price_change_1d` | ~18 |
+| FMP Fundamentals | `pe_ratio`, `pb_ratio`, `ev_ebitda`, `debt_equity`, `roe`, `net_margin`, `revenue_growth`, `piotroski_score`, `altman_z`, `analyst_target_upside`, `insider_buy_ratio`, `current_ratio`, `dividend_yield`, `roa`, `composite_score` | 15 |
+| Context | `strategy_type`, `market_regime`, `sector`, `day_of_week`, `month`, `vix_level`, `market_breadth_proxy` | 7 |
+| Primary signal | `primary_signal`, `signal_strength` | 2 |
+| Multi-TF (live available) | `tf_{1H,4H,D}_rsi_14`, `tf_{1H,4H,D}_price_vs_ema_200`, etc. | varies |
+
+### Data Refresh
+
+Data acquired 2026-04-11: 987 tickers (434 TSX, 503 US, 50 crypto) across all
+timeframes (D, W, 4H, 1H, 15m). Dataset rebuild with augmentation running.
+
+### Training Plan
+
+```bash
+# Step 1: Tune with inference-only features
+uv run --python 3.14t python -X gil=0 -m ml_training.pipeline.cli tune \
+    --per-strategy --n-trials 50 --inference-only
+
+# Step 2: Train with inference-only features
+uv run --python 3.14t python -X gil=0 -m ml_training.pipeline.cli train \
+    --per-strategy --rounds 3 --inference-only --model-mode independent
+
+# Step 3: Promote passing models
+uv run --python 3.14t python -X gil=0 -m ml_training.pipeline.cli promote
+```
+
+### Expected Outcome
+
+Models will go from ~64 features (35 NaN at inference) to ~29 features (0 NaN at
+inference). Every feature in the trained model will have a real value when making
+live predictions. LightGBM will learn meaningful splits on RSI, ADX, MACD,
+volume, EMA distances -- the features that actually differentiate tickers.
+
+**Hypothesis:** Accuracy may be similar or slightly lower in cross-validation
+(fewer features = less signal), but **live inference quality will be dramatically
+better** because the model can actually discriminate between inputs. The current
+production models are effectively returning a constant baseline.
+
+### Results: Baseline Inference-Only Training (2026-04-11)
+
+First training run with `--inference-only` flag. Default params (no tuning yet).
+Dataset rebuilt same day with fresh data (987 tickers, D/W/4H/1H/15m).
+New pipeline improvements active: temporal holdout (15%), min sample floor (15K),
+dead feature pruning, feature-aware augmentation.
+
+#### Shadow models (inference-only baseline, default params)
+
+| Strategy | Ver | Acc | Brier | OFGap | Judge | n | Feats | Active | Top SHAP |
+|---|---|---|---|---|---|---|---|---|---|
+| bollinger_band_squeeze_breakout_swing | v31 | 56.3% | 0.2453 | -3.2% | COND_PASS | 50,843 | 31 | 12 | month, market_breadth_proxy, atr_pct |
+| crypto_intraday_scalp | v23 | 56.1% | 0.2463 | -0.8% | COND_PASS | 126,147 | 27 | 3 | market_breadth_proxy, day_of_week, price_change_1d |
+| crypto_swing | v25 | 52.3% | 0.2553 | +0.1% | FAIL | 653,074 | 1 | 0 | (collapsed to 1 feature) |
+| earnings_play | v28 | 64.3% | 0.2309 | -2.8% | COND_PASS | 72,154 | 31 | 5 | tf_D_rsi_14, momentum_score, price_vs_ema_200 |
+| ema_21_pullback_swing | v27 | 56.0% | 0.2453 | -3.1% | COND_PASS | 56,310 | 31 | 4 | atr_pct, month, market_breadth_proxy |
+| ema_50_200_golden_cross_swing | v36 | 54.6% | 0.2454 | -1.1% | COND_PASS | 44,113 | 31 | 5 | month, atr_pct, tf_4H_momentum_score |
+| intraday | v23 | 56.7% | 0.2456 | -1.8% | COND_PASS | 38,612 | 9 | 4 | tf_1H_momentum_score, tf_1H_rsi_14, tf_1H_price_vs_ema_200 |
+| intraday_scalp | v25 | 54.5% | 0.2481 | -1.2% | COND_PASS | 18,110 | 5 | 2 | market_breadth_proxy, atr_pct |
+| mean_reversion | v31 | 55.6% | 0.2471 | +2.8% | COND_PASS | 72,154 | 7 | 3 | market_breadth_proxy, tf_D_price_vs_ema_200, atr_pct |
+| momentum_breakout | v34 | 55.0% | 0.2460 | -1.4% | COND_PASS | 35,520 | 6 | 3 | market_breadth_proxy, tf_4H_momentum_score, tf_4H_price_vs_ema_200 |
+| swing | v39 | 54.0% | 0.2476 | -0.8% | COND_PASS | 186,788 | 4 | 3 | market_breadth_proxy, tf_4H_price_vs_ema_200, atr_pct |
+| value_accumulation | v26 | 66.9% | 0.2214 | -1.5% | PASS | 109,079 | 21 | 2 | market_breadth_proxy, atr_pct |
+
+#### Independent models (inference-only baseline, default params)
+
+| Strategy | Ver | Acc | Brier | OFGap | Judge | n | Feats | Active |
+|---|---|---|---|---|---|---|---|---|
+| bollinger_band_squeeze_breakout_swing | v5 | 56.3% | 0.2453 | -3.2% | COND_PASS | 50,843 | 31 | 12 |
+| crypto_intraday_scalp | v5 | 56.1% | 0.2463 | -0.8% | COND_PASS | 126,147 | 27 | 3 |
+| crypto_swing | v7 | 52.3% | 0.2553 | +0.1% | FAIL | 653,074 | 3 | 0 |
+| earnings_play | v5 | 64.3% | 0.2309 | -2.8% | COND_PASS | 72,154 | 31 | 5 |
+| ema_21_pullback_swing | v5 | 56.0% | 0.2453 | -3.1% | COND_PASS | 56,310 | 31 | 4 |
+| ema_50_200_golden_cross_swing | v5 | 54.6% | 0.2454 | -1.1% | COND_PASS | 44,113 | 31 | 5 |
+| intraday | v5 | 56.7% | 0.2455 | -1.8% | COND_PASS | 38,612 | 20 | 7 |
+| intraday_scalp | v5 | 54.9% | 0.2476 | -0.6% | COND_PASS | 18,110 | 16 | 10 |
+| mean_reversion | v5 | 55.4% | 0.2472 | +2.9% | COND_PASS | 72,154 | 9 | 4 |
+| momentum_breakout | v5 | 55.0% | 0.2459 | -1.3% | COND_PASS | 35,520 | 7 | 3 |
+| swing | v5 | 54.1% | 0.2478 | -0.7% | COND_PASS | 186,788 | 7 | 3 |
+| value_accumulation | v5 | 66.9% | 0.2214 | -1.5% | PASS | 109,079 | 21 | 2 |
+
+#### Baseline Summary
+
+- **24 models** total (12 shadow + 12 independent). No `vwap_reversal_scalp` or `ema_stack_momentum_intraday` in this run (may have been below sample floor or not in dataset).
+- **2 PASS** (value_accumulation), **20 CONDITIONAL_PASS**, **2 FAIL** (crypto_swing)
+- **Accuracy range:** 52.3% – 66.9% (mean 56.9%)
+- **Feature usage:** Only 29% of features have non-zero SHAP on average
+- `market_breadth_proxy` and `atr_pct` are the most consistently useful features across all strategies
+- No holdout metrics populated (holdout split implemented but not yet evaluated -- will appear after next training run with updated code)
+- **Next step:** Tune with `--inference-only --per-strategy --n-trials 50` then retrain
+
+#### Baseline vs Prior Production (Apr 7 tuned)
+
+| Strategy | Prod Acc | Baseline Acc | Delta | Notes |
+|---|---|---|---|---|
+| bollinger_band_squeeze | 57.7% | 56.3% | -1.4% | Prod had tuned params |
+| crypto_intraday_scalp | 56.3% | 56.1% | -0.2% | Near-identical |
+| crypto_swing | 54.8% | 52.3% | -2.5% | Both struggling |
+| earnings_play | 64.3% | 64.3% | 0.0% | Identical |
+| ema_21_pullback_swing | 58.0% | 56.0% | -2.0% | Prod had tuned params |
+| ema_50_200_golden_cross | 59.0% | 54.6% | -4.4% | Biggest drop -- needs tuning |
+| intraday | 56.7% | 56.7% | 0.0% | Identical |
+| intraday_scalp | 55.0% | 54.5% | -0.5% | Close |
+| mean_reversion | 56.1% | 55.6% | -0.5% | Close |
+| momentum_breakout | 58.3% | 55.0% | -3.3% | Needs tuning |
+| swing | 54.7% | 54.0% | -0.7% | Close |
+| value_accumulation | 67.2% | 66.9% | -0.3% | Near-identical, only PASS |
+
+**Takeaway:** Baseline inference-only models (default params, no tuning) are 0-4% behind the prior tuned production models. Expected -- not yet tuned. But SHAP already shows heavy reliance on macro features (`market_breadth_proxy`, `atr_pct`) over per-ticker TA features.
+
+---
+
+### Results: Tuned + Trained Inference-Only (2026-04-11, post-Optuna)
+
+Tuned with `--inference-only --per-strategy --n-trials 50`, then retrained with
+tuned params. Same dataset as baseline.
+
+#### Shadow models (tuned inference-only)
+
+| Strategy | Ver | Acc | Brier | OFGap | Judge | Feats | Active | vs Baseline |
+|---|---|---|---|---|---|---|---|---|
+| bollinger_band_squeeze_breakout_swing | v32 | 55.7% | 0.2469 | -2.1% | COND_PASS | 2 | 1 | **-0.6%** |
+| crypto_intraday_scalp | v24 | 56.2% | 0.2464 | -0.9% | COND_PASS | 1 | 1 | +0.1% |
+| crypto_swing | v25 | 52.3% | 0.2553 | +0.1% | FAIL | 1 | 0 | 0.0% |
+| earnings_play | v29 | 64.3% | 0.2310 | -2.8% | COND_PASS | 5 | 2 | 0.0% |
+| ema_21_pullback_swing | v28 | 55.2% | 0.2473 | -1.6% | COND_PASS | 1 | 1 | **-0.8%** |
+| ema_50_200_golden_cross_swing | v37 | 54.1% | 0.2469 | -0.6% | COND_PASS | 1 | 1 | **-0.5%** |
+| intraday | v24 | 56.7% | 0.2457 | -1.8% | COND_PASS | 4 | 1 | 0.0% |
+| intraday_scalp | v25 | 54.5% | 0.2481 | -1.2% | COND_PASS | 5 | 2 | 0.0% (same model) |
+| mean_reversion | v32 | 56.0% | 0.2469 | +2.2% | COND_PASS | 3 | 1 | **+0.4%** |
+| momentum_breakout | v34 | 55.0% | 0.2460 | -1.4% | COND_PASS | 6 | 3 | 0.0% (same model) |
+| swing | v39 | 54.0% | 0.2476 | -0.8% | COND_PASS | 4 | 3 | 0.0% (same model) |
+| value_accumulation | v27 | 66.9% | 0.2214 | -1.5% | PASS | 17 | 1 | 0.0% |
+
+#### Feature Collapse After Tuning
+
+| Strategy | Baseline Features | Tuned Features | Baseline Active | Tuned Active | Sole Survivor |
+|---|---|---|---|---|---|
+| bollinger_band_squeeze | 31 | 2 | 12 | 1 | `market_breadth_proxy` |
+| crypto_intraday_scalp | 27 | 1 | 3 | 1 | `market_breadth_proxy` |
+| ema_21_pullback_swing | 31 | 1 | 4 | 1 | `market_breadth_proxy` |
+| ema_50_200_golden_cross | 31 | 1 | 5 | 1 | `market_breadth_proxy` |
+| intraday | 9 | 4 | 4 | 1 | `tf_1H_rsi_14` |
+| mean_reversion | 7 | 3 | 3 | 1 | `tf_D_rsi_14` |
+| value_accumulation | 21 | 17 | 2 | 1 | `tf_D_rsi_14` |
+| earnings_play | 31 | 5 | 5 | 2 | `market_breadth_proxy` + `tf_D_momentum_score` |
+| momentum_breakout | 6 | 6 | 3 | 3 | (unchanged -- same model) |
+| swing | 4 | 4 | 3 | 3 | (unchanged -- same model) |
+
+### Critical Finding: Market-Breadth Dominance Problem
+
+**What happened:** Tuning + SHAP pruning aggressively collapsed most models to
+a single feature: `market_breadth_proxy`. This feature measures the % of the
+stock universe above its 200-day EMA -- it is **the same value for every ticker
+on a given day**. Models that only use market-level features will produce
+**identical predictions for all tickers**, which is the exact same end result as
+the NaN collapse problem we set out to fix.
+
+**Why this matters:**
+
+| Problem | Old Models (NaN) | New Models (Inference-Only) |
+|---|---|---|
+| Root cause | 35/64 features NaN at inference | Models pruned to 1 macro feature |
+| Symptom | Identical predictions per ticker | Identical predictions per ticker |
+| Cross-validation accuracy | 55-67% | 52-67% |
+| Per-ticker differentiation | None | None (market_breadth_proxy doesn't vary) |
+
+The `--inference-only` fix was **necessary** (removed the NaN problem) but
+**not sufficient** (exposed that per-ticker TA features are not surviving SHAP
+pruning). The training loop prunes 30% of features on round 1 failure, and the
+models converge to macro features because they provide a small but consistent
+baseline accuracy that per-ticker TA features can't beat individually.
+
+### Root Cause Hypotheses
+
+| # | Hypothesis | Evidence | Test |
+|---|---|---|---|
+| 1 | **SHAP pruning too aggressive** | 30% prune fraction kills weak-but-useful features after just 1 round | Disable pruning, train with all features, check if predictions diverge |
+| 2 | **Triple barrier horizon washes out TA** | 10-day horizon with 2:1 R:R too noisy for daily TA to predict | Try shorter horizons (5d) or different labeling |
+| 3 | **Features need interactions** | Raw RSI=45 isn't predictive, but RSI>50 + MACD positive might be | Add cross-feature interaction columns |
+| 4 | **Market breadth really is the dominant signal** | SHAP is correct -- macro regime matters more than individual TA | Accept simpler model, focus ML effort on regime detection |
+
+**Next step:** Experiment with disabling SHAP pruning (`feature_prune_fraction=0`)
+to see if a full-feature model produces distinct per-ticker predictions, even at
+cost of slightly lower accuracy. This isolates hypothesis #1 from #2-#4.
+
+#### Live inference validation (post-promote)
+
+| Test | Expected | Actual |
+|---|---|---|
+| `test_raw_prediction_diverges` | Different probs for RSI=25 vs RSI=75 | — |
+| `test_gate_produces_distinct_probabilities` | 3 tickers get 3 different probs | — |
+| Live pipeline run: distinct `ml_probability` per ticker | All unique | — |
+
+---
+
 ## Current Production Models (deployed)
 
 These are the `*_active.joblib` artifacts in `src/backend/ml/artifacts/`.
@@ -188,6 +425,8 @@ for removal or investigation.
 | 2026-04-07 (run 2) | Optuna tune | Same data, different trial count | Feature collapse on several strategies |
 | 2026-04-07 | Train + Optuna (late) | Shadow **v30–v38**, independent **v4**; `_decay_lambda` in `classifier_params`; Brier-oriented Optuna CV | See “Latest batch” + v3→v4 delta tables |
 | 2026-04-08 | Code + artifacts | Repo gate/training changes; training artifacts on `20260407` now include tuned decay | Compare v4 vs production before promote |
+| 2026-04-11 | **Inference-only baseline** | `--inference-only` flag, fresh data (D/W/4H/1H/15m), 15% temporal holdout, min sample floor (15K), dead feature pruning, feature-aware augmentation, `feature_spec.py` canonical registry, `_meta.json` promoted with models | Baseline: mean 56.9% acc, 29% feature usage |
+| 2026-04-11 | **Inference-only tuned** | Optuna 50 trials per strategy + retrain with tuned params | **Feature collapse:** most models pruned to 1-3 features. `market_breadth_proxy` dominates. Models produce identical per-ticker predictions (same symptom as NaN problem). Accuracy ≈ baseline (no improvement). **NOT promoted.** |
 
 ---
 
@@ -289,10 +528,14 @@ At each R:R ratio, this is the minimum accuracy needed for positive expected val
 | Category | Count |
 |---|---|
 | Production (`*_active.joblib`) | 19 |
+| Training 2026-04-11 inf-only tuned (shadow) | 12 |
+| Training 2026-04-11 inf-only tuned (independent) | 12 |
+| Training 2026-04-11 inf-only baseline (shadow) | 12 |
+| Training 2026-04-11 inf-only baseline (independent) | 12 |
 | Training 2026-04-07 shadow | 28 |
 | Training 2026-04-07 independent | 28 |
 | Training 2026-04-05 shadow | 136 |
-| **Total artifacts** | **436** |
-| Judge PASS | 5 (1.1%) |
-| Judge CONDITIONAL_PASS | 186 (42.7%) |
-| Judge FAIL | 245 (56.2%) |
+| **Total artifacts** | **~484** |
+| Judge PASS | 7 (~1.4%) |
+| Judge CONDITIONAL_PASS | 226 (~46.7%) |
+| Judge FAIL | 251 (~51.9%) |

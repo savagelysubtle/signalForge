@@ -1,0 +1,54 @@
+{
+  "model_version": "v24",
+  "training_date": "20260411",
+  "feature_names": [
+    "market_breadth_proxy"
+  ],
+  "training_config": {
+    "classifier_params": {
+      "objective": "binary",
+      "metric": "binary_logloss",
+      "boosting_type": "gbdt",
+      "is_unbalance": true,
+      "verbose": -1,
+      "n_jobs": -1,
+      "seed": 42,
+      "bagging_freq": 5,
+      "num_leaves": 14,
+      "learning_rate": 0.01153812984762894,
+      "min_child_samples": 268,
+      "feature_fraction": 0.5996958701245524,
+      "bagging_fraction": 0.6127181708143115,
+      "reg_alpha": 5.087818959844651,
+      "reg_lambda": 7.550259430401253,
+      "max_depth": 3,
+      "min_gain_to_split": 0.7484958807274343,
+      "_decay_lambda": 0.013354357857737614
+    },
+    "n_boost_rounds": 500,
+    "target_col": "triple_barrier_label",
+    "return_col": "return_10d",
+    "n_folds": 8,
+    "purge_window": 25,
+    "embargo_window": 10,
+    "strategy_type": "crypto_intraday_scalp",
+    "model_mode": "shadow",
+    "dataset_size": 126147
+  },
+  "metrics": {
+    "overall_accuracy": 0.561884631849315,
+    "brier_score": 0.24640161075884914,
+    "overfit_gap": -0.009361417321535836,
+    "ece": 3.66615448358365e-05
+  },
+  "judge_verdict": "CONDITIONAL_PASS",
+  "approved_strategies": [
+    "crypto_intraday"
+  ],
+  "status": "trained",
+  "strategy_type": "crypto_intraday_scalp",
+  "shap_importance": {
+    "market_breadth_proxy": 0.0035695378055747282
+  },
+  "holdout_metrics": null
+}

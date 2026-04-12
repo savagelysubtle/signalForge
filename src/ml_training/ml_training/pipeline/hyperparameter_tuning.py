@@ -128,6 +128,7 @@ class HyperparameterTuner:
         purge_window: int = DEFAULT_PURGE_WINDOW,
         embargo_window: int = DEFAULT_EMBARGO_WINDOW,
         binary_mode: bool = False,
+        inference_only: bool = False,
     ) -> None:
         self._target_col = target_col
         self._n_splits = n_cv_splits
@@ -136,6 +137,7 @@ class HyperparameterTuner:
         self._purge_window = purge_window
         self._embargo_window = embargo_window
         self._binary_mode = binary_mode
+        self._inference_only = inference_only
 
     def search(self, dataset: pd.DataFrame) -> HyperparameterSearchResult:
         """Run hyperparameter search across the parameter grid.
@@ -152,7 +154,7 @@ class HyperparameterTuner:
         """
         df = dataset.dropna(subset=[self._target_col]).sort_values("date").reset_index(drop=True)
 
-        feature_cols = _identify_feature_columns(df)
+        feature_cols = _identify_feature_columns(df, inference_only=self._inference_only)
 
         X, _encoders = _prepare_features(df, feature_cols)
         if self._binary_mode:
@@ -320,7 +322,7 @@ class HyperparameterTuner:
         optuna.logging.set_verbosity(optuna.logging.WARNING)
 
         df = dataset.dropna(subset=[self._target_col]).sort_values("date").reset_index(drop=True)
-        feature_cols = _identify_feature_columns(df)
+        feature_cols = _identify_feature_columns(df, inference_only=self._inference_only)
 
         X, _encoders = _prepare_features(df, feature_cols)
         if self._binary_mode:
@@ -367,7 +369,9 @@ class HyperparameterTuner:
                 }
             )
             decay_lambda = trial.suggest_float("decay_lambda", 0.0, 0.15)
-            sample_weights = compute_sample_weights(n_samples, horizon=10, decay_lambda=decay_lambda)
+            sample_weights = compute_sample_weights(
+                n_samples, horizon=10, decay_lambda=decay_lambda
+            )
 
             fold_test_scores: list[float] = []
             fold_train_scores: list[float] = []

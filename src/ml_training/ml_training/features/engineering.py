@@ -912,11 +912,17 @@ def compute_llm_features(
     }
 
 
-CATEGORICAL_FEATURES = {"strategy_type", "market_regime", "sector"}
+from ml_training.features.feature_spec import (  # noqa: E402
+    CATEGORICAL_FEATURE_NAMES,
+    TRAINING_ONLY_NAMES,
+    is_training_only,
+)
 
-# Feature groups for model modes.  The independent (gate) model uses only
-# market-observable features — no LLM outputs — so it can run *before* GPT
-# and serve as an independent check.  The shadow model gets everything.
+CATEGORICAL_FEATURES = CATEGORICAL_FEATURE_NAMES
+TRAINING_ONLY_FEATURES = TRAINING_ONLY_NAMES
+is_training_only_feature = is_training_only
+
+# Re-export for backward compatibility
 LLM_FEATURES: frozenset[str] = frozenset(
     {
         "llm_action_encoded",
@@ -928,6 +934,26 @@ LLM_FEATURES: frozenset[str] = frozenset(
         "llm_warning_count",
     }
 )
+
+
+def load_dead_features() -> frozenset[str]:
+    """Load the auto-generated dead features list from disk.
+
+    Returns an empty frozenset if the file doesn't exist yet.
+    """
+    from pathlib import Path
+
+    dead_path = Path(__file__).resolve().parents[2] / "data" / "raw" / "dead_features.json"
+    if not dead_path.exists():
+        return frozenset()
+    import json
+
+    try:
+        data = json.loads(dead_path.read_text())
+        return frozenset(data.get("dead_features", []))
+    except json.JSONDecodeError, KeyError:
+        return frozenset()
+
 
 _NEUTRALIZE_EXCLUDE = {
     "ticker",

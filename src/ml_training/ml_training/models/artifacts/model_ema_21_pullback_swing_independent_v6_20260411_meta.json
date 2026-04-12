@@ -1,0 +1,54 @@
+{
+  "model_version": "v6",
+  "training_date": "20260411",
+  "feature_names": [
+    "market_breadth_proxy"
+  ],
+  "training_config": {
+    "classifier_params": {
+      "objective": "binary",
+      "metric": "binary_logloss",
+      "boosting_type": "gbdt",
+      "is_unbalance": true,
+      "verbose": -1,
+      "n_jobs": -1,
+      "seed": 42,
+      "bagging_freq": 5,
+      "num_leaves": 28,
+      "learning_rate": 0.031021063532856594,
+      "min_child_samples": 129,
+      "feature_fraction": 0.3009787550005996,
+      "bagging_fraction": 0.6099844993426313,
+      "reg_alpha": 9.603697484016179,
+      "reg_lambda": 26.372134193076263,
+      "max_depth": 3,
+      "min_gain_to_split": 0.4393476408494768,
+      "_decay_lambda": 0.030998344659530178
+    },
+    "n_boost_rounds": 500,
+    "target_col": "triple_barrier_label",
+    "return_col": "return_10d",
+    "n_folds": 5,
+    "purge_window": 25,
+    "embargo_window": 10,
+    "strategy_type": "ema_21_pullback_swing",
+    "model_mode": "independent",
+    "dataset_size": 56310
+  },
+  "metrics": {
+    "overall_accuracy": 0.5518806606286628,
+    "brier_score": 0.24729700948128386,
+    "overfit_gap": -0.015648006702933426,
+    "ece": 4.715479397732203e-06
+  },
+  "judge_verdict": "CONDITIONAL_PASS",
+  "approved_strategies": [
+    "swing"
+  ],
+  "status": "trained",
+  "strategy_type": "ema_21_pullback_swing_independent",
+  "shap_importance": {
+    "market_breadth_proxy": 0.008738419926264325
+  },
+  "holdout_metrics": null
+}

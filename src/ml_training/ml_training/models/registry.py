@@ -36,6 +36,7 @@ class ModelMetadata:
     status: str = "trained"
     strategy_type: str | None = None
     shap_importance: dict[str, float] | None = None
+    holdout_metrics: dict[str, float] | None = None
 
 
 @dataclass
@@ -214,7 +215,7 @@ class ModelRegistry:
         artifact_path: Path,
         strategy_type: str | None = None,
     ) -> Path:
-        """Copy a model artifact to the backend for shadow mode.
+        """Copy a model artifact and its metadata to the backend for shadow mode.
 
         Args:
             artifact_path: Path to the source .joblib artifact.
@@ -231,6 +232,13 @@ class ModelRegistry:
             dest = self._backend_dir / "model_active.joblib"
         shutil.copy2(artifact_path, dest)
         logger.info("Promoted model to shadow: %s -> %s", artifact_path, dest)
+
+        src_meta = artifact_path.with_suffix("").with_name(artifact_path.stem + "_meta.json")
+        if src_meta.exists():
+            dest_meta = dest.with_suffix("").with_name(dest.stem + "_meta.json")
+            shutil.copy2(src_meta, dest_meta)
+            logger.info("Promoted metadata: %s -> %s", src_meta, dest_meta)
+
         return dest
 
     def promote_all_strategies(self) -> list[Path]:

@@ -49,6 +49,8 @@ FUNDAMENTAL_FEATURES = frozenset(
     }
 )
 
+MIN_STRATEGY_SAMPLES = 15_000
+
 
 @dataclass
 class TrainingRoundResult:
@@ -78,6 +80,7 @@ class TrainingLoopConfig:
     model_type: str = "lgbm"
     meta_label: bool = False
     model_mode: str = "shadow"
+    inference_only: bool = False
 
 
 class TrainingLoop:
@@ -103,6 +106,9 @@ class TrainingLoop:
         After round 1, if the model fails, low-importance features are
         pruned via SHAP analysis before subsequent rounds.
 
+        Reserves the final 15% of data (by date) as a strict temporal holdout
+        for post-training validation.
+
         Args:
             dataset: Complete feature dataset with labels.
 
@@ -114,6 +120,8 @@ class TrainingLoop:
             self._config.max_rounds,
             self._config.target_col,
         )
+
+        dataset, self._holdout = self._split_temporal_holdout(dataset)
 
         working_dataset = self._apply_strategy_feature_mask(dataset)
 
@@ -132,20 +140,23 @@ class TrainingLoop:
             verdict = result.judge_report.judge_verdict
             logger.info("Round %d verdict: %s", round_num, verdict)
 
-            if verdict == "PASS":
-                logger.info("Model PASSED judge evaluation!")
-                if self._config.auto_promote and result.artifact_path:
-                    from pathlib import Path
+            if verdict in ("PASS", "CONDITIONAL_PASS"):
+                holdout_metrics = self._evaluate_holdout(result)
+                if holdout_metrics and result.artifact_path:
+                    self._append_holdout_to_metadata(result.artifact_path, holdout_metrics)
 
-                    self._registry.promote_to_shadow(Path(result.artifact_path))
-                    logger.info("Model promoted to shadow mode")
-                break
+                if verdict == "PASS":
+                    logger.info("Model PASSED judge evaluation!")
+                    if self._config.auto_promote and result.artifact_path:
+                        from pathlib import Path
 
-            if verdict == "CONDITIONAL_PASS":
-                logger.info(
-                    "Model CONDITIONALLY PASSED. Approved strategies: %s",
-                    result.judge_report.strategy_approvals,
-                )
+                        self._registry.promote_to_shadow(Path(result.artifact_path))
+                        logger.info("Model promoted to shadow mode")
+                else:
+                    logger.info(
+                        "Model CONDITIONALLY PASSED. Approved strategies: %s",
+                        result.judge_report.strategy_approvals,
+                    )
                 break
 
             logger.info(
@@ -156,7 +167,63 @@ class TrainingLoop:
 
             working_dataset = self._apply_round_adjustments(round_num, result, working_dataset)
 
+        self._update_dead_features()
         return self._rounds
+
+    def _update_dead_features(self) -> None:
+        """Auto-update dead_features.json with features that had zero SHAP across all rounds."""
+        all_shap: dict[str, list[float]] = {}
+        for r in self._rounds:
+            if r.shap_importances:
+                for feat, importance in r.shap_importances.items():
+                    all_shap.setdefault(feat, []).append(abs(importance))
+
+        if not all_shap:
+            return
+
+        dead = sorted(
+            feat
+            for feat, values in all_shap.items()
+            if all(v == 0.0 for v in values) and len(values) >= 1
+        )
+
+        if not dead:
+            return
+
+        import json
+        from pathlib import Path
+
+        dead_path = Path(__file__).resolve().parents[2] / "data" / "raw" / "dead_features.json"
+        strategy_counts: dict[str, int] = {}
+        if dead_path.exists():
+            try:
+                data = json.loads(dead_path.read_text())
+                strategy_counts = data.get("strategy_zero_count", {})
+            except json.JSONDecodeError, KeyError:
+                pass
+
+        strategy_label = self._config.strategy_type or "combined"
+        for feat in dead:
+            strategy_counts[feat] = strategy_counts.get(feat, 0) + 1
+
+        confirmed_dead = sorted(feat for feat, count in strategy_counts.items() if count >= 8)
+
+        dead_path.parent.mkdir(parents=True, exist_ok=True)
+        dead_path.write_text(
+            json.dumps(
+                {
+                    "dead_features": confirmed_dead,
+                    "strategy_zero_count": strategy_counts,
+                    "last_updated_by": strategy_label,
+                },
+                indent=2,
+            )
+        )
+        logger.info(
+            "Updated dead_features.json: %d confirmed dead, %d tracked",
+            len(confirmed_dead),
+            len(strategy_counts),
+        )
 
     def _apply_round_adjustments(
         self,
@@ -218,6 +285,97 @@ class TrainingLoop:
 
         return working_dataset
 
+    _HOLDOUT_FRACTION = 0.15
+
+    def _split_temporal_holdout(self, dataset: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Reserve the final fraction of data (by date) as a strict temporal holdout.
+
+        Returns:
+            (training_set, holdout_set)
+        """
+        if "date" not in dataset.columns or len(dataset) < 100:
+            return dataset, pd.DataFrame()
+
+        sorted_df = dataset.sort_values("date").reset_index(drop=True)
+        split_idx = int(len(sorted_df) * (1 - self._HOLDOUT_FRACTION))
+        train = sorted_df.iloc[:split_idx].copy()
+        holdout = sorted_df.iloc[split_idx:].copy()
+
+        logger.info(
+            "Temporal holdout split: %d train, %d holdout (%.0f%%)",
+            len(train),
+            len(holdout),
+            self._HOLDOUT_FRACTION * 100,
+        )
+        return train, holdout
+
+    def _evaluate_holdout(self, result: TrainingRoundResult) -> dict[str, float]:
+        """Run the trained model against the temporal holdout set.
+
+        Returns holdout metrics dict (accuracy, brier_score, calibration_error).
+        """
+        holdout = getattr(self, "_holdout", pd.DataFrame())
+        if holdout.empty or result.training_result is None:
+            return {}
+
+        from sklearn.metrics import accuracy_score, brier_score_loss
+
+        from ml_training.models.predictor import _identify_feature_columns
+
+        try:
+            feature_cols = _identify_feature_columns(
+                holdout,
+                model_mode=self._config.model_mode,
+                inference_only=self._config.inference_only,
+            )
+            X = holdout[feature_cols]
+            y = holdout[self._config.target_col]
+
+            classifier = result.training_result.classifier
+            y_pred = classifier.predict(X)
+            y_proba = classifier.predict_proba(X)
+
+            acc = accuracy_score(y, y_pred)
+            is_binary = y_proba.shape[1] == 2
+            brier = brier_score_loss(y, y_proba[:, 1]) if is_binary else float("nan")
+            calibration_error = abs(y_proba[:, 1].mean() - y.mean()) if is_binary else float("nan")
+
+            metrics = {
+                "holdout_accuracy": round(acc, 4),
+                "holdout_brier_score": round(brier, 4),
+                "holdout_calibration_error": round(calibration_error, 4),
+                "holdout_samples": len(holdout),
+            }
+            logger.info(
+                "Holdout metrics: accuracy=%.3f, brier=%.4f, cal_error=%.4f",
+                acc,
+                brier,
+                calibration_error,
+            )
+            return metrics
+        except Exception:
+            logger.warning("Holdout evaluation failed", exc_info=True)
+            return {}
+
+    @staticmethod
+    def _append_holdout_to_metadata(artifact_path: str, holdout_metrics: dict[str, float]) -> None:
+        """Merge holdout metrics into the artifact's _meta.json file."""
+        import json
+        from pathlib import Path
+
+        meta_path = (
+            Path(artifact_path).with_suffix("").with_name(Path(artifact_path).stem + "_meta.json")
+        )
+        if not meta_path.exists():
+            return
+        try:
+            meta = json.loads(meta_path.read_text())
+            meta.setdefault("metrics", {}).update(holdout_metrics)
+            meta["holdout_metrics"] = holdout_metrics
+            meta_path.write_text(json.dumps(meta, indent=2))
+        except Exception:
+            logger.warning("Failed to write holdout metrics to %s", meta_path, exc_info=True)
+
     def _apply_strategy_feature_mask(self, dataset: pd.DataFrame) -> pd.DataFrame:
         """Drop fundamental features for all strategies except value-oriented ones.
 
@@ -245,7 +403,13 @@ class TrainingLoop:
         from ml_training.models.predictor import _identify_feature_columns
 
         frac = prune_fraction if prune_fraction is not None else self._config.feature_prune_fraction
-        feature_cols = set(_identify_feature_columns(dataset, model_mode=self._config.model_mode))
+        feature_cols = set(
+            _identify_feature_columns(
+                dataset,
+                model_mode=self._config.model_mode,
+                inference_only=self._config.inference_only,
+            )
+        )
         scored = {f: v for f, v in shap_importances.items() if f in feature_cols}
         if not scored:
             return dataset
@@ -312,6 +476,7 @@ class TrainingLoop:
                 classifier_params=self._config.classifier_params,
                 binary_mode=self._config.binary_mode,
                 model_mode=self._config.model_mode,
+                inference_only=self._config.inference_only,
             )
             training_result = model.train(dataset, n_rounds=self._config.n_boost_rounds)
         result.training_result = training_result
