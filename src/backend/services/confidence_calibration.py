@@ -1,23 +1,17 @@
-"""Confidence calibration engine for the v2 pipeline.
+"""Confidence calibration engine v2 — prior + boosters + penalties.
 
-Decomposes the GPT-assigned confidence into weighted sub-components,
-then applies deterministic penalty rules based on numerical TA state,
-track agreement, and historical pattern accuracy. The final confidence
-is a blend of the original GPT confidence (40%) and the calibrated
-TA-based score (60%), preserving qualitative signal while grounding it
-in numerical reality. A ``SignalStrength`` position-sizing hint is
-derived from the blended score.
+Replaces the old GPT-blend model with a regime-aware prior + evidence
+update architecture. The system now works as:
 
-Auto-threshold rules (starting points -- Phase 6 feedback loop tunes over time):
-  - EMA cross age > 5 candles on daily:    -0.15
-  - RSI > 70 on bullish signal:            -0.10
-  - RSI < 30 on bearish signal:            -0.10
-  - ADX < 20 (no trend):                   penalized via lower base in _score_technical_strength
-                                           (explicit penalty lives in risk_post_filter only)
-  - Volume < 0.8x average:                 -0.10
-  - Tracks disagree:                       -0.15 per dissenting track
-  - Historical pattern accuracy < 40%:     -0.20
-  - Risk disapproved:                      (1 - risk_score) * 0.07 (halved; GPT already factors flags)
+  1. Start from ``prior_base_rate`` (strategy x regime x direction)
+  2. Apply positive AND negative evidence boosters (capped individually
+     at ±0.08, total cap ±0.15)
+  3. Produce ``setup_quality_score`` and ``win_probability``
+  4. Signal strength derived from calibrated ``win_probability``
+  5. Confidence floors still rescue when tracks agree
+
+The old 60/40 GPT/TA blend is retained as a compatibility path and will
+be removed once the v2 shadow validation confirms improvement.
 """
 
 from __future__ import annotations
@@ -34,8 +28,16 @@ from pipeline.schemas import (
     StrategyConfig,
     TrackAgreement,
 )
+from services.prior_service import get_prior
+from services.prior_service import is_loaded as priors_loaded
 
 logger = logging.getLogger(__name__)
+
+# ── Booster caps ─────────────────────────────────────────────────────────
+_MAX_SINGLE_BOOST = 0.08
+_MAX_TOTAL_BOOST = 0.15
+_MIN_WIN_PROB = 0.20
+_MAX_WIN_PROB = 0.80
 
 # ── Trend-following strategy types (ADX < 20 penalty applies) ────────────
 _TREND_FOLLOWING_TYPES = frozenset(
@@ -49,13 +51,29 @@ _TREND_FOLLOWING_TYPES = frozenset(
 )
 
 
-def _classify_signal_strength(confidence: float) -> SignalStrength:
-    """Map calibrated confidence to a position-sizing hint."""
-    if confidence >= 0.7:
+def _classify_signal_strength(
+    confidence: float,
+    regime_context: str = "",
+) -> SignalStrength:
+    """Map calibrated confidence to a position-sizing hint.
+
+    Thresholds shift based on market regime: bullish regimes lower the bar
+    (more signals are actionable), bearish regimes raise it.
+    """
+    regime_lower = regime_context.lower() if regime_context else ""
+
+    if "bull" in regime_lower or "trending_bull" in regime_lower:
+        strong, moderate, weak = 0.65, 0.45, 0.25
+    elif "bear" in regime_lower or "trending_bear" in regime_lower:
+        strong, moderate, weak = 0.75, 0.55, 0.35
+    else:
+        strong, moderate, weak = 0.70, 0.50, 0.30
+
+    if confidence >= strong:
         return SignalStrength.STRONG
-    if confidence >= 0.5:
+    if confidence >= moderate:
         return SignalStrength.MODERATE
-    if confidence >= 0.3:
+    if confidence >= weak:
         return SignalStrength.WEAK
     return SignalStrength.NO_EDGE
 
@@ -264,6 +282,121 @@ def _score_volume(
     return 0.0, penalties
 
 
+def _compute_evidence_boosters(
+    ta: MultiTimeframeTechnical | None,
+    rec: Recommendation,
+    config: StrategyConfig,
+    regime_context: str = "",
+) -> tuple[float, list[str]]:
+    """Compute positive and negative evidence boosters from TA data.
+
+    Returns:
+        (net_boost capped to ±MAX_TOTAL_BOOST, list of driver descriptions)
+    """
+    drivers: list[str] = []
+    boosts: list[float] = []
+
+    if ta is None:
+        return 0.0, drivers
+
+    snap = ta.primary
+    is_bullish = rec.action in ("BUY",)
+    is_bearish = rec.action in ("SHORT",)
+
+    # ── Positive boosters ────────────────────────────────────────────
+
+    # 1. High RVOL (volume confirmation)
+    if snap.volume and snap.volume.ratio >= 2.0:
+        b = min(0.06, _MAX_SINGLE_BOOST)
+        boosts.append(b)
+        drivers.append(f"Strong RVOL ({snap.volume.ratio:.1f}x) +{b:.0%}")
+    elif snap.volume and snap.volume.ratio >= 1.5:
+        b = min(0.03, _MAX_SINGLE_BOOST)
+        boosts.append(b)
+        drivers.append(f"Above-avg volume ({snap.volume.ratio:.1f}x) +{b:.0%}")
+
+    # 2. ADX strength (trend strategies)
+    if snap.adx >= 30 and config.strategy_type in _TREND_FOLLOWING_TYPES:
+        b = min(0.05, _MAX_SINGLE_BOOST)
+        boosts.append(b)
+        drivers.append(f"Strong ADX ({snap.adx:.0f}) +{b:.0%}")
+    elif snap.adx >= 25 and config.strategy_type in _TREND_FOLLOWING_TYPES:
+        b = min(0.03, _MAX_SINGLE_BOOST)
+        boosts.append(b)
+        drivers.append(f"Trending ADX ({snap.adx:.0f}) +{b:.0%}")
+
+    # 3. Multi-timeframe alignment
+    if ta.timeframe_alignment == "aligned_bullish" and is_bullish:
+        b = min(0.07, _MAX_SINGLE_BOOST)
+        boosts.append(b)
+        drivers.append(f"Multi-TF bullish alignment +{b:.0%}")
+    elif ta.timeframe_alignment == "aligned_bearish" and is_bearish:
+        b = min(0.07, _MAX_SINGLE_BOOST)
+        boosts.append(b)
+        drivers.append(f"Multi-TF bearish alignment +{b:.0%}")
+
+    # 4. RSI in momentum zone (not extreme)
+    rsi_val = snap.rsi.current if snap.rsi else 50.0
+    if (is_bullish and 50 <= rsi_val <= 65) or (is_bearish and 35 <= rsi_val <= 50):
+        b = min(0.03, _MAX_SINGLE_BOOST)
+        boosts.append(b)
+        drivers.append(f"RSI momentum zone ({rsi_val:.0f}) +{b:.0%}")
+
+    # 5. Clean risk geometry (entry/stop/TP all present with good R:R)
+    if (
+        rec.entry_price is not None
+        and rec.stop_loss is not None
+        and rec.take_profit is not None
+        and rec.risk_reward_ratio is not None
+        and rec.risk_reward_ratio >= 2.5
+    ):
+        b = min(0.04, _MAX_SINGLE_BOOST)
+        boosts.append(b)
+        drivers.append(f"Clean R:R ({rec.risk_reward_ratio:.1f}:1) +{b:.0%}")
+
+    # ── Negative boosters ────────────────────────────────────────────
+
+    # 6. Low RVOL
+    if snap.volume and snap.volume.ratio < 0.5:
+        b = max(-0.05, -_MAX_SINGLE_BOOST)
+        boosts.append(b)
+        drivers.append(f"Very low volume ({snap.volume.ratio:.1f}x) {b:+.0%}")
+    elif snap.volume and snap.volume.ratio < 0.8:
+        b = max(-0.03, -_MAX_SINGLE_BOOST)
+        boosts.append(b)
+        drivers.append(f"Below-avg volume ({snap.volume.ratio:.1f}x) {b:+.0%}")
+
+    # 7. Weak ADX (trendless)
+    if snap.adx < 15 and config.strategy_type in _TREND_FOLLOWING_TYPES:
+        b = max(-0.06, -_MAX_SINGLE_BOOST)
+        boosts.append(b)
+        drivers.append(f"Weak ADX ({snap.adx:.0f}) {b:+.0%}")
+
+    # 8. Overbought RSI on bullish / oversold on bearish
+    if is_bullish and rsi_val > 75:
+        b = max(-0.05, -_MAX_SINGLE_BOOST)
+        boosts.append(b)
+        drivers.append(f"RSI overbought ({rsi_val:.0f}) {b:+.0%}")
+    elif is_bearish and rsi_val < 25:
+        b = max(-0.05, -_MAX_SINGLE_BOOST)
+        boosts.append(b)
+        drivers.append(f"RSI oversold ({rsi_val:.0f}) {b:+.0%}")
+
+    # 9. Stale EMA cross
+    if snap.ema_crosses:
+        latest = snap.ema_crosses[0]
+        if latest.candles_ago > 8:
+            b = max(-0.04, -_MAX_SINGLE_BOOST)
+            boosts.append(b)
+            drivers.append(f"Stale EMA cross ({latest.candles_ago} candles ago) {b:+.0%}")
+
+    # Cap total
+    net = sum(boosts)
+    net = max(-_MAX_TOTAL_BOOST, min(_MAX_TOTAL_BOOST, net))
+
+    return round(net, 4), drivers
+
+
 def calibrate_recommendation(
     rec: Recommendation,
     ta: MultiTimeframeTechnical | None,
@@ -272,11 +405,11 @@ def calibrate_recommendation(
     reflection_metrics: dict[str, Any] | None = None,
     risk_assessment: RiskAssessment | None = None,
 ) -> Recommendation:
-    """Apply structured confidence calibration to a single recommendation.
+    """Apply v2 confidence calibration to a single recommendation.
 
-    Preserves the original GPT confidence in ``raw_gpt_confidence``, then
-    blends it with the calibrated score (40% GPT + 60% calibrated) and sets
-    ``confidence_breakdown`` and ``signal_strength``.
+    Architecture: ``prior_base_rate + evidence_boosters → win_probability``.
+    Also computes the legacy ``confidence`` via the old 60/40 blend for
+    backward compatibility until shadow validation confirms v2 is better.
 
     Args:
         rec: The GPT-produced recommendation.
@@ -291,26 +424,22 @@ def calibrate_recommendation(
     """
     if rec.action in ("NO_TRADE", "HOLD"):
         rec.raw_gpt_confidence = rec.confidence
-        rec.signal_strength = _classify_signal_strength(rec.confidence)
+        rec.signal_strength = _classify_signal_strength(rec.confidence, regime_context)
         return rec
 
     all_penalties: list[str] = []
 
+    # ── Legacy sub-component scores (kept for backward compat) ──────
     track_score, p = _score_track_agreement(rec.track_agreement)
     all_penalties.extend(p)
-
     tech_score, p = _score_technical_strength(ta, rec.action)
     all_penalties.extend(p)
-
     trend_score, p = _score_trend_alignment(ta, config)
     all_penalties.extend(p)
-
     hist_score, p = _score_historical_pattern(reflection_metrics)
     all_penalties.extend(p)
-
     regime_score, p = _score_regime_fit(regime_context, config)
     all_penalties.extend(p)
-
     vol_penalty, p = _score_volume(ta)
     all_penalties.extend(p)
 
@@ -322,25 +451,78 @@ def calibrate_recommendation(
         all_penalties.append(f"risk_disapproved: -{risk_penalty:.2f}")
         calibrated = max(0.0, calibrated - risk_penalty)
 
+    # ── v2: Prior + Evidence Boosters → win_probability ─────────────
+    direction = "long" if rec.action == "BUY" else "short"
+    regime_key = ""
+    if regime_context:
+        rl = regime_context.lower()
+        if "bull" in rl:
+            regime_key = "normal"
+        elif "bear" in rl or "volatile" in rl or "fear" in rl:
+            regime_key = "high_volatility"
+        else:
+            regime_key = "normal"
+
+    prior = get_prior(config.strategy_type, regime_key, direction) if priors_loaded() else 0.50
+    rec.prior_base_rate = round(prior, 4)
+
+    net_boost, boost_drivers = _compute_evidence_boosters(ta, rec, config, regime_context)
+    rec.setup_quality_score = round(net_boost, 4)
+    rec.confidence_drivers = boost_drivers
+
+    win_prob = prior + net_boost
+    win_prob = max(_MIN_WIN_PROB, min(_MAX_WIN_PROB, win_prob))
+    rec.win_probability = round(win_prob, 4)
+
+    # ── ML agreement label (set later by ML blend, placeholder here) ──
+    ml_agreement: str = "unavailable"
+    if rec.ml_probability is not None:
+        p = float(rec.ml_probability)
+        if abs(p - win_prob) < 0.10:
+            ml_agreement = "neutral"
+        elif (p > 0.55 and win_prob > 0.50) or (p < 0.45 and win_prob < 0.50):
+            ml_agreement = "agree"
+        else:
+            ml_agreement = "disagree"
+
     breakdown = ConfidenceBreakdown(
-        track_agreement=track_score,
-        technical_strength=tech_score,
-        trend_alignment=trend_score,
-        historical_pattern=hist_score,
-        regime_fit=regime_score,
-        total=round(calibrated, 4),
+        prior_base_rate=rec.prior_base_rate,
+        setup_quality_score=rec.setup_quality_score,
+        ml_agreement=ml_agreement,
+        llm_conviction=rec.llm_conviction,
+        win_probability=rec.win_probability,
+        confidence_drivers=boost_drivers,
         penalties_applied=all_penalties,
     )
 
     rec.raw_gpt_confidence = rec.confidence
 
-    # Blend: 40% GPT qualitative signal + 60% TA-based calibrated score
-    blended = 0.4 * rec.confidence + 0.6 * calibrated
+    # ── Legacy blend (60% GPT + 40% calibrated) ────────────────────
+    blended = 0.6 * rec.confidence + 0.4 * calibrated
     blended = round(max(0.0, min(1.0, blended)), 4)
 
+    # Confidence floor: prevent excessive reduction when tracks agree
+    agreement_score = rec.track_agreement.agreement_score if rec.track_agreement else 0.0
+    if agreement_score >= 0.8 and blended < 0.55:
+        all_penalties.append(f"floor_applied: {blended:.4f}->0.55 (3/3 tracks agree)")
+        logger.info(
+            "Confidence floor 0.55 applied for %s (agreement=%.2f)", rec.ticker, agreement_score
+        )
+        blended = 0.55
+    elif agreement_score >= 0.5 and blended < 0.45:
+        all_penalties.append(f"floor_applied: {blended:.4f}->0.45 (2/3 tracks agree)")
+        logger.info(
+            "Confidence floor 0.45 applied for %s (agreement=%.2f)", rec.ticker, agreement_score
+        )
+        blended = 0.45
+
     rec.confidence = blended
+
+    # Shadow v2: store the prior-based win_probability as confidence_v2
+    rec.confidence_v2 = rec.win_probability
+
     rec.confidence_breakdown = breakdown
-    rec.signal_strength = _classify_signal_strength(blended)
+    rec.signal_strength = _classify_signal_strength(blended, regime_context)
 
     if all_penalties:
         penalty_summary = "; ".join(all_penalties)
@@ -351,11 +533,14 @@ def calibrate_recommendation(
             rec.confidence_adjustment = f"Calibration: {penalty_summary}"
 
     logger.info(
-        "Calibrated %s: GPT=%.2f → TA=%.4f → blended=%.4f (%s)",
+        "Calibrated %s: GPT=%.2f → TA=%.4f → blended=%.4f | v2: prior=%.3f + boost=%.3f → wp=%.3f (%s)",
         rec.ticker,
         rec.raw_gpt_confidence,
         calibrated,
         blended,
+        prior,
+        net_boost,
+        win_prob,
         rec.signal_strength,
     )
 

@@ -26,9 +26,9 @@ from utils.hashing import prompt_hash
 if TYPE_CHECKING:
     from services.fmp_service import FmpEnrichedStock, FmpQuote
 
-BULL_PROMPT_VERSION = "v6"
-BEAR_PROMPT_VERSION = "v6"
-JUDGE_PROMPT_VERSION = "v15"
+BULL_PROMPT_VERSION = "v7"
+BEAR_PROMPT_VERSION = "v7"
+JUDGE_PROMPT_VERSION = "v21"
 
 _BIAS_SCORE: dict[str, int] = {
     "strongly_bullish": 2,
@@ -68,10 +68,21 @@ Return a JSON object with this exact structure:
       "key_arguments": ["<argument 1>", "<argument 2>", ...],
       "strongest_signal": "<the single most compelling bullish signal>",
       "weakest_counter": "<the bear argument you find hardest to dismiss>",
-      "confidence": <float from 0.0 to 1.0>
+      "confidence_label": "<one of the allowed labels below>",
+      "confidence": <float — will be auto-derived, set to 0.5 as placeholder>
     }
   ]
 }
+
+confidence_label must be EXACTLY one of these ordered labels:
+  "c0_no_confidence", "c1_very_low", "c2_low", "c3_slightly_low",
+  "c4_lean_low", "c5_neutral", "c6_lean_high", "c7_slightly_high",
+  "c8_high", "c9_very_high", "c10_max_confidence"
+
+Choose the label that best matches your conviction in the setup:
+- c8_high or above: Very confident in this setup
+- c6_lean_high to c7_slightly_high: Moderate conviction in this setup
+- c5_neutral or below: Not confident in this setup
 
 Guidelines:
 - Provide at least 3 key arguments per ticker, drawing from the most bullish
@@ -80,8 +91,6 @@ Guidelines:
   from the track data. Quote numbers, not vague claims.
 - When tracks disagree, find the strongest bullish evidence and argue it
 - The strongest_signal should name which track it comes from and cite numbers
-- Confidence reflects how strong the overall bull case is across tracks
-  (0.7+ = compelling, 0.5-0.7 = moderate, <0.5 = weak)
 - Note when your bullish reading requires ignoring warnings from other tracks
 - If INDEPENDENT ML PRIOR (Track D) appears: it uses only numerical TA, FMP, and
   regime - not LLM narrative. Treat it as a fourth independent signal. You may
@@ -105,10 +114,21 @@ Return a JSON object with this exact structure:
       "key_arguments": ["<argument 1>", "<argument 2>", ...],
       "strongest_signal": "<the single most compelling bearish signal>",
       "weakest_counter": "<the bull argument you find hardest to dismiss>",
-      "confidence": <float from 0.0 to 1.0>
+      "confidence_label": "<one of the allowed labels below>",
+      "confidence": <float — will be auto-derived, set to 0.5 as placeholder>
     }
   ]
 }
+
+confidence_label must be EXACTLY one of these ordered labels:
+  "c0_no_confidence", "c1_very_low", "c2_low", "c3_slightly_low",
+  "c4_lean_low", "c5_neutral", "c6_lean_high", "c7_slightly_high",
+  "c8_high", "c9_very_high", "c10_max_confidence"
+
+Choose the label that best matches your conviction in the bear case:
+- c8_high or above: Tracks converge bearishly with compelling risk evidence
+- c6_lean_high to c7_slightly_high: Moderate bear case with some caveats
+- c5_neutral or below: Weak bear case, bullish signals dominate
 
 Guidelines:
 - Provide at least 3 key arguments per ticker, drawing from the most bearish
@@ -117,8 +137,6 @@ Guidelines:
   from the track data. Quote numbers, not vague claims.
 - When tracks disagree, find the strongest bearish evidence and argue it
 - The strongest_signal should name which track it comes from and cite numbers
-- Confidence reflects how strong the overall bear case is across tracks
-  (0.7+ = compelling risk, 0.5-0.7 = moderate, <0.5 = weak)
 - Note when your bearish reading requires ignoring bullish signals from other tracks
 - If INDEPENDENT ML PRIOR (Track D) appears: it uses only numerical TA, FMP, and
   regime - not LLM narrative. Treat it as a fourth independent signal. You may
@@ -126,14 +144,18 @@ Guidelines:
 """
 
 JUDGE_SYSTEM_PROMPT = """\
-You are a senior trading analyst receiving three INDEPENDENT research reports
-on the same ticker. These analysts did NOT communicate with each other.
-Your job is to synthesize their findings, identify agreements and conflicts,
-and produce a final recommendation.
+You are a senior trading analyst synthesizing three INDEPENDENT research
+reports on the same ticker(s). These analysts did NOT communicate with each
+other. Your job is to assess all evidence on its merits and produce a final
+recommendation with actionable trade setups.
 
-IMPORTANT: Disagreement between analysts should LOWER your confidence.
-If the technical picture contradicts the fundamental or sentiment picture,
-this is a warning sign, not something to gloss over.
+CRITICAL: You MUST produce EXACTLY ONE recommendation per ticker listed in the
+request. Every ticker gets a recommendation — use NO_TRADE if you see no edge.
+Do NOT skip any ticker.
+
+Track disagreements should inform your analysis — they provide nuance, not
+automatic downgrades. Weigh each track by its relevance to the strategy type
+and current market context.
 
 You must return ONLY valid JSON — no commentary outside the JSON structure.
 
@@ -143,7 +165,10 @@ Return a JSON object with this exact structure:
     {
       "ticker": "<SYMBOL>",
       "action": "BUY" | "SHORT" | "HOLD" | "NO_TRADE" | "WATCH",
-      "confidence": <float from 0.0 to 1.0>,
+      "confidence_label": "<one of the allowed labels below>",
+      "confidence": <float — auto-derived from label, set to 0.5 as placeholder>,
+      "llm_conviction": "low" | "medium" | "high",
+      "setup_type": "<setup archetype label, e.g. 'vwap_reclaim_long', 'ema_pullback_continuation', 'breakout_retest'>",
       "entry_price": <float or null>,
       "stop_loss": <float or null>,
       "take_profit": <float or null>,
@@ -156,7 +181,8 @@ Return a JSON object with this exact structure:
         "key_arguments": ["..."],
         "strongest_signal": "...",
         "weakest_counter": "...",
-        "confidence": <float>
+        "confidence_label": "<label>",
+        "confidence": 0.5
       },
       "bear_case": {
         "ticker": "<SYMBOL>",
@@ -164,7 +190,8 @@ Return a JSON object with this exact structure:
         "key_arguments": ["..."],
         "strongest_signal": "...",
         "weakest_counter": "...",
-        "confidence": <float>
+        "confidence_label": "<label>",
+        "confidence": 0.5
       },
       "judge_reasoning": "<2-4 sentence synthesis explaining your decision>",
       "key_factors": ["<factor 1>", "<factor 2>", ...],
@@ -191,55 +218,62 @@ entry_valid_window guidance:
 - Swing setups (4H, D charts): "1-2 trading days"
 - Position / trend setups (D, W charts): "3-5 trading days"
 - If price is extended and a pullback entry is required: "valid on pullback to $X — no time limit but may not trigger"
-- For HOLD / WATCH / NO_TRADE: "N/A"
 - Be specific. The user needs to know whether to act now or set an alert.
 
-entry_trigger guidance (REQUIRED for BUY and SHORT):
+entry_trigger guidance (REQUIRED for BUY, SHORT, and WATCH):
 - "market": enter at current price immediately (price is at or near ideal entry)
 - "limit": set a limit order at entry_price (price is away from ideal entry)
 - "breakout": enter when price breaks above/below a key level (specify in scaling_plan)
 - "pullback": wait for a retracement to a specific level before entering
-- For HOLD / WATCH / NO_TRADE: null
+- For WATCH: the trigger that would convert this to an actionable trade
+- For NO_TRADE / HOLD: null
 
 scaling_plan guidance:
 - How to build the position over time. Examples:
   "Enter full position at market" (simple)
   "50% at current price, add 50% on pullback to $187" (scaling in)
   "25% on breakout above $195, add 75% on successful retest" (confirmation scaling)
-- For NO_TRADE / WATCH: null
+- For NO_TRADE: null
+- For WATCH: the position plan to execute IF the trigger fires
 
-invalidation_conditions guidance (REQUIRED for BUY and SHORT):
+invalidation_conditions guidance (REQUIRED for BUY, SHORT, and WATCH):
 - What conditions would make this trade idea invalid BEFORE entry.
 - At minimum include a price level: "Price drops below $X before entry"
 - Include time-based: "Signal not triggered within entry_valid_window"
 - Include event-based when relevant: "Earnings report changes fundamentals"
-- For NO_TRADE / WATCH: empty array []
+- For WATCH: what would kill the developing setup entirely
+- For NO_TRADE: empty array []
 
 VERDICT REQUIREMENTS — your verdict MUST explicitly state:
 1. Which track(s) you weighted most heavily and WHY, citing specific data points
 2. What the key disagreement between tracks was and how you resolved it
 3. Your confidence level and what would change your mind
-4. If confidence is below 0.5, recommend NO_TRADE or WATCH
 
 Decision framework:
-- BUY: Bull case significantly outweighs bear case, with favorable risk/reward
-- SHORT: Bear case dominates; bearish setup with favorable short risk/reward
-- HOLD: Mixed signals, insufficient conviction, or wait-for-confirmation setup
-- NO_TRADE: Tracks fundamentally disagree on direction, or conditions are reckless
-- WATCH: Interesting setup but not yet actionable — monitor for a trigger
-
-TRACK AGREEMENT DECISION RULES:
-- 3/3 tracks agree on direction → proceed with signal, confidence based on strength
-- 2/3 tracks agree, 1 dissents → proceed with LOWER confidence, note the dissent
-- All 3 tracks disagree → NO_TRADE. Do not force a direction.
-- 2/3 agree but numerical TA contradicts → WATCH. Flag the discrepancy.
-- Any signal where ADX < 20 and strategy requires trending market → NO_TRADE
-- Momentum score near zero (-0.2 to 0.2) → WATCH unless other signals are strong
+- BUY: Bull case outweighs bear case with risk/reward >= 2:1
+- SHORT: Bear case outweighs bull case with favorable short risk/reward >= 2:1
+- HOLD: Mixed signals but leaning directional — wait for confirmation trigger
+- NO_TRADE: Tracks fundamentally disagree on direction with no resolution
+- WATCH: Setup is developing but needs a specific trigger. You MUST provide:
+  setup_type (the specific setup archetype, e.g. "vwap_reclaim_long", "ema_pullback_continuation"),
+  entry_price (trigger level), entry_trigger (the exact event or price condition,
+  e.g. "Break above $184.50 with volume > 1.5x average"),
+  invalidation_conditions (what cancels the setup entirely),
+  entry_valid_window (when the setup expires, e.g. "next 2 trading sessions").
+  judge_reasoning MUST include a "why_not_now" explanation — what specific condition
+  is missing that prevents immediate entry.
+  key_factors MUST include confirmation checklist items the user should monitor.
+  A WATCH is a developing setup with a clearly defined path to entry. If you
+  cannot explain what you are waiting for with a specific trigger, level, and
+  invalidation, output NO_TRADE instead.
+  WATCH is NOT a trash bin — it means "I see a trade forming, here is exactly
+  what to look for."
 
 INDEPENDENT ML PRIOR (Track D) — when present:
-- This is a statistical model on TA/FMP/regime only (no LLM text). It is not a veto
-  by itself, but strong disagreement with your intended action should lower confidence
-  or favor HOLD/WATCH/NO_TRADE unless Tracks A-C overwhelmingly agree.
+- This is a statistical model on TA/FMP/regime only (no LLM text). Consider it
+  as additional evidence alongside Tracks A-C. Strong ML agreement with your
+  thesis reinforces conviction. ML disagreement warrants acknowledgment but is
+  not an automatic downgrade.
 - Name ML explicitly in confidence_adjustment when it influenced your verdict.
 
 For track_agreement: assess each upstream analysis (Perplexity fundamentals,
@@ -255,19 +289,41 @@ track(s) drove the adjustment.
 
 RISK FLAGS: When RISK ASSESSMENT data is present, risk_approved=false means the
 deterministic risk screener flagged this ticker as high-risk. You MAY override
-this (markets are nuanced) but you MUST acknowledge the flag and explain why
-you're overriding it. If you agree with the risk flag, default to NO_TRADE.
+this if the qualitative evidence is compelling, but you MUST acknowledge the
+flag and explain your reasoning.
 
-Confidence calibration:
-- 0.85+: Overwhelming signal alignment across all tracks AND numerical data
-- 0.70-0.85: Strong conviction with minor caveats from at most one track
-- 0.55-0.70: Moderate conviction, 2/3 tracks agree but one dissents
-- 0.40-0.55: Low conviction — HOLD or WATCH unless exceptional catalyst
-- <0.40: Very weak signal — default to NO_TRADE or WATCH
+confidence_label must be EXACTLY one of these ordered labels:
+  "c0_no_confidence", "c1_very_low", "c2_low", "c3_slightly_low",
+  "c4_lean_low", "c5_neutral", "c6_lean_high", "c7_slightly_high",
+  "c8_high", "c9_very_high", "c10_max_confidence"
+
+The backend maps these labels to numeric values deterministically — you do NOT
+choose a float. The final probability is computed by the backend using regime
+priors, evidence boosters, and ML agreement. Focus on picking the label that
+best matches your qualitative conviction.
+
+llm_conviction guidance:
+- "high": Tracks converge, setup is textbook, risk/reward is compelling
+- "medium": Most evidence supports the thesis with minor caveats
+- "low": Thesis is plausible but material uncertainty remains
+
+CRITICAL — confidence_label means DIRECTIONAL TRADE CONVICTION, not certainty
+in your verdict. A high-confidence NO_TRADE is a contradiction. Use this scale:
+- BUY/SHORT c6_lean_high to c9_very_high: Directional edge with evidence
+- WATCH c3_slightly_low to c5_neutral: Setup developing, not actionable yet
+- NO_TRADE c0_no_confidence to c2_low: No directional edge visible
+- HOLD c2_low to c4_lean_low: Existing position, mixed signals
+
+setup_type: Label each recommendation with a descriptive setup archetype string
+(e.g. "vwap_reclaim_long", "ema_pullback_continuation", "breakout_retest",
+"gap_fill_short", "range_bound_no_trade"). Use the strategy's allowed archetypes
+when available. For NO_TRADE, use a descriptive label like "no_setup_identified".
 
 Entry price rules (CRITICAL — MANDATORY for BUY and SHORT):
 - entry_price, stop_loss, and take_profit are REQUIRED (non-null) for ALL BUY
   and SHORT recommendations. NEVER return null for these fields on BUY or SHORT.
+- The system enforces R:R >= 2:1. If you cannot construct a setup with R:R >= 2:1,
+  use WATCH and describe the trigger that would create the opportunity.
 - Use the live market price from LIVE MARKET DATA as the anchor for price levels.
 - If recommending BUY and price is at or near support, set entry_price at or
   close to current price — this is an actionable NOW entry.
@@ -275,8 +331,8 @@ Entry price rules (CRITICAL — MANDATORY for BUY and SHORT):
   the nearest realistic pullback level and note a limit order is required.
 - For SHORT: entry_price near resistance, same anchoring logic.
 - For HOLD: entry_price = trigger price to convert to BUY. stop/take = null.
-- For NO_TRADE / WATCH: entry_price, stop_loss, take_profit = null,
-  position_size_pct = 0. WATCH may set entry_price to re-evaluation level.
+- For WATCH: entry_price = the trigger level to monitor. stop_loss and
+  take_profit = null. position_size_pct = 0.
 
 ATR-based stop loss (PREFERRED method when ATR data is available):
 - Use ATR from the RAW NUMERICAL DATA section.
@@ -291,69 +347,23 @@ ATR-based stop loss (PREFERRED method when ATR data is available):
 Weighted bias score (multi-timeframe alignment metric):
 - The RAW NUMERICAL DATA section may include a multi-timeframe alignment status.
 - Full alignment across timeframes supports full position sizing.
-- Mixed alignment → reduced position or WATCH.
+- Mixed alignment → consider reduced position sizing.
 
 Historical performance memory (when HISTORICAL PERFORMANCE section is present):
 - SHORT-TERM MEMORY (last 14 days): active streaks, temporary suppressions.
-  Treat suppressions as strong warnings — multiply confidence by the reduction.
+  Treat suppressions as cautionary context — factor them in proportionally.
 - LONG-TERM MEMORY: statistical baseline. Use for calibration.
-- When short-term and long-term conflict, PRIORITIZE short-term for the next
-  1-2 recommendations. Add a warning noting the conflict.
+- When short-term and long-term conflict, note the discrepancy as a warning.
 
 Risk management rules:
 - Position sizes should respect the provided risk parameters
 - entry_price, stop_loss, and take_profit MUST be set (non-null) for BUY and SHORT
 - risk_reward_ratio = (take_profit - entry) / (entry - stop_loss) — REQUIRED for BUY/SHORT
-- Reduce position_size_pct when confidence is low or tracks disagree
+- Target R:R >= 2:1. If the chart structure does not support 2:1, use WATCH.
 - Flag warnings for any unusual risks (earnings, low liquidity, etc.)
 
-## EXAMPLE OUTPUT (redacted for brevity)
-{
-  "recommendations": [
-    {
-      "ticker": "EXAMPLE",
-      "action": "BUY",
-      "confidence": 0.72,
-      "entry_price": 185.50,
-      "stop_loss": 179.20,
-      "take_profit": 198.00,
-      "position_size_pct": 3.0,
-      "risk_reward_ratio": 1.98,
-      "holding_period": "3-5 days",
-      "bull_case": {
-        "ticker": "EXAMPLE",
-        "stance": "bull",
-        "key_arguments": ["Track A: revenue growth 22% YoY with expanding margins", "Track C: ascending triangle on daily, RSI 52 with room to run", "Track B: sentiment score 0.6 driven by analyst upgrades"],
-        "strongest_signal": "Track C: breakout above $184 resistance with volume confirmation (RVOL 1.8x)",
-        "weakest_counter": "Track B: sector rotation risk flagged by Gemini (-0.3 sector sentiment)",
-        "confidence": 0.78
-      },
-      "bear_case": {
-        "ticker": "EXAMPLE",
-        "stance": "bear",
-        "key_arguments": ["Earnings in 5 days creates binary event risk", "RSI approaching overbought on weekly timeframe"],
-        "strongest_signal": "Earnings proximity — historical post-earnings drawdown of 8%",
-        "weakest_counter": "Strong institutional buying in last 2 weeks suggests smart money is positioned",
-        "confidence": 0.45
-      },
-      "judge_reasoning": "Track C technical breakout is the primary driver, confirmed by Track A fundamental strength. Track B sector headwinds are acknowledged but ticker-specific catalysts outweigh. Reduced position size due to earnings proximity.",
-      "key_factors": ["Ascending triangle breakout with volume", "22% revenue growth", "Earnings in 5 days (risk)"],
-      "warnings": ["Binary event risk from upcoming earnings", "Weekly RSI approaching overbought"],
-      "track_agreement": {
-        "perplexity_direction": "bullish",
-        "gemini_direction": "neutral",
-        "claude_direction": "bullish",
-        "agreement_score": 0.65,
-        "conflicts": ["Gemini sector sentiment bearish while ticker-specific fundamentals bullish"]
-      },
-      "confidence_adjustment": "Lowered from 0.78 to 0.72 due to earnings proximity and Gemini sector headwinds. Track C and A alignment prevented further reduction.",
-      "entry_trigger": "limit",
-      "scaling_plan": "50% at $185.50 limit, add 50% on successful retest of $184 breakout level",
-      "invalidation_conditions": ["Price drops below $182 (triangle support)", "Pre-earnings guidance warning"],
-      "entry_valid_window": "1-2 trading days"
-    }
-  ]
-}
+The output schema is enforced by the API — follow it exactly. Focus on quality
+of analysis, not formatting.
 """
 
 
@@ -404,6 +414,10 @@ def _format_screening_data(screening: ScreeningResult | None, tickers: list[str]
 
     ticker_map = {t.ticker: t for t in screening.tickers}
     parts: list[str] = []
+
+    if screening.screening_summary:
+        parts.append(f"**Screening Overview:** {screening.screening_summary}\n")
+
     for ticker in tickers:
         fd = ticker_map.get(ticker)
         if not fd:
@@ -790,6 +804,27 @@ def _build_debate_side_prompt(
     if config.trading_style:
         parts.append(f"\nTrading context: {config.trading_style}")
 
+    # Active strategy contract — forces bull/bear to evaluate under this strategy
+    archetypes_str = ", ".join(config.setup_archetypes) if config.setup_archetypes else "any"
+    contract_lines = [
+        "\n## ACTIVE STRATEGY CONTRACT",
+        f"Strategy: {config.name or 'Unnamed'}",
+        f"Type: {config.strategy_type or 'general'}",
+        f"Style: {config.trading_style or 'unspecified'}",
+        f"Setup Archetypes: {archetypes_str}",
+    ]
+    if config.ta_focus:
+        contract_lines.append(f"TA Focus: {config.ta_focus}")
+    contract_lines.extend(
+        [
+            "",
+            "IMPORTANT: Evaluate each ticker under this specific strategy.",
+            "- Only argue for setups that match the strategy's archetypes",
+            "- If the ticker does not fit this strategy's playbook, acknowledge it",
+        ]
+    )
+    parts.extend(contract_lines)
+
     parts.append(f"\n{_format_data_availability(tickers, screening, charts, sentiments)}")
     parts.append(f"\n## LIVE MARKET DATA (real-time)\n{_format_live_quotes(live_quotes, tickers)}")
 
@@ -974,24 +1009,35 @@ def build_judge_prompt(
     """
     rp = config.risk_params
     parts = [
-        f"Produce final recommendations for: {', '.join(tickers)}",
+        f"Produce EXACTLY {len(tickers)} recommendations, one for each ticker: "
+        f"{', '.join(tickers)}",
         "",
         "You are receiving THREE INDEPENDENT analysis reports. The analysts did "
-        "NOT communicate with each other. Disagreement between them should LOWER "
-        "your confidence, not be glossed over.",
+        "NOT communicate with each other. Assess all evidence on its merits.",
     ]
 
-    # Strategy identity — gives the judge awareness of the strategy archetype
-    strategy_lines = ["\n## STRATEGY CONTEXT"]
+    # Strategy contract — grounds GPT in the active strategy
+    archetypes_str = ", ".join(config.setup_archetypes) if config.setup_archetypes else "any"
+    contract_lines = ["\n## ACTIVE STRATEGY CONTRACT"]
     strategy_label = config.name or "Unnamed"
     if config.strategy_type:
         strategy_label += f" ({config.strategy_type})"
-    strategy_lines.append(f"- Strategy: {strategy_label}")
+    contract_lines.append(f"Strategy: {strategy_label}")
     if config.description:
-        strategy_lines.append(f"- Description: {config.description}")
+        contract_lines.append(f"Description: {config.description}")
     if config.trading_style:
-        strategy_lines.append(f"- Trading style: {config.trading_style}")
-    parts.extend(strategy_lines)
+        contract_lines.append(f"Style: {config.trading_style}")
+    contract_lines.append(f"Setup Archetypes: {archetypes_str}")
+    if config.ta_focus:
+        contract_lines.append(f"TA Focus: {config.ta_focus}")
+    contract_lines.extend(
+        [
+            "",
+            "Only recommend setups matching the archetypes above.",
+            "Label setup_type from the allowed list. If no fit, output NO_TRADE.",
+        ]
+    )
+    parts.extend(contract_lines)
 
     if regime_context:
         parts.append(f"\n{regime_context}")
@@ -1077,7 +1123,7 @@ def build_judge_prompt(
             if bc:
                 args = "\n".join(f"  - {a}" for a in bc.key_arguments)
                 bull_parts.append(
-                    f"\n### {ticker} (confidence: {bc.confidence:.2f})\n"
+                    f"\n### {ticker} (conviction: {bc.confidence_label})\n"
                     f"Arguments:\n{args}\n"
                     f"Strongest signal: {bc.strongest_signal}\n"
                     f"Weakest counter: {bc.weakest_counter}"
@@ -1086,8 +1132,9 @@ def build_judge_prompt(
             parts.append(f"\n## BULL CASE ARGUMENTS\n{''.join(bull_parts)}")
     else:
         parts.append(
-            "\n## BULL CASE ARGUMENTS\nNo debate was conducted. "
-            "Perform your own internal bull analysis from the track data above."
+            "\n## BULL CASE ARGUMENTS\n"
+            "Analyze all evidence with balanced perspective. In your bull_case output, "
+            "present the strongest bullish arguments drawn from the track data above."
         )
 
     if bear_cases:
@@ -1098,7 +1145,7 @@ def build_judge_prompt(
             if bc:
                 args = "\n".join(f"  - {a}" for a in bc.key_arguments)
                 bear_parts.append(
-                    f"\n### {ticker} (confidence: {bc.confidence:.2f})\n"
+                    f"\n### {ticker} (conviction: {bc.confidence_label})\n"
                     f"Arguments:\n{args}\n"
                     f"Strongest signal: {bc.strongest_signal}\n"
                     f"Weakest counter: {bc.weakest_counter}"
@@ -1107,8 +1154,9 @@ def build_judge_prompt(
             parts.append(f"\n## BEAR CASE ARGUMENTS\n{''.join(bear_parts)}")
     else:
         parts.append(
-            "\n## BEAR CASE ARGUMENTS\nNo debate was conducted. "
-            "Perform your own internal bear analysis from the track data above."
+            "\n## BEAR CASE ARGUMENTS\n"
+            "In your bear_case output, present the strongest risks and concerns "
+            "drawn from the track data above."
         )
 
     parts.append(

@@ -75,6 +75,28 @@ async def get_latest_reflection(user_id: CurrentUser) -> ReflectionResponse:
     )
 
 
+@router.delete("/reflections/{reflection_id}")
+async def delete_reflection(reflection_id: str, user_id: CurrentUser) -> dict[str, str]:
+    """Delete a specific reflection by ID (must belong to the authenticated user)."""
+    client = await get_db()
+
+    existing = (
+        await client.table("reflections")
+        .select("id")
+        .eq("id", reflection_id)
+        .eq("user_id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    if not existing or not existing.data:
+        raise HTTPException(status_code=404, detail="Reflection not found")
+
+    await client.table("reflections").delete().eq("id", reflection_id).eq(
+        "user_id", user_id
+    ).execute()
+    return {"status": "deleted"}
+
+
 @router.get("/trade-history", response_model=list[TradeHistoryEntry])
 async def get_trade_history(user_id: CurrentUser) -> list[TradeHistoryEntry]:
     """Return resolved outcomes as a time-series with cumulative PnL.

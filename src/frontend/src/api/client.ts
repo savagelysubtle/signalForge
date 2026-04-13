@@ -154,6 +154,8 @@ export const api = {
   triggerReflection: () =>
     request<ReflectionResponse>("/api/insights/reflect", { method: "POST" }),
   getLatestReflection: () => request<ReflectionResponse>("/api/insights/reflections/latest"),
+  deleteReflection: (id: string) =>
+    request<{ status: string }>(`/api/insights/reflections/${id}`, { method: "DELETE" }),
 
   // Brokerage
   getBrokerageAuthorizeUrl: (redirectUri: string, isPractice = false, state = "") => {

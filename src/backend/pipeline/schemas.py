@@ -30,6 +30,64 @@ class RecommendationAction(StrEnum):
 
 
 # ---------------------------------------------------------------------------
+# Confidence Label Enum (replaces raw float from LLM output)
+# ---------------------------------------------------------------------------
+
+
+class ConfidenceLabel(StrEnum):
+    """Ordered confidence labels for LLM output.
+
+    LLMs produce one of these categorical labels instead of a raw float.
+    The ``CONFIDENCE_LABEL_MAP`` below converts to a deterministic numeric
+    value owned by the application, not the model.
+    """
+
+    C0_NO_CONFIDENCE = "c0_no_confidence"
+    C1_VERY_LOW = "c1_very_low"
+    C2_LOW = "c2_low"
+    C3_SLIGHTLY_LOW = "c3_slightly_low"
+    C4_LEAN_LOW = "c4_lean_low"
+    C5_NEUTRAL = "c5_neutral"
+    C6_LEAN_HIGH = "c6_lean_high"
+    C7_SLIGHTLY_HIGH = "c7_slightly_high"
+    C8_HIGH = "c8_high"
+    C9_VERY_HIGH = "c9_very_high"
+    C10_MAX_CONFIDENCE = "c10_max_confidence"
+
+
+CONFIDENCE_LABEL_MAP: dict[ConfidenceLabel, float] = {
+    ConfidenceLabel.C0_NO_CONFIDENCE: 0.00,
+    ConfidenceLabel.C1_VERY_LOW: 0.10,
+    ConfidenceLabel.C2_LOW: 0.20,
+    ConfidenceLabel.C3_SLIGHTLY_LOW: 0.30,
+    ConfidenceLabel.C4_LEAN_LOW: 0.40,
+    ConfidenceLabel.C5_NEUTRAL: 0.50,
+    ConfidenceLabel.C6_LEAN_HIGH: 0.60,
+    ConfidenceLabel.C7_SLIGHTLY_HIGH: 0.70,
+    ConfidenceLabel.C8_HIGH: 0.80,
+    ConfidenceLabel.C9_VERY_HIGH: 0.90,
+    ConfidenceLabel.C10_MAX_CONFIDENCE: 1.00,
+}
+
+
+def confidence_label_to_float(label: ConfidenceLabel | str) -> float:
+    """Convert a confidence label to its mapped float value.
+
+    Args:
+        label: A ``ConfidenceLabel`` member or its string value.
+
+    Returns:
+        The deterministic float value from ``CONFIDENCE_LABEL_MAP``.
+
+    Raises:
+        ValueError: If the label is not a valid ``ConfidenceLabel``.
+    """
+    if isinstance(label, str):
+        label = ConfidenceLabel(label)
+    return CONFIDENCE_LABEL_MAP[label]
+
+
+# ---------------------------------------------------------------------------
 # Track Agreement (v2 pipeline — independent track alignment)
 # ---------------------------------------------------------------------------
 
@@ -54,22 +112,37 @@ class TrackAgreement(BaseModel):
 
 
 class ConfidenceBreakdown(BaseModel):
-    """Structured confidence decomposition into weighted sub-components.
+    """Structured confidence decomposition for the v2 confidence engine.
 
-    Each component contributes a portion of the total 0.0-1.0 score:
-      track_agreement:    0.00-0.30  (agreement across Perplexity/Gemini/Claude)
-      technical_strength: 0.00-0.20  (momentum score + ADX)
-      trend_alignment:    0.00-0.20  (multi-timeframe agreement)
-      historical_pattern: 0.00-0.20  (similar trade outcome history)
-      regime_fit:         0.00-0.10  (strategy-regime compatibility)
+    Replaces the fixed-weight sub-component model with a prior→boosters→ML
+    architecture. Each field represents a distinct contributor to the final
+    ``win_probability``.
     """
 
-    track_agreement: float = Field(default=0.0, ge=0.0, le=0.3)
-    technical_strength: float = Field(default=0.0, ge=0.0, le=0.2)
-    trend_alignment: float = Field(default=0.0, ge=0.0, le=0.2)
-    historical_pattern: float = Field(default=0.0, ge=0.0, le=0.2)
-    regime_fit: float = Field(default=0.0, ge=0.0, le=0.1)
-    total: float = Field(default=0.0, ge=0.0, le=1.0)
+    prior_base_rate: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Starting probability from strategy/regime lookup table",
+    )
+    setup_quality_score: float = Field(
+        default=0.0,
+        ge=-0.15,
+        le=0.15,
+        description="Net effect of positive/negative evidence boosters",
+    )
+    ml_agreement: Literal["agree", "disagree", "neutral", "unavailable"] = "unavailable"
+    llm_conviction: Literal["low", "medium", "high"] | None = None
+    win_probability: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Final calibrated probability used for EV and sizing",
+    )
+    confidence_drivers: list[str] = Field(
+        default_factory=list,
+        description="Top 2-3 factors that moved the number, e.g. 'Strong RVOL (+6%)'",
+    )
     penalties_applied: list[str] = Field(default_factory=list)
 
 
@@ -382,7 +455,70 @@ class DebateCase(BaseModel):
     key_arguments: list[str] = Field(default_factory=list)
     strongest_signal: str = ""
     weakest_counter: str = ""
+    confidence_label: ConfidenceLabel = ConfidenceLabel.C5_NEUTRAL
     confidence: float = Field(ge=0.0, le=1.0, default=0.5)
+
+    @model_validator(mode="after")
+    def _sync_confidence_from_label(self) -> DebateCase:
+        """Derive numeric confidence from the label if the default wasn't overridden."""
+        self.confidence = confidence_label_to_float(self.confidence_label)
+        return self
+
+
+class GptJudgeRecommendation(BaseModel):
+    """Slim GPT judge output schema — only fields the LLM should produce.
+
+    Backend-computed fields (ML gate, confidence v2, signal freshness, etc.)
+    are NOT included here. After parsing, these are mapped to the full
+    ``Recommendation`` model.
+
+    GPT outputs ``confidence_label`` (a categorical string from
+    ``ConfidenceLabel``) instead of a raw float. The numeric ``confidence``
+    is derived deterministically via ``CONFIDENCE_LABEL_MAP``.
+    """
+
+    ticker: str
+
+    @field_validator("ticker", mode="before")
+    @classmethod
+    def _clean_ticker(cls, v: str) -> str:
+        return normalize_ticker(v) if isinstance(v, str) else v
+
+    action: RecommendationAction
+    confidence_label: ConfidenceLabel
+    confidence: float = Field(ge=0.0, le=1.0, default=0.5)
+    llm_conviction: Literal["low", "medium", "high"] | None = None
+
+    @model_validator(mode="after")
+    def _sync_confidence_from_label(self) -> GptJudgeRecommendation:
+        """Derive numeric confidence from the label."""
+        self.confidence = confidence_label_to_float(self.confidence_label)
+        return self
+
+    setup_type: str | None = None
+    entry_price: float | None = None
+    stop_loss: float | None = None
+    take_profit: float | None = None
+    position_size_pct: float = 0.0
+    risk_reward_ratio: float | None = None
+    holding_period: str = ""
+    bull_case: DebateCase | None = None
+    bear_case: DebateCase | None = None
+    judge_reasoning: str = ""
+    key_factors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    track_agreement: TrackAgreement | None = None
+    confidence_adjustment: str = ""
+    entry_trigger: str | None = None
+    scaling_plan: str | None = None
+    invalidation_conditions: list[str] = Field(default_factory=list)
+    entry_valid_window: str = ""
+
+
+class GptJudgeRecommendationList(BaseModel):
+    """Wrapper for batch judge output from GPT (slim schema)."""
+
+    recommendations: list[GptJudgeRecommendation]
 
 
 class Recommendation(BaseModel):
@@ -398,6 +534,10 @@ class Recommendation(BaseModel):
         return normalize_ticker(v) if isinstance(v, str) else v
 
     confidence: float = Field(ge=0.0, le=1.0)
+    confidence_label: ConfidenceLabel | None = Field(
+        default=None,
+        description="Categorical confidence label from GPT (before calibration)",
+    )
     entry_price: float | None = None
     stop_loss: float | None = None
     take_profit: float | None = None
@@ -461,6 +601,48 @@ class Recommendation(BaseModel):
         description="P(profitable) from independent model before GPT ran",
     )
     pre_gpt_ml_direction: Literal["UP", "DOWN", "FLAT"] | None = None
+
+    # Expected value: confidence * R:R - (1 - confidence)
+    expected_value: float | None = Field(
+        default=None,
+        description="Expected value per unit risk: confidence * R:R - (1 - confidence)",
+    )
+
+    # Confidence Engine v2 fields
+    win_probability: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Calibrated probability from prior + boosters + ML blend",
+    )
+    setup_quality_score: float | None = Field(
+        default=None,
+        description="Net effect of positive/negative evidence boosters",
+    )
+    llm_conviction: Literal["low", "medium", "high"] | None = Field(
+        default=None,
+        description="GPT's ordinal conviction bucket (replaces numeric authority)",
+    )
+    prior_base_rate: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Starting probability from strategy/regime prior table",
+    )
+    confidence_v2: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Shadow confidence from v2 engine (for validation before cutover)",
+    )
+    setup_type: str | None = Field(
+        default=None,
+        description="Setup archetype label from strategy's allowed list",
+    )
+    confidence_drivers: list[str] = Field(
+        default_factory=list,
+        description="Top factors that moved the number, e.g. 'Strong RVOL (+6%)'",
+    )
 
 
 class DebateCaseList(BaseModel):
@@ -750,6 +932,12 @@ class StrategyConfig(BaseModel):
     is_template: bool = False
     recommended: bool = False
     strategy_type: str = "swing"
+
+    # Signal freshness: how long (hours) a signal from this strategy stays actionable
+    signal_half_life_hours: int = 48
+
+    # Allowed setup types for this strategy (WATCH/BUY/SHORT must match one)
+    setup_archetypes: list[str] = Field(default_factory=list)
 
     #: Primary listing currency for equities — drives FMP ``country`` / ``exchange``
     #: for non-crypto screeners (USD → US markets, CAD → Canada / TSX).

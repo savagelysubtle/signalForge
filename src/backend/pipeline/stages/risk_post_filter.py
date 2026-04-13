@@ -134,7 +134,6 @@ def risk_post_filter(
     """
     sentiment_map = {s.ticker: s for s in sentiments}
     chart_map = {c.ticker: c for c in charts}
-    ta_map = {t.ticker: t for t in ta_snapshots}
 
     assessments: list[RiskAssessment] = []
 
@@ -145,7 +144,6 @@ def risk_post_filter(
 
         sa = sentiment_map.get(ticker)
         ca = chart_map.get(ticker)
-        ta = ta_map.get(ticker)
 
         if sa:
             if sa.sentiment_score <= -0.6:
@@ -154,20 +152,8 @@ def risk_post_filter(
             if sa.confidence < 0.3:
                 flags.append(f"Low sentiment confidence ({sa.confidence:.2f})")
 
-        if ta and ta.primary:
-            p = ta.primary
-            if p.adx < 20 and config.strategy_type in ("momentum", "swing", "trend"):
-                flags.append(f"No trend (ADX {p.adx:.1f} < 20) for trend-following strategy")
-                risk_score -= 0.15
-            if p.rsi and p.rsi.current > 80:
-                flags.append(f"Extremely overbought RSI ({p.rsi.current:.1f})")
-                risk_score -= 0.1
-            if p.rsi and p.rsi.current < 20:
-                flags.append(f"Extremely oversold RSI ({p.rsi.current:.1f})")
-                risk_score -= 0.1
-            if p.volume and p.volume.ratio < 0.5:
-                flags.append(f"Very low volume ({p.volume.ratio:.1f}x avg)")
-                risk_score -= 0.1
+        # ADX, RSI, and volume penalties are owned by risk_validator.py (ADX)
+        # and confidence_calibration.py (RSI, volume) — not duplicated here.
 
         if fmp_map and ticker in fmp_map:
             stock = fmp_map[ticker]

@@ -92,9 +92,9 @@ logger = logging.getLogger(__name__)
 STAGE_TIMEOUTS: dict[str, float] = {
     "fmp": 90.0,
     "perplexity": 180.0,
-    "gemini": 120.0,
+    "gemini": 240.0,
     "claude": 360.0,
-    "gpt": 360.0,
+    "gpt": 600.0,
     "annotate": 60.0,
 }
 
@@ -117,15 +117,18 @@ def _build_ml_dicts(
     Returns:
         Tuple of (ta_dict, fmp_dict, regime_dict).
     """
+    from ml.feature_mapper import map_fmp_to_features, map_multi_tf_to_features
+
     ta_dict: dict[str, dict[str, Any]] = {}
     for snap in ta_snapshots:
-        if hasattr(snap, "ticker") and hasattr(snap, "primary"):
-            ta_dict[snap.ticker] = snap.primary.model_dump() if snap.primary else {}
+        if hasattr(snap, "ticker"):
+            ta_dict[snap.ticker] = map_multi_tf_to_features(snap.model_dump())
 
     fmp_dict: dict[str, dict[str, Any]] = {}
     if fmp_map:
         for sym, stock in fmp_map.items():
-            fmp_dict[sym] = stock.model_dump() if hasattr(stock, "model_dump") else {}
+            raw = stock.model_dump() if hasattr(stock, "model_dump") else {}
+            fmp_dict[sym] = map_fmp_to_features(raw)
 
     regime_dict: dict[str, Any] | None = None
     if regime:
@@ -136,6 +139,61 @@ def _build_ml_dicts(
         }
 
     return ta_dict, fmp_dict, regime_dict
+
+
+def _enrich_screening_fundamentals(
+    screening: ScreeningResult,
+    fmp_map: dict[str, FmpEnrichedStock],
+    live_quotes: dict,
+) -> None:
+    """Back-patch FundamentalData fields from FMP and live quotes.
+
+    Perplexity's anti-hallucination rule forces null for any unverified
+    metric, leaving market_cap, pe_ratio, price, etc. blank.  This fills
+    them from deterministic sources (FMP enrichment, live quotes) so the
+    frontend overview cards actually show data.
+
+    Mutates ``screening.tickers`` in place; only overwrites fields that
+    are still ``None``.
+    """
+    if not screening or not screening.tickers:
+        return
+
+    for td in screening.tickers:
+        key = canonical_ticker_match_key(td.ticker)
+
+        fmp = next(
+            (s for sym, s in fmp_map.items() if canonical_ticker_match_key(sym) == key),
+            None,
+        )
+        if fmp:
+            if td.market_cap is None and fmp.market_cap is not None:
+                if fmp.market_cap >= 1_000_000_000:
+                    td.market_cap = f"${fmp.market_cap / 1_000_000_000:.1f}B"
+                else:
+                    td.market_cap = f"${fmp.market_cap / 1_000_000:.0f}M"
+            if td.pe_ratio is None and fmp.pe_ratio is not None:
+                td.pe_ratio = round(fmp.pe_ratio, 2)
+            if td.sector in ("", None) and fmp.sector:
+                td.sector = fmp.sector
+            if td.price is None and fmp.price is not None:
+                td.price = fmp.price
+            if td.relative_volume is None and fmp.relative_volume is not None:
+                td.relative_volume = round(fmp.relative_volume, 2)
+            if td.free_cash_flow is None and fmp.fcf_per_share is not None:
+                td.free_cash_flow = f"${fmp.fcf_per_share:.2f}/sh"
+            if td.company_name in ("", None) and fmp.company_name:
+                td.company_name = fmp.company_name
+
+        quote = next(
+            (q for sym, q in live_quotes.items() if canonical_ticker_match_key(sym) == key),
+            None,
+        )
+        if quote:
+            if td.price is None and quote.price is not None:
+                td.price = quote.price
+            if td.price_change_pct is None and quote.changesPercentage is not None:
+                td.price_change_pct = round(quote.changesPercentage, 2)
 
 
 async def run_pipeline(
@@ -171,6 +229,13 @@ async def run_pipeline(
     """
     run_id = run_id or uuid.uuid4().hex
     start = time.perf_counter()
+
+    # Load regime-aware priors if not already loaded
+    from services.prior_service import is_loaded as priors_loaded
+    from services.prior_service import load_prior_table
+
+    if not priors_loaded():
+        load_prior_table()
 
     if manual_tickers:
         manual_tickers = normalize_tickers(manual_tickers)
@@ -630,22 +695,40 @@ async def _run_pipeline(
     except Exception as exc:
         logger.warning(" Live quote fetch for Claude failed (non-critical): %s", exc)
 
+    # ── Enrich screening fundamentals with FMP + live quotes ─────────────
+    if screening:
+        _enrich_screening_fundamentals(screening, fmp_map, claude_live_quotes)
+        try:
+            client = await get_db()
+            await (
+                client.table("stage_outputs")
+                .update({"raw_response": screening.model_dump_json()})
+                .eq("run_id", run_id)
+                .eq("stage", "perplexity")
+                .execute()
+            )
+        except Exception as exc:
+            logger.warning("Failed to update enriched screening: %s", exc)
+
     # ── Three Independent Parallel Tracks ────────────────────────────────
     # Track A: Perplexity results already collected above (screening)
-    # Track B: Gemini (FMP context + Perplexity highlights, no raw articles)
+    # Track B: Gemini (FMP context + Perplexity article URLs/highlights)
     # Track C: Claude (numerical TA + chart + live quotes — NO sentiment)
 
+    ticker_news: dict[str, list[str]] | None = None
     ticker_highlights: dict[str, list[str]] | None = None
     if screening and screening.tickers:
+        _news = {t.ticker: t.news_urls for t in screening.tickers if t.news_urls}
         _hl = {t.ticker: t.key_highlights for t in screening.tickers if t.key_highlights}
+        ticker_news = _news or None
         ticker_highlights = _hl or None
 
     async def _track_b_gemini() -> tuple[list[SentimentAnalysis], list[dict]]:
-        """Track B: Gemini sentiment enriched with FMP + Perplexity highlights."""
+        """Track B: Gemini sentiment enriched with Perplexity links/highlights + FMP."""
         sentiments_b, meta_b = await run_sentiment(
             ticker_symbols,
             config,
-            ticker_news=None,
+            ticker_news=ticker_news,
             fmp_context=fmp_map or None,
             ticker_highlights=ticker_highlights,
             regime_context=regime_context,
@@ -877,10 +960,12 @@ async def _run_pipeline(
             )
             logger.exception("GPT stage failed")
 
-    # Track agreement (Gemini + Claude + GPT consensus)
+    # Track agreement (Perplexity + Gemini + Claude — true 3-track consensus)
     for rec in result.recommendations:
         try:
-            rec.track_agreement = _compute_track_agreement(rec, sentiments, charts)
+            rec.track_agreement = _compute_track_agreement(
+                rec, sentiments, charts, screening=result.screening
+            )
         except Exception as exc:
             logger.warning("Track agreement failed for %s: %s", rec.ticker, exc)
 
@@ -894,6 +979,7 @@ async def _run_pipeline(
                 fmp_context=fmp_map or None,
                 live_quotes=live_quotes or None,
                 risk_assessments=risk_assessments or None,
+                ta_snapshots=ta_snapshots or None,
             )
         except Exception as exc:
             logger.exception("Risk validation failed, using unvalidated recommendations")
@@ -906,6 +992,26 @@ async def _run_pipeline(
         for rec in result.recommendations:
             if rec.raw_gpt_confidence is None:
                 rec.raw_gpt_confidence = rec.confidence
+
+        # Clamp confidence by action — GPT often interprets confidence as
+        # "certainty in its verdict" rather than "directional trade conviction."
+        # NO_TRADE should be low (no edge), WATCH moderate (developing setup).
+        _ACTION_CONFIDENCE_CAPS: dict[str, float] = {
+            "NO_TRADE": 0.25,
+            "HOLD": 0.35,
+            "WATCH": 0.55,
+        }
+        for rec in result.recommendations:
+            cap = _ACTION_CONFIDENCE_CAPS.get(rec.action)
+            if cap is not None and rec.confidence > cap:
+                logger.info(
+                    "Clamped %s %s confidence %.2f -> %.2f",
+                    rec.ticker,
+                    rec.action,
+                    rec.confidence,
+                    cap,
+                )
+                rec.confidence = cap
 
     # Confidence calibration (Phase 7)
     if result.recommendations:
@@ -1038,6 +1144,33 @@ async def _run_pipeline(
         for rec in result.recommendations:
             blend_confidence_with_ml(rec)
 
+        # Re-apply confidence floor after ML blend — track consensus overrides ML crush
+        for rec in result.recommendations:
+            if rec.action in ("BUY", "SHORT", "WATCH"):
+                ag = rec.track_agreement.agreement_score if rec.track_agreement else 0.0
+                if ag >= 0.8 and rec.confidence < 0.55:
+                    logger.info(
+                        "Post-ML floor 0.55 for %s (agreement=%.2f, was %.2f)",
+                        rec.ticker,
+                        ag,
+                        rec.confidence,
+                    )
+                    rec.confidence = 0.55
+                elif ag >= 0.5 and rec.confidence < 0.45:
+                    logger.info(
+                        "Post-ML floor 0.45 for %s (agreement=%.2f, was %.2f)",
+                        rec.ticker,
+                        ag,
+                        rec.confidence,
+                    )
+                    rec.confidence = 0.45
+
+        # Re-apply regime-aware signal strength after all confidence modifications
+        from services.confidence_calibration import _classify_signal_strength
+
+        for rec in result.recommendations:
+            rec.signal_strength = _classify_signal_strength(rec.confidence, regime_context)
+
         # 7.5b: ML shadow — full model comparison (non-blocking)
         try:
             from ml.inference import ml_model_available
@@ -1057,6 +1190,34 @@ async def _run_pipeline(
                 logger.info(" ML shadow predictions complete")
         except Exception:
             logger.warning("ML shadow skipped", exc_info=True)
+
+    # Stamp entry_valid_window from strategy half-life if GPT left it empty
+    half_life = config.signal_half_life_hours
+    for rec in result.recommendations:
+        if not rec.entry_valid_window and rec.action in ("BUY", "SHORT", "WATCH"):
+            if half_life <= 4:
+                rec.entry_valid_window = f"{half_life} hours"
+            elif half_life <= 48:
+                days = half_life / 24
+                rec.entry_valid_window = f"{days:.0f}-{days + 1:.0f} trading days"
+            else:
+                days = half_life / 24
+                rec.entry_valid_window = f"{days:.0f} trading days"
+
+    # Expected value calculation — uses win_probability when available, falls back to confidence
+    for rec in result.recommendations:
+        if (
+            rec.action in ("BUY", "SHORT")
+            and rec.risk_reward_ratio is not None
+            and rec.risk_reward_ratio > 0
+        ):
+            prob = rec.win_probability if rec.win_probability is not None else rec.confidence
+            ev = prob * rec.risk_reward_ratio - (1.0 - prob)
+            rec.expected_value = round(ev, 4)
+            if ev > 0.3:
+                rec.key_factors.append(f"Positive expected value: {ev:.2f}")
+            elif ev < 0:
+                rec.warnings.append(f"Negative expected value: {ev:.2f}")
 
     # Save recommendations after all modifications (risk validation, ML gate)
     if result.recommendations:
@@ -1189,22 +1350,39 @@ async def _finalize(
     if result.meta:
         update_fields["meta"] = json.dumps(result.meta)
 
-    try:
-        await client.table("pipeline_runs").update(update_fields).eq("id", run_id).execute()
-    except APIError as exc:
-        if (
-            exc.code == "PGRST204"
-            and exc.message
-            and "meta" in exc.message
-            and "meta" in update_fields
-        ):
-            logger.warning(
-                "pipeline_runs.meta column missing; apply "
-                "database/migrations/023_pipeline_runs_meta.sql. Finalizing run without meta."
-            )
-            update_fields.pop("meta", None)
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
             await client.table("pipeline_runs").update(update_fields).eq("id", run_id).execute()
-        else:
+            break
+        except APIError as exc:
+            if (
+                exc.code in ("PGRST204", "42703")
+                and exc.message
+                and "meta" in exc.message
+                and "meta" in update_fields
+            ):
+                logger.warning(
+                    "pipeline_runs.meta column missing; apply "
+                    "database/migrations/023_pipeline_runs_meta.sql. Finalizing without meta."
+                )
+                update_fields.pop("meta", None)
+                continue
+            is_transient = str(exc.code) in ("504", "502", "503") or (
+                exc.message and "timeout" in exc.message.lower()
+            )
+            if is_transient and attempt < max_retries - 1:
+                wait = 2 ** (attempt + 1)
+                logger.warning(
+                    "Transient DB error finalizing run %s (attempt %d/%d), retrying in %ds: %s",
+                    run_id,
+                    attempt + 1,
+                    max_retries,
+                    wait,
+                    exc,
+                )
+                await asyncio.sleep(wait)
+                continue
             raise
 
     clear_run_symbol_cache(run_id)
@@ -1364,6 +1542,7 @@ async def _save_recommendations(
             "signal_generated_at": rec.signal_generated_at,
             "price_at_signal": rec.price_at_signal,
             "entry_valid_window": rec.entry_valid_window,
+            "confidence_label": rec.confidence_label,
             "raw_gpt_confidence": rec.raw_gpt_confidence,
             "raw_gpt_position_size_pct": rec.raw_gpt_position_size_pct,
             "ml_probability": rec.ml_probability,
@@ -1373,8 +1552,19 @@ async def _save_recommendations(
             "ml_conformal_set": json.dumps(rec.ml_conformal_set) if rec.ml_conformal_set else None,
             "pre_gpt_ml_probability": rec.pre_gpt_ml_probability,
             "pre_gpt_ml_direction": rec.pre_gpt_ml_direction,
+            "confidence_adjustment": rec.confidence_adjustment or "",
             "track_agreement": rec.track_agreement.model_dump_json()
             if rec.track_agreement
+            else None,
+            "expected_value": rec.expected_value,
+            "win_probability": rec.win_probability,
+            "setup_quality_score": rec.setup_quality_score,
+            "llm_conviction": rec.llm_conviction,
+            "prior_base_rate": rec.prior_base_rate,
+            "confidence_v2": rec.confidence_v2,
+            "setup_type": rec.setup_type,
+            "confidence_drivers": json.dumps(rec.confidence_drivers)
+            if rec.confidence_drivers
             else None,
         }
         for rec in recommendations
@@ -1548,31 +1738,67 @@ def _aggregate_sector_sentiment(
     return "\n".join(lines)
 
 
+def _derive_perplexity_direction(
+    screening: ScreeningResult | None,
+    ticker: str,
+) -> Literal["bullish", "bearish", "neutral"]:
+    """Derive Perplexity's directional lean from fundamental data heuristics.
+
+    Uses key_highlights vs risk_factors count and revenue growth sign.
+    """
+    if not screening:
+        return "neutral"
+
+    fd = None
+    for t in screening.tickers:
+        if t.ticker == ticker:
+            fd = t
+            break
+    if fd is None:
+        return "neutral"
+
+    highlights = len(fd.key_highlights)
+    risks = len(fd.risk_factors)
+
+    revenue_positive = False
+    if fd.revenue_growth:
+        try:
+            cleaned = fd.revenue_growth.replace("%", "").replace("+", "").strip()
+            revenue_positive = float(cleaned) > 0
+        except ValueError, AttributeError:
+            pass
+
+    if highlights > risks and revenue_positive:
+        return "bullish"
+    if risks > highlights:
+        return "bearish"
+    if highlights > risks:
+        return "bullish"
+
+    return "neutral"
+
+
 def _compute_track_agreement(
     rec: Recommendation,
     sentiments: list[SentimentAnalysis],
     charts: list[ChartAnalysis],
+    screening: ScreeningResult | None = None,
 ) -> TrackAgreement:
-    """Compute multi-track agreement between GPT, Gemini, and Claude for one ticker.
+    """Compute true 3-track agreement: Perplexity + Gemini + Claude.
 
-    Compares the independent Gemini sentiment and Claude chart bias against
-    GPT's final action to measure consensus across the pipeline tracks.
+    All three directions are derived deterministically from upstream data.
+    GPT's action is NOT one of the tracks — it is the consumer of agreement.
 
     Args:
         rec: The GPT recommendation for a single ticker.
         sentiments: All Gemini sentiment analyses from the pipeline run.
         charts: All Claude chart analyses from the pipeline run.
+        screening: Perplexity screening result (may be None).
 
     Returns:
         Populated TrackAgreement with directions, score, and conflict details.
     """
-    gpt_dir: Literal["bullish", "bearish", "neutral"]
-    if rec.action == RecommendationAction.BUY:
-        gpt_dir = "bullish"
-    elif rec.action == RecommendationAction.SHORT:
-        gpt_dir = "bearish"
-    else:
-        gpt_dir = "neutral"
+    perplexity_dir = _derive_perplexity_direction(screening, rec.ticker)
 
     gemini_dir: Literal["bullish", "bearish", "neutral"] = "neutral"
     for sa in sentiments:
@@ -1593,8 +1819,17 @@ def _compute_track_agreement(
                 claude_dir = "bearish"
             break
 
+    gpt_dir: Literal["bullish", "bearish", "neutral"]
+    if rec.action == RecommendationAction.BUY:
+        gpt_dir = "bullish"
+    elif rec.action == RecommendationAction.SHORT:
+        gpt_dir = "bearish"
+    else:
+        gpt_dir = "neutral"
+
     if gpt_dir == "neutral":
         return TrackAgreement(
+            perplexity_direction=perplexity_dir,
             gemini_direction=gemini_dir,
             claude_direction=claude_dir,
             agreement_score=0.5,
@@ -1602,7 +1837,11 @@ def _compute_track_agreement(
 
     aligned: list[str] = []
     dissenting: list[str] = []
-    track_dirs = {"gemini": gemini_dir, "claude": claude_dir}
+    track_dirs = {
+        "perplexity": perplexity_dir,
+        "gemini": gemini_dir,
+        "claude": claude_dir,
+    }
     for name, direction in track_dirs.items():
         if direction == "neutral":
             continue
@@ -1616,6 +1855,7 @@ def _compute_track_agreement(
     conflicts = [f"{name} ({track_dirs[name]}) vs GPT ({gpt_dir})" for name in dissenting]
 
     return TrackAgreement(
+        perplexity_direction=perplexity_dir,
         gemini_direction=gemini_dir,
         claude_direction=claude_dir,
         agreement_score=score,

@@ -44,7 +44,10 @@ def _get_client() -> genai.Client:
             raise RuntimeError(
                 "Google API key not configured. Set GOOGLE_API_KEY in .env (see .env.example)."
             )
-        _gemini_client = genai.Client(api_key=api_key)
+        _gemini_client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(timeout=90_000),
+        )
     return _gemini_client
 
 
@@ -81,6 +84,8 @@ async def _call_gemini(
             contents=full_user_prompt,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
+                temperature=0.3,
+                thinking_config=types.ThinkingConfig(thinking_budget=4096),
                 tools=[types.Tool(google_search=types.GoogleSearch())],
             ),
         )

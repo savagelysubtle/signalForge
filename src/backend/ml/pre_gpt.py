@@ -25,16 +25,19 @@ def build_ml_feature_dicts(
     regime: RegimeOutput | None,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, Any] | None]:
     """Build the same TA/FMP/regime dicts used by the post-GPT ML gate."""
+    from ml.feature_mapper import map_fmp_to_features, map_multi_tf_to_features
+
     ta_dict: dict[str, dict[str, Any]] = {}
     if ta_snapshots:
         for snap in ta_snapshots:
-            if hasattr(snap, "ticker") and hasattr(snap, "primary"):
-                ta_dict[snap.ticker] = snap.primary.model_dump() if snap.primary else {}
+            if hasattr(snap, "ticker"):
+                ta_dict[snap.ticker] = map_multi_tf_to_features(snap.model_dump())
 
     fmp_dict: dict[str, dict[str, Any]] = {}
     if fmp_map:
         for sym, stock in fmp_map.items():
-            fmp_dict[sym] = stock.model_dump() if hasattr(stock, "model_dump") else {}
+            raw = stock.model_dump() if hasattr(stock, "model_dump") else {}
+            fmp_dict[sym] = map_fmp_to_features(raw)
 
     regime_dict: dict[str, Any] | None = None
     if regime:

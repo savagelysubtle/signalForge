@@ -32,6 +32,37 @@ from pipeline.schemas import (
 from utils.ticker import normalize_tickers
 
 logger = logging.getLogger(__name__)
+
+
+async def _run_has_saved_data(client: AsyncClient, run_id: str) -> bool:
+    """Check if a pipeline run has any saved recommendations."""
+    resp = (
+        await client.table("recommendations").select("id").eq("run_id", run_id).limit(1).execute()
+    )
+    return bool(resp.data)
+
+
+async def _load_existing_stage_errors(client: AsyncClient, run_id: str) -> list[dict[str, str]]:
+    """Load existing stage_errors from a pipeline run for merging."""
+    resp = (
+        await client.table("pipeline_runs")
+        .select("stage_errors")
+        .eq("id", run_id)
+        .limit(1)
+        .execute()
+    )
+    rows = resp.data or []
+    if not rows:
+        return []
+    raw = rows[0]
+    if isinstance(raw, dict) and raw.get("stage_errors"):
+        with contextlib.suppress(Exception):
+            parsed = json.loads(raw["stage_errors"])
+            if isinstance(parsed, list):
+                return parsed  # type: ignore[return-value]
+    return []
+
+
 limiter = Limiter(key_func=get_remote_address)
 router = APIRouter(prefix="/pipeline", tags=["pipeline"])
 
@@ -82,23 +113,20 @@ async def trigger_pipeline_run(
             )
         except Exception as exc:
             logger.error("Background pipeline run %s failed: %s", run_id, exc, exc_info=True)
-            # Mark the run as failed in the DB so the frontend stops polling
             with contextlib.suppress(Exception):
                 db = await get_db()
+                has_data = await _run_has_saved_data(db, run_id)
+                existing_errors = await _load_existing_stage_errors(db, run_id)
+                existing_errors.append(
+                    {"stage": "pipeline", "error": str(exc), "type": type(exc).__name__}
+                )
+                status = "completed" if has_data else "failed"
                 await (
                     db.table("pipeline_runs")
                     .update(
                         {
-                            "status": "failed",
-                            "stage_errors": json.dumps(
-                                [
-                                    {
-                                        "stage": "pipeline",
-                                        "error": str(exc),
-                                        "type": type(exc).__name__,
-                                    }
-                                ]
-                            ),
+                            "status": status,
+                            "stage_errors": json.dumps(existing_errors),
                         }
                     )
                     .eq("id", run_id)
@@ -394,6 +422,7 @@ async def _load_recommendations(
                 else [],
                 pre_gpt_ml_probability=r.get("pre_gpt_ml_probability"),
                 pre_gpt_ml_direction=r.get("pre_gpt_ml_direction"),
+                confidence_label=r.get("confidence_label"),
             )
         )
     return recs

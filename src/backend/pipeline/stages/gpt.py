@@ -13,8 +13,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from typing import Any
 
 from openai import AsyncOpenAI
+from pydantic import BaseModel
 
 from ml.schemas import GateResult
 from pipeline.http_retry import with_transient_retry
@@ -32,11 +34,12 @@ from pipeline.prompts.gpt_debate import (
 )
 from pipeline.schemas import (
     ChartAnalysis,
+    ConfidenceLabel,
     DebateCase,
     DebateCaseList,
+    GptJudgeRecommendationList,
     MultiTimeframeTechnical,
     Recommendation,
-    RecommendationList,
     RiskAssessment,
     ScreeningResult,
     SentimentAnalysis,
@@ -49,6 +52,62 @@ from services.keyring_service import get_api_key
 logger = logging.getLogger(__name__)
 
 _semaphore = asyncio.Semaphore(3)
+_GPT_REASONING_EFFORT = "high"
+_GPT_MAX_COMPLETION_TOKENS = 16_384
+
+
+def _openai_strict_schema(model: type[BaseModel]) -> dict[str, Any]:
+    """Build a fully inlined OpenAI strict JSON schema for structured outputs."""
+    raw = model.model_json_schema()
+    defs: dict[str, Any] = raw.pop("$defs", {})
+
+    def _resolve(node: dict[str, Any]) -> dict[str, Any]:
+        if "$ref" in node:
+            ref_name = node["$ref"].rsplit("/", 1)[-1]
+            if ref_name in defs:
+                return _resolve(dict(defs[ref_name]))
+            return node
+
+        out: dict[str, Any] = {}
+        for key, val in node.items():
+            if key in ("title", "default", "$defs"):
+                continue
+            if key == "properties" and isinstance(val, dict):
+                out["properties"] = {k: _resolve(v) for k, v in val.items()}
+            elif key == "items" and isinstance(val, dict):
+                out[key] = _resolve(val)
+            elif key in ("allOf", "anyOf", "oneOf") and isinstance(val, list):
+                out[key] = [_resolve(v) if isinstance(v, dict) else v for v in val]
+            else:
+                out[key] = val
+
+        if out.get("type") == "object" or "properties" in out:
+            out["additionalProperties"] = False
+            if "properties" in out:
+                out["required"] = sorted(out["properties"].keys())
+
+        return out
+
+    return _resolve(raw)
+
+
+_DEBATE_RESPONSE_FORMAT: dict[str, Any] = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "DebateCaseList",
+        "strict": True,
+        "schema": _openai_strict_schema(DebateCaseList),
+    },
+}
+
+_RECOMMENDATION_RESPONSE_FORMAT: dict[str, Any] = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "GptJudgeRecommendationList",
+        "strict": True,
+        "schema": _openai_strict_schema(GptJudgeRecommendationList),
+    },
+}
 
 
 def _get_client() -> AsyncOpenAI:
@@ -58,7 +117,7 @@ def _get_client() -> AsyncOpenAI:
         raise RuntimeError(
             "OpenAI API key not configured. Set OPENAI_API_KEY in .env (see .env.example)."
         )
-    return AsyncOpenAI(api_key=api_key)
+    return AsyncOpenAI(api_key=api_key, timeout=300.0)
 
 
 @with_validation_retry(schema=DebateCaseList, max_retries=2, provider="openai")
@@ -78,7 +137,12 @@ async def _call_gpt_bull(
     Returns:
         Raw response text from the API.
     """
-    return await _call_gpt(system_prompt, user_prompt, error_context=error_context)
+    return await _call_gpt(
+        system_prompt,
+        user_prompt,
+        error_context=error_context,
+        response_format=_DEBATE_RESPONSE_FORMAT,
+    )
 
 
 @with_validation_retry(schema=DebateCaseList, max_retries=2, provider="openai")
@@ -98,10 +162,15 @@ async def _call_gpt_bear(
     Returns:
         Raw response text from the API.
     """
-    return await _call_gpt(system_prompt, user_prompt, error_context=error_context)
+    return await _call_gpt(
+        system_prompt,
+        user_prompt,
+        error_context=error_context,
+        response_format=_DEBATE_RESPONSE_FORMAT,
+    )
 
 
-@with_validation_retry(schema=RecommendationList, max_retries=2, provider="openai")
+@with_validation_retry(schema=GptJudgeRecommendationList, max_retries=2, provider="openai")
 async def _call_gpt_judge(
     system_prompt: str,
     user_prompt: str,
@@ -122,7 +191,7 @@ async def _call_gpt_judge(
         system_prompt,
         user_prompt,
         error_context=error_context,
-        temperature=0.4,
+        response_format=_RECOMMENDATION_RESPONSE_FORMAT,
     )
 
 
@@ -132,7 +201,7 @@ async def _call_gpt(
     user_prompt: str,
     *,
     error_context: str = "",
-    temperature: float = 0.7,
+    response_format: dict[str, Any] | None = None,
 ) -> str:
     """Make a single GPT API call.
 
@@ -140,7 +209,7 @@ async def _call_gpt(
         system_prompt: System instruction for the role.
         user_prompt: User message with all data.
         error_context: Appended on retries for self-correction.
-        temperature: Sampling temperature (debate analysts use 0.7; judge uses 0.4).
+        response_format: Optional strict JSON schema for structured outputs.
 
     Returns:
         Raw response text from the API.
@@ -151,16 +220,20 @@ async def _call_gpt(
     if error_context:
         full_user_prompt = f"{user_prompt}\n\n---\nCORRECTION: {error_context}"
 
+    api_kwargs: dict[str, Any] = {
+        "model": GPT_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": full_user_prompt},
+        ],
+        "reasoning_effort": _GPT_REASONING_EFFORT,
+        "max_completion_tokens": _GPT_MAX_COMPLETION_TOKENS,
+    }
+    if response_format:
+        api_kwargs["response_format"] = response_format
+
     async with _semaphore:
-        response = await client.chat.completions.create(
-            model=GPT_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": full_user_prompt},
-            ],
-            temperature=temperature,
-            max_completion_tokens=8192,
-        )
+        response = await client.chat.completions.create(**api_kwargs)
 
     return response.choices[0].message.content or ""
 
@@ -222,7 +295,9 @@ async def run_debate(
     bull_cases: list[DebateCase] | None = None
     bear_cases: list[DebateCase] | None = None
 
-    run_debate_track = config.enable_debate or force_ml_debate
+    # Single-pass synthesis: debate disabled in favour of balanced one-shot analysis.
+    # Debate code retained below for potential future re-enablement.
+    run_debate_track = False
 
     if run_debate_track:
         bull_cases, bear_cases, debate_metadata = await _run_debate_phase(
@@ -277,6 +352,22 @@ async def run_debate(
                     rec.ticker,
                     ", ".join(missing),
                 )
+
+    # Backfill any tickers GPT skipped with NO_TRADE
+    returned_tickers = {rec.ticker for rec in recommendations}
+    for ticker in tickers:
+        if ticker not in returned_tickers:
+            logger.warning("GPT skipped %s — backfilling as NO_TRADE", ticker)
+            recommendations.append(
+                Recommendation(
+                    ticker=ticker,
+                    action="NO_TRADE",
+                    confidence=0.10,
+                    confidence_label=ConfidenceLabel.C1_VERY_LOW,
+                    judge_reasoning="GPT did not produce a recommendation for this ticker.",
+                    key_factors=["Skipped by GPT synthesis"],
+                )
+            )
 
     logger.info(
         "GPT debate: %d recommendations for %d tickers (debate=%s, ml_escalation=%s)",
@@ -481,7 +572,10 @@ async def _run_judge_phase(
             metadata["status"] = "success"
             metadata["raw_response"] = result.model_dump_json()
             metadata["retry_count"] = getattr(result, "_retry_count", 0)
-            return result.recommendations, metadata
+            recommendations = [
+                Recommendation(**gpt_rec.model_dump()) for gpt_rec in result.recommendations
+            ]
+            return recommendations, metadata
 
         metadata["status"] = "validation_failed"
         return [], metadata

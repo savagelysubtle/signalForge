@@ -3,11 +3,11 @@ import type {
   Recommendation,
   DebateCase,
   TrackAgreement,
-  ConfidenceBreakdown,
   SignalStrength,
   FundamentalData,
 } from '../../types';
-import { ConfidenceBreakdown as ConfidenceBreakdownViz } from './ConfidenceBreakdown';
+import { confidenceLabelToPercent, CONFIDENCE_LABEL_DISPLAY } from '../../types';
+import { ConfidenceBreakdown, buildConfidenceBreakdownView } from './ConfidenceBreakdown';
 import { motion, AnimatePresence } from 'motion/react';
 import { ShieldAlert, ChevronDown, ChevronUp, Ban, Eye, Gauge, Clock, AlertTriangle, BrainCircuit, ShieldOff } from 'lucide-react';
 import clsx from 'clsx';
@@ -103,12 +103,14 @@ const SIGNAL_STRENGTH_CONFIG: Record<string, { label: string; color: string; bg:
   no_edge:  { label: 'NO EDGE',  color: 'text-text-muted',      bg: 'bg-text-muted/15' },
 };
 
-function ConfidenceBreakdownPanel({ breakdown, rawConfidence, signalStrength }: {
-  breakdown: ConfidenceBreakdown;
-  rawConfidence: number | null;
-  signalStrength: SignalStrength | null;
-}) {
-  const strengthCfg = signalStrength ? SIGNAL_STRENGTH_CONFIG[signalStrength] : null;
+function ConfidenceBreakdownPanel({ recommendation }: { recommendation: Recommendation }) {
+  const view = buildConfidenceBreakdownView(recommendation);
+  if (!view) return null;
+
+  const strengthCfg = recommendation.signal_strength
+    ? SIGNAL_STRENGTH_CONFIG[recommendation.signal_strength]
+    : null;
+  const rawConfidence = recommendation.raw_gpt_confidence;
 
   return (
     <div className="bg-bg-concrete rounded-lg border border-border-gutter p-6 mb-6">
@@ -125,14 +127,30 @@ function ConfidenceBreakdownPanel({ breakdown, rawConfidence, signalStrength }: 
       </div>
 
       {rawConfidence != null && (
-        <div className="flex items-center gap-2 mb-4 text-xs text-text-muted font-body">
-          <span>GPT raw: {Math.round(rawConfidence * 100)}%</span>
-          <span className="text-text-muted/50">→</span>
-          <span className="text-text-primary font-semibold">Calibrated: {Math.round(breakdown.total * 100)}%</span>
+        <div className="flex flex-wrap items-center gap-2 mb-4 text-xs text-text-muted font-body">
+          <span>
+            GPT raw: <span className="font-mono tabular-nums">{Math.round(rawConfidence * 100)}%</span>
+            {recommendation.confidence_label && (
+              <span className="ml-1 text-text-secondary">
+                ({CONFIDENCE_LABEL_DISPLAY[recommendation.confidence_label]})
+              </span>
+            )}
+          </span>
+          {view.win_probability != null && (
+            <>
+              <span className="text-text-muted/50">→</span>
+              <span className="text-text-primary font-semibold">
+                Win prob:{' '}
+                <span className="font-mono tabular-nums">
+                  {Math.round((view.win_probability as number) * 100)}%
+                </span>
+              </span>
+            </>
+          )}
         </div>
       )}
 
-      <ConfidenceBreakdownViz breakdown={breakdown} />
+      <ConfidenceBreakdown view={view} />
     </div>
   );
 }
@@ -298,7 +316,7 @@ function DebateCaseSection({ debateCase, title }: { debateCase: DebateCase; titl
         <div className="flex items-center gap-3">
           <span className={clsx('text-sm font-semibold font-body', stanceColor)}>{title}</span>
           <span className={clsx('text-xs font-display px-2 py-0.5 rounded', stanceBg, stanceColor)}>
-            {(debateCase.confidence * 100).toFixed(0)}% confident
+            {CONFIDENCE_LABEL_DISPLAY[debateCase.confidence_label] ?? `${(debateCase.confidence * 100).toFixed(0)}%`}
           </span>
         </div>
         <span className="text-text-muted text-sm">{isOpen ? '\u25B2' : '\u25BC'}</span>
@@ -540,14 +558,8 @@ export function SynthesisTab({ recommendation, tickerData }: SynthesisTabProps) 
         <TrackAgreementPanel agreement={recommendation.track_agreement} />
       )}
 
-      {/* Confidence Breakdown (Phase 7) */}
-      {recommendation.confidence_breakdown && (
-        <ConfidenceBreakdownPanel
-          breakdown={recommendation.confidence_breakdown}
-          rawConfidence={recommendation.raw_gpt_confidence ?? null}
-          signalStrength={recommendation.signal_strength ?? null}
-        />
-      )}
+      {/* Confidence engine v2 breakdown (merged from confidence_breakdown + top-level v2 fields) */}
+      <ConfidenceBreakdownPanel recommendation={recommendation} />
 
       {/* ML Gate — Probability, Sizing, Conformal Set */}
       <MLGatePanel rec={recommendation} />

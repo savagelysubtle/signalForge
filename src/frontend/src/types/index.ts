@@ -120,6 +120,65 @@ export interface SentimentAnalysis {
 }
 
 // ---------------------------------------------------------------------------
+// Confidence Label (categorical LLM output → deterministic numeric mapping)
+// ---------------------------------------------------------------------------
+
+export type ConfidenceLabel =
+  | "c0_no_confidence"
+  | "c1_very_low"
+  | "c2_low"
+  | "c3_slightly_low"
+  | "c4_lean_low"
+  | "c5_neutral"
+  | "c6_lean_high"
+  | "c7_slightly_high"
+  | "c8_high"
+  | "c9_very_high"
+  | "c10_max_confidence";
+
+export const CONFIDENCE_LABEL_MAP: Record<ConfidenceLabel, number> = {
+  c0_no_confidence: 0,
+  c1_very_low: 10,
+  c2_low: 20,
+  c3_slightly_low: 30,
+  c4_lean_low: 40,
+  c5_neutral: 50,
+  c6_lean_high: 60,
+  c7_slightly_high: 70,
+  c8_high: 80,
+  c9_very_high: 90,
+  c10_max_confidence: 100,
+} as const;
+
+export const CONFIDENCE_LABEL_DISPLAY: Record<ConfidenceLabel, string> = {
+  c0_no_confidence: "No Confidence",
+  c1_very_low: "Very Low",
+  c2_low: "Low",
+  c3_slightly_low: "Slightly Low",
+  c4_lean_low: "Lean Low",
+  c5_neutral: "Neutral",
+  c6_lean_high: "Lean High",
+  c7_slightly_high: "Slightly High",
+  c8_high: "High",
+  c9_very_high: "Very High",
+  c10_max_confidence: "Max Confidence",
+} as const;
+
+/**
+ * Convert a confidence label to its display percentage (0-100).
+ * Falls back to rounding the raw numeric confidence if label is absent.
+ */
+export function confidenceLabelToPercent(
+  label: ConfidenceLabel | null | undefined,
+  fallbackFloat?: number,
+): number {
+  if (label && label in CONFIDENCE_LABEL_MAP) {
+    return CONFIDENCE_LABEL_MAP[label];
+  }
+  return fallbackFloat !== undefined ? Math.round(fallbackFloat * 100) : 0;
+}
+
+// ---------------------------------------------------------------------------
 // Recommendation Action + Track Agreement
 // ---------------------------------------------------------------------------
 
@@ -134,12 +193,12 @@ export interface TrackAgreement {
 }
 
 export interface ConfidenceBreakdown {
-  track_agreement: number; // 0.00–0.30
-  technical_strength: number; // 0.00–0.20
-  trend_alignment: number; // 0.00–0.20
-  historical_pattern: number; // 0.00–0.20
-  regime_fit: number; // 0.00–0.10
-  total: number; // 0.0–1.0
+  prior_base_rate: number; // starting probability from strategy/regime lookup
+  setup_quality_score: number; // net effect of boosters (-0.15 to +0.15)
+  ml_agreement: "agree" | "disagree" | "neutral" | "unavailable";
+  llm_conviction: "low" | "medium" | "high" | null;
+  win_probability: number; // final calibrated probability
+  confidence_drivers: string[]; // top factors, e.g. "Strong RVOL (+6%)"
   penalties_applied: string[];
 }
 
@@ -174,14 +233,16 @@ export interface DebateCase {
   key_arguments: string[];
   strongest_signal: string;
   weakest_counter: string;
-  confidence: number; // 0.0 to 1.0
+  confidence_label: ConfidenceLabel;
+  confidence: number; // derived from confidence_label via CONFIDENCE_LABEL_MAP
 }
 
 export interface Recommendation {
   id: string;
   ticker: string;
   action: RecommendationAction;
-  confidence: number; // 0.0 to 1.0
+  confidence: number; // 0.0 to 1.0 (post-calibration numeric value)
+  confidence_label: ConfidenceLabel | null; // categorical GPT output (before calibration)
   entry_price: number | null;
   stop_loss: number | null;
   take_profit: number | null;
@@ -220,6 +281,24 @@ export interface Recommendation {
   /** Independent ML before GPT (training / transparency) */
   pre_gpt_ml_probability: number | null;
   pre_gpt_ml_direction: "UP" | "DOWN" | "FLAT" | null;
+  /** Expected value: confidence * R:R - (1 - confidence) */
+  expected_value: number | null;
+
+  // Confidence Engine v2 fields
+  /** Calibrated probability from prior + boosters + ML blend */
+  win_probability: number | null;
+  /** Net effect of positive/negative evidence boosters */
+  setup_quality_score: number | null;
+  /** GPT ordinal conviction bucket */
+  llm_conviction: "low" | "medium" | "high" | null;
+  /** Starting probability from strategy/regime prior table */
+  prior_base_rate: number | null;
+  /** Shadow confidence from v2 engine (validation before cutover) */
+  confidence_v2: number | null;
+  /** Setup archetype label from strategy's allowed list */
+  setup_type: string | null;
+  /** Top factors that moved the number */
+  confidence_drivers: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -405,8 +484,12 @@ export interface StrategyConfig {
   is_template: boolean;
   recommended?: boolean;
   strategy_type?: string;
+  /** How long (hours) a signal from this strategy stays actionable. */
+  signal_half_life_hours?: number;
   /** USD = US-listed equities (FMP US); CAD = Canada / TSX. */
   listing_currency?: "USD" | "CAD";
+  /** Allowed setup types for this strategy */
+  setup_archetypes?: string[];
 }
 
 // ---------------------------------------------------------------------------
