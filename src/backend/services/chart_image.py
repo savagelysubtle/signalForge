@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 CHART_IMG_V2_URL = "https://api.chart-img.com/v2/tradingview/advanced-chart"
 
 # Bound concurrent Chart-Img requests (pipeline may spawn many timeframes x tickers).
-_chart_img_semaphore = asyncio.Semaphore(8)
+_chart_img_semaphore = asyncio.Semaphore(4)
 
 
 def _storage_upload_png(supabase: Client, path: str, image_bytes: bytes) -> None:
@@ -368,13 +368,21 @@ async def fetch_chart_image(
                 body["studies"] = studies
 
             logger.info("Chart-Img request: %s", {k: v for k, v in body.items() if k != "studies"})
-            response = await client.post(CHART_IMG_V2_URL, json=body, headers=headers)
+            for attempt in range(4):
+                response = await client.post(CHART_IMG_V2_URL, json=body, headers=headers)
+                if response.status_code != 429:
+                    break
+                backoff = 2 ** attempt
+                logger.warning(
+                    "Chart-Img 429 for %s (attempt %d), sleeping %ds",
+                    tv_symbol,
+                    attempt + 1,
+                    backoff,
+                )
+                await asyncio.sleep(backoff)
             if response.status_code < 400:
                 _exchange_cache[ticker] = tv_symbol
                 _cache_resolved_symbol(run_id, ticker, tv_symbol)
-                break
-            if response.status_code == 429:
-                logger.error("Chart-Img rate limited (429) — aborting remaining candidates")
                 break
             logger.warning(
                 "Chart-Img %s failed (HTTP %s): %s",
@@ -548,12 +556,20 @@ async def fetch_annotated_chart(
                 "height": 1080,
                 "drawings": drawings,
             }
-            response = await client.post(CHART_IMG_V2_URL, json=body, headers=headers)
+            for attempt in range(4):
+                response = await client.post(CHART_IMG_V2_URL, json=body, headers=headers)
+                if response.status_code != 429:
+                    break
+                backoff = 2 ** attempt
+                logger.warning(
+                    "Annotated chart 429 for %s (attempt %d), sleeping %ds",
+                    tv_symbol,
+                    attempt + 1,
+                    backoff,
+                )
+                await asyncio.sleep(backoff)
             if response.status_code < 400:
                 _exchange_cache[ticker] = tv_symbol
-                break
-            if response.status_code == 429:
-                logger.error("Chart-Img rate limited (429) — aborting remaining candidates")
                 break
             logger.warning(
                 "Annotated chart %s failed (HTTP %s): %s",

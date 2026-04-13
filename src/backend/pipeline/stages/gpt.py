@@ -116,7 +116,7 @@ def _get_client() -> AsyncOpenAI:
         raise RuntimeError(
             "OpenAI API key not configured. Set OPENAI_API_KEY in .env (see .env.example)."
         )
-    return AsyncOpenAI(api_key=api_key, timeout=300.0)
+    return AsyncOpenAI(api_key=api_key, timeout=600.0)
 
 
 @with_validation_retry(schema=DebateCaseList, max_retries=2, provider="openai")

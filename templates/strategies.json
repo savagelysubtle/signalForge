@@ -14,8 +14,7 @@
       "MACD",
       "ATR",
       "Volume",
-      "ADX",
-      "Supertrend"
+      "ADX"
     ],
     "chart_timeframe": "D",
     "additional_timeframes": [
