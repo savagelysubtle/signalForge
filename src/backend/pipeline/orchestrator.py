@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 import uuid
 from datetime import UTC, datetime
@@ -90,12 +91,12 @@ from utils.ticker import (
 logger = logging.getLogger(__name__)
 
 STAGE_TIMEOUTS: dict[str, float] = {
-    "fmp": 90.0,
-    "perplexity": 180.0,
-    "gemini": 240.0,
-    "claude": 360.0,
-    "gpt": 600.0,
-    "annotate": 60.0,
+    "fmp": float(os.getenv("SF_TIMEOUT_FMP", "90")),
+    "perplexity": float(os.getenv("SF_TIMEOUT_PERPLEXITY", "180")),
+    "gemini": float(os.getenv("SF_TIMEOUT_GEMINI", "300")),
+    "claude": float(os.getenv("SF_TIMEOUT_CLAUDE", "600")),
+    "gpt": float(os.getenv("SF_TIMEOUT_GPT", "900")),
+    "annotate": float(os.getenv("SF_TIMEOUT_ANNOTATE", "60")),
 }
 
 
