@@ -36,7 +36,7 @@ def _storage_upload_png(supabase: Client, path: str, image_bytes: bytes) -> None
     supabase.storage.from_("charts").upload(
         path=path,
         file=image_bytes,
-        file_options={"content-type": "image/png"},
+        file_options={"content-type": "image/png", "upsert": "true"},
     )
 
 
