@@ -411,7 +411,8 @@ async def delete_strategy(strategy_id: str, user_id: str) -> None:
 async def ensure_defaults() -> None:
     """Sync strategy templates from JSON file into the database.
 
-    Inserts new templates and updates existing ones (matched by name).
+    Inserts new templates, updates existing ones (matched by name), and removes
+    templates that no longer exist in ``strategies.json``.
     Preserves IDs of existing templates so pipeline run history stays intact.
     """
     if not TEMPLATES_PATH.exists():
@@ -430,6 +431,7 @@ async def ensure_defaults() -> None:
     templates = json.loads(TEMPLATES_PATH.read_text(encoding="utf-8"))
     inserted = 0
     updated = 0
+    synced_names: set[str] = set()
 
     for tmpl in templates:
         tmpl.setdefault("id", uuid.uuid4().hex)
@@ -446,6 +448,7 @@ async def ensure_defaults() -> None:
             fmp_screener=fmp,
             listing_currency=cast(Literal["USD", "CAD"], listing_currency),
         )
+        synced_names.add(config.name)
 
         existing_id = existing_by_name.get(config.name)
         if existing_id:
@@ -482,9 +485,28 @@ async def ensure_defaults() -> None:
             await create_strategy(config, user_id="system")
             inserted += 1
 
+    stale_names = set(existing_by_name.keys()) - synced_names
+    removed = 0
+    for name in stale_names:
+        stale_id = existing_by_name[name]
+        try:
+            await client.table("strategies").delete().eq("id", stale_id).execute()
+            logger.info("Deleted stale template '%s' (id=%s)", name, stale_id)
+        except APIError:
+            await client.table("strategies").update(
+                {"is_template": False, "user_id": "system-archived"}
+            ).eq("id", stale_id).execute()
+            logger.info(
+                "Archived stale template '%s' (id=%s) — referenced by pipeline_runs",
+                name,
+                stale_id,
+            )
+        removed += 1
+
     logger.info(
-        "Template sync complete: %d inserted, %d updated (from %s)",
+        "Template sync complete: %d inserted, %d updated, %d removed (from %s)",
         inserted,
         updated,
+        removed,
         TEMPLATES_PATH,
     )

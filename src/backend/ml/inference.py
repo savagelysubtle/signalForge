@@ -280,22 +280,66 @@ def build_feature_vector(
     return features
 
 
+_FUNDAMENTAL_FEATURES: frozenset[str] = frozenset(
+    {
+        "pe_ratio",
+        "pb_ratio",
+        "ev_ebitda",
+        "debt_equity",
+        "roe",
+        "roa",
+        "net_margin",
+        "piotroski_score",
+        "altman_z",
+        "analyst_target_upside",
+        "insider_buy_ratio",
+        "current_ratio",
+        "dividend_yield",
+        "revenue_growth",
+        "composite_score",
+        "sector",
+    }
+)
+
+_CRYPTO_STRATEGIES: frozenset[str] = frozenset({"crypto_swing", "crypto_intraday_scalp"})
+
+_warned_combos: set[str] = set()
+
+
 def _warn_missing_features(
     feature_names: list[str],
     features: dict[str, Any],
+    strategy_type: str = "",
 ) -> None:
-    """Log a warning if a significant portion of model features are missing."""
+    """Log a warning if inference-available model features are missing.
+
+    Suppresses expected fundamental-feature warnings for crypto strategies
+    and deduplicates repeated identical warnings per strategy.
+    """
     try:
         from ml_training.features.feature_spec import is_training_only, validate_feature_coverage
 
         missing = validate_feature_coverage(feature_names, features)
         inference_missing = [m for m in missing if not is_training_only(m)]
-        if inference_missing:
-            logger.warning(
-                "Model expects %d inference-available features that are missing: %s",
-                len(inference_missing),
-                inference_missing[:10],
-            )
+
+        is_crypto = strategy_type in _CRYPTO_STRATEGIES
+        if is_crypto:
+            inference_missing = [m for m in inference_missing if m not in _FUNDAMENTAL_FEATURES]
+
+        if not inference_missing:
+            return
+
+        warn_key = f"{strategy_type}:{len(inference_missing)}"
+        if warn_key in _warned_combos:
+            return
+        _warned_combos.add(warn_key)
+
+        logger.warning(
+            "Model [%s] missing %d inference features: %s",
+            strategy_type or "?",
+            len(inference_missing),
+            inference_missing[:10],
+        )
     except ImportError:
         pass
 
@@ -333,7 +377,7 @@ def run_prediction(
     label_encoder = model.get("label_encoder")
     metadata = model.get("metadata")
 
-    _warn_missing_features(feature_names, features)
+    _warn_missing_features(feature_names, features, strategy_type=strategy_type)
 
     import pandas as pd
 

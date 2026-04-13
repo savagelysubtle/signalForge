@@ -344,8 +344,29 @@ class PredictionModel:
             self._clf_params = classifier_params or BINARY_CLASSIFIER_PARAMS.copy()
         else:
             self._clf_params = classifier_params or CLASSIFIER_PARAMS.copy()
+        tuned_decay = self._clf_params.pop("_decay_lambda", None)
+        if tuned_decay is not None:
+            self._cpcv.decay_lambda = tuned_decay
         self._reg_params = regressor_params or REGRESSOR_PARAMS.copy()
+        self._using_default_params = classifier_params is None
         self._result: TrainingResult | None = None
+
+    @staticmethod
+    def _scale_default_params(params: dict[str, Any], n_samples: int) -> dict[str, Any]:
+        """Scale tree complexity for large datasets that would underfit with defaults.
+
+        Only called when using default (untuned) params, so direct overrides are safe.
+        """
+        params = params.copy()
+        if n_samples > 200_000:
+            params["num_leaves"] = 31
+            params["max_depth"] = 7
+            params["min_child_samples"] = 300
+        elif n_samples > 50_000:
+            params["num_leaves"] = 23
+            params["max_depth"] = 6
+            params["min_child_samples"] = 150
+        return params
 
     def train(self, df: pd.DataFrame, n_rounds: int = 500) -> TrainingResult:
         """Train the model using CPCV walk-forward optimization.
@@ -358,6 +379,9 @@ class PredictionModel:
             TrainingResult with models, metrics, and fold details.
         """
         df = df.dropna(subset=[self._target_col]).sort_values("date").reset_index(drop=True)
+
+        if self._using_default_params:
+            self._clf_params = self._scale_default_params(self._clf_params, len(df))
 
         feature_cols = _identify_feature_columns(
             df, model_mode=self._model_mode, inference_only=self._inference_only

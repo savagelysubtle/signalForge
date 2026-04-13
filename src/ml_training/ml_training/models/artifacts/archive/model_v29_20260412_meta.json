@@ -1,0 +1,67 @@
+{
+  "model_version": "v29",
+  "training_date": "20260412",
+  "feature_names": [
+    "bollinger_width",
+    "distance_from_20d_high",
+    "distance_from_20d_low",
+    "williams_r",
+    "bb_position",
+    "bb_width_percentile",
+    "squeeze_duration",
+    "range_compression_20d",
+    "volume_surge",
+    "ema_50_200_cross_direction",
+    "ema_50_200_cross_recency",
+    "rsi_divergence",
+    "oversold_duration"
+  ],
+  "training_config": {
+    "classifier_params": {},
+    "n_boost_rounds": 500,
+    "target_col": "triple_barrier_label",
+    "return_col": "return_10d",
+    "n_folds": 8,
+    "purge_window": 25,
+    "embargo_window": 10,
+    "strategy_type": null,
+    "model_mode": "shadow",
+    "dataset_size": 1180925
+  },
+  "metrics": {
+    "overall_accuracy": 0.5508400463368721,
+    "brier_score": 0.24986961276262823,
+    "overfit_gap": -0.022416723555259144,
+    "ece": 1.7100776561473907e-05
+  },
+  "judge_verdict": "CONDITIONAL_PASS",
+  "approved_strategies": [
+    "bb_squeeze_breakout",
+    "crypto_intraday_scalp",
+    "crypto_swing",
+    "earnings_play",
+    "golden_cross_swing",
+    "intraday_scalp",
+    "mean_reversion",
+    "momentum_breakout",
+    "value_accumulation"
+  ],
+  "status": "trained",
+  "strategy_type": null,
+  "shap_importance": {
+    "bollinger_width": 0.0,
+    "distance_from_20d_high": 0.0,
+    "distance_from_20d_low": 0.0,
+    "williams_r": 0.0,
+    "bb_position": 0.0,
+    "bb_width_percentile": 0.0,
+    "squeeze_duration": 0.0,
+    "range_compression_20d": 0.0,
+    "volume_surge": 0.0,
+    "ema_50_200_cross_direction": 0.0,
+    "ema_50_200_cross_recency": 0.0,
+    "rsi_divergence": 0.0,
+    "oversold_duration": 0.0
+  },
+  "holdout_metrics": null
+}

@@ -294,6 +294,52 @@ def _train_single(
     return all_results
 
 
+def _apply_fresh_reset(data_dir: Path) -> None:
+    """Reset training state for a fully fresh training run.
+
+    Clears dead_features.json and archives old model artifacts so the
+    new training starts with zero accumulated state.
+    """
+    import shutil
+
+    dead_path = data_dir / "dead_features.json"
+    if dead_path.exists():
+        dead_path.unlink()
+        print("  [fresh] Cleared dead_features.json")
+
+    tuned_path = data_dir / "tuned_params.json"
+    if tuned_path.exists():
+        tuned_path.unlink()
+        print("  [fresh] Cleared tuned_params.json")
+
+    artifacts_dir = Path(__file__).resolve().parents[1] / "models" / "artifacts"
+    if artifacts_dir.exists():
+        archive_dir = artifacts_dir / "archive"
+        archive_dir.mkdir(exist_ok=True)
+        moved = 0
+        for f in artifacts_dir.rglob("*"):
+            if not f.is_file():
+                continue
+            if f.suffix not in (".joblib", ".json"):
+                continue
+            if "archive" in f.parts:
+                continue
+            if f.name in ("baseline_report.py", "ARTIFACT_TRACKER.md", "__init__.py"):
+                continue
+            rel = f.relative_to(artifacts_dir)
+            dest = archive_dir / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(f), str(dest))
+            moved += 1
+        for d in artifacts_dir.iterdir():
+            if d.is_dir() and d.name != "archive" and not any(d.iterdir()):
+                d.rmdir()
+        if moved:
+            print(f"  [fresh] Archived {moved} old artifact files to artifacts/archive/")
+
+    print("  [fresh] Training will start from scratch with default hyperparameters\n")
+
+
 def cmd_train(args: argparse.Namespace) -> None:
     """Run the training loop, optionally per-strategy.
 
@@ -302,6 +348,10 @@ def cmd_train(args: argparse.Namespace) -> None:
     """
     from ml_training.data.storage import ParquetStore
     from ml_training.threading import optimal_workers
+
+    if getattr(args, "fresh", False):
+        args.no_tuned = True
+        _apply_fresh_reset(Path(args.data_dir))
 
     store = ParquetStore(Path(args.data_dir))
 
@@ -1075,6 +1125,13 @@ def main() -> None:
     p_train.add_argument(
         "--no-tuned", action="store_true", help="Ignore tuned params, use defaults"
     )
+    p_train.add_argument(
+        "--fresh",
+        action="store_true",
+        default=False,
+        help="Train from scratch: ignore tuned params, clear dead_features.json, "
+        "and archive old model artifacts before training",
+    )
     p_train.add_argument("--per-strategy", action="store_true", help="Train per-strategy models")
     p_train.add_argument(
         "--strategy", default=None, help="Train a single strategy (requires --per-strategy)"
@@ -1094,8 +1151,8 @@ def main() -> None:
     p_train.add_argument(
         "--model-mode",
         choices=["independent", "shadow", "both"],
-        default="both",
-        help="independent = no LLM features (gate model), shadow = all features, both = train both",
+        default="independent",
+        help="independent = gate model (default), shadow = comparison model, both = train both",
     )
     p_train.add_argument(
         "--inference-only",

@@ -70,6 +70,52 @@ _TA_FEATURES: list[FeatureSpec] = [
     FeatureSpec("high_low_range", min_val=0, description="(High-Low)/Close as %"),
     FeatureSpec("gap_pct", description="Open gap as % of prior close"),
     FeatureSpec("price_change_1d", description="1-day price change %"),
+    FeatureSpec("bollinger_width", min_val=0, description="BB width as % of SMA20"),
+    FeatureSpec("distance_from_20d_high", max_val=0, description="Close vs 20d high as %"),
+    FeatureSpec("distance_from_20d_low", min_val=0, description="Close vs 20d low as %"),
+    FeatureSpec("williams_r", min_val=-100, max_val=0, description="Williams %R 14-period"),
+    FeatureSpec("bb_position", min_val=0, max_val=1, description="Position within Bollinger Bands"),
+    FeatureSpec(
+        "bb_width_percentile",
+        min_val=0,
+        max_val=1,
+        description="BB width percentile rank vs 100d",
+    ),
+    FeatureSpec(
+        "squeeze_duration",
+        min_val=0,
+        description="Consecutive bars with BB width below 20d avg",
+    ),
+    FeatureSpec(
+        "range_compression_20d",
+        min_val=0,
+        max_val=1,
+        description="5d range / 20d range ratio",
+    ),
+    FeatureSpec("volume_surge", min_val=0, max_val=1, description="1.0 if volume_ratio > 1.5"),
+    FeatureSpec(
+        "ema_50_200_cross_direction",
+        min_val=-1,
+        max_val=1,
+        description="+1 golden cross, -1 death cross",
+    ),
+    FeatureSpec(
+        "ema_50_200_cross_recency",
+        min_val=0,
+        max_val=60,
+        description="Bars since last EMA 50/200 crossover",
+    ),
+    FeatureSpec(
+        "rsi_divergence",
+        min_val=-1,
+        max_val=1,
+        description="+1 bullish divergence, -1 bearish",
+    ),
+    FeatureSpec(
+        "oversold_duration",
+        min_val=0,
+        description="Consecutive bars with RSI < 35",
+    ),
 ]
 
 # ---------------------------------------------------------------------------
@@ -120,9 +166,7 @@ _CONTEXT_FEATURES: list[FeatureSpec] = [
 # ---------------------------------------------------------------------------
 
 _SIGNAL_FEATURES: list[FeatureSpec] = [
-    FeatureSpec(
-        "primary_signal", ftype=FeatureType.CATEGORICAL, description="Primary signal direction"
-    ),
+    FeatureSpec("primary_signal", min_val=-1, max_val=1, description="Primary signal direction"),
     FeatureSpec("signal_strength", min_val=0, max_val=1, description="Signal strength score"),
 ]
 
@@ -168,10 +212,7 @@ _TRAINING_ONLY_FEATURES: list[FeatureSpec] = [
     FeatureSpec("hmm_regime_prob_bull", inference_available=False, min_val=0, max_val=1),
     FeatureSpec("price_change_5d", inference_available=False),
     FeatureSpec("price_change_20d", inference_available=False),
-    FeatureSpec("bollinger_width", inference_available=False, min_val=0),
     FeatureSpec("volatility_20d", inference_available=False, min_val=0),
-    FeatureSpec("distance_from_20d_high", inference_available=False, max_val=0),
-    FeatureSpec("distance_from_20d_low", inference_available=False, min_val=0),
     FeatureSpec("sector_relative_strength", inference_available=False),
 ]
 

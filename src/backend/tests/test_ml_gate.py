@@ -133,7 +133,7 @@ class TestFeatureMapper:
         assert mapped["price_change_1d"] == -0.5
 
     def test_context_includes_temporal(self):
-        ctx = build_context_features("vwap_reversal_scalp", None)
+        ctx = build_context_features("intraday_scalp", None)
         assert "day_of_week" in ctx
         assert "month" in ctx
         assert 0 <= ctx["day_of_week"] <= 6
@@ -151,7 +151,7 @@ class TestFeatureVectorIntegrity:
         ta_b = map_multi_tf_to_features(snap_b.model_dump())
 
         ctx = build_context_features(
-            "vwap_reversal_scalp",
+            "intraday_scalp",
             {"regime_type": "trending_bull", "vix_estimate": 18.5, "breadth_estimate": 0.55},
         )
 
@@ -165,8 +165,8 @@ class TestFeatureVectorIntegrity:
 
 
 @pytest.mark.skipif(
-    not ml_model_available("vwap_reversal_scalp", mode="independent"),
-    reason="No VWAP model artifact available",
+    not ml_model_available("intraday_scalp", mode="independent"),
+    reason="No intraday_scalp model artifact available",
 )
 class TestMLPredictionDivergence:
     """Verify the ML model produces different outputs for different inputs."""
@@ -186,15 +186,15 @@ class TestMLPredictionDivergence:
         ta_b = map_multi_tf_to_features(snap_b.model_dump())
 
         ctx = build_context_features(
-            "vwap_reversal_scalp",
+            "intraday_scalp",
             {"regime_type": "trending_bull", "vix_estimate": 18.5, "breadth_estimate": 0.55},
         )
 
         vec_a = build_feature_vector(ta_a, None, ctx)
         vec_b = build_feature_vector(ta_b, None, ctx)
 
-        pred_a = run_prediction("TEST:A", "vwap_reversal_scalp", vec_a, mode="independent")
-        pred_b = run_prediction("TEST:B", "vwap_reversal_scalp", vec_b, mode="independent")
+        pred_a = run_prediction("TEST:A", "intraday_scalp", vec_a, mode="independent")
+        pred_b = run_prediction("TEST:B", "intraday_scalp", vec_b, mode="independent")
 
         assert pred_a is not None, "Model returned None for TEST:A"
         assert pred_b is not None, "Model returned None for TEST:B"
@@ -209,7 +209,7 @@ class TestMLPredictionDivergence:
         # Inspect what model actually received
         from ml.inference import _get_model
 
-        model = _get_model("vwap_reversal_scalp", mode="independent")
+        model = _get_model("intraday_scalp", mode="independent")
         feat_names = model["feature_names"]
 
         print(f"\nFeature vector comparison ({len(feat_names)} features):")
@@ -248,7 +248,7 @@ class TestMLPredictionDivergence:
         ta_pre, fmp_pre, regime_pre = build_ml_feature_dicts(snapshots, None, REGIME)
         results = await run_pre_gpt_gates(
             ["TEST:A", "TEST:B", "TEST:C"],
-            "vwap_reversal_scalp",
+            "intraday_scalp",
             ta_pre,
             fmp_pre,
             regime_pre,

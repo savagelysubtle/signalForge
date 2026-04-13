@@ -60,6 +60,14 @@ class TickerFeatures:
     volatility_20d: float | None = None
     high_low_range: float | None = None
     gap_pct: float | None = None
+    # Strategy-specific features (computed from raw candles)
+    bb_position: float | None = None
+    bb_width_percentile: float | None = None
+    squeeze_duration: float | None = None
+    range_compression_20d: float | None = None
+    ema_50_200_cross_direction: float | None = None
+    ema_50_200_cross_recency: float | None = None
+    oversold_duration: float | None = None
     # Multi-timeframe features
     tf_W_rsi_14: float | None = None
     tf_W_price_vs_ema_200: float | None = None
@@ -86,24 +94,6 @@ def _score_rule(conditions: list[tuple[bool, float]]) -> float:
 
 
 STRATEGY_RULES: dict[str, Any] = {
-    "swing": lambda f: _score_rule(
-        [
-            (45 < f.rsi < 65, 2.0),
-            (f.ema_alignment in ("all_bullish", "mixed"), 2.0),
-            (-1 < f.ema9_vs_price < 3, 1.5),
-            (f.volume_ratio > 1.1, 1.5),
-            (f.momentum_score > 0.1, 1.0),
-            (not f.earnings_within_5d, 1.0),
-        ]
-    ),
-    "mean_reversion": lambda f: _score_rule(
-        [
-            (f.rsi < 35 or f.rsi > 72, 3.0),
-            (f.distance_from_20d_low < 3 or f.distance_from_20d_high < 3, 2.0),
-            (f.volume_ratio > 1.3, 1.5),
-            (f.atr_pct < 4.0, 1.0),
-        ]
-    ),
     "momentum_breakout": lambda f: _score_rule(
         [
             (f.distance_from_20d_high < 3.0, 3.0),
@@ -114,7 +104,17 @@ STRATEGY_RULES: dict[str, Any] = {
             (not f.earnings_within_5d, 1.0),
         ]
     ),
-    "bollinger_band_squeeze_breakout": lambda f: _score_rule(
+    "golden_cross_swing": lambda f: _score_rule(
+        [
+            (f.ema_alignment in ("all_bullish", "mixed"), 3.0),
+            (f.ema50_vs_price > -1.5, 2.0),
+            (f.ema200_vs_price > -8.0, 1.5),
+            (f.volume_ratio > 1.0, 1.5),
+            (45 < f.rsi < 72, 1.5),
+            (not f.earnings_within_5d, 1.0),
+        ]
+    ),
+    "bb_squeeze_breakout": lambda f: _score_rule(
         [
             (f.atr_pct < 2.5, 4.0),
             (f.volume_ratio < 1.0, 2.0),
@@ -122,36 +122,12 @@ STRATEGY_RULES: dict[str, Any] = {
             (f.adx < 28, 1.5),
         ]
     ),
-    "vwap_reversal_scalp": lambda f: _score_rule(
+    "mean_reversion": lambda f: _score_rule(
         [
-            (f.rsi < 38 or f.rsi > 65, 2.5),
-            (f.volume_ratio > 1.3, 3.0),
-            (f.momentum_score < -0.2 or f.momentum_score > 0.2, 1.5),
-            (0.4 < f.atr_pct < 6.0, 1.5),
-        ]
-    ),
-    "earnings_play": lambda f: _score_rule(
-        [
-            (f.earnings_within_5d, 4.0),
-            (f.volume_ratio > 1.2, 2.0),
-            (40 < f.rsi < 75, 1.5),
-            (f.market_cap > 2e9, 1.5),
-        ]
-    ),
-    "ema_stack_momentum": lambda f: _score_rule(
-        [
-            (f.ema_alignment == "all_bullish" or f.ema_stack_score >= 3.0, 3.0),
-            (0 < f.ema9_vs_price < 2.5, 2.0),
-            (f.volume_ratio > 1.15, 2.0),
-            (f.momentum_score > 0.15, 1.5),
-        ]
-    ),
-    "ema_21_pullback": lambda f: _score_rule(
-        [
-            (abs(f.ema21_vs_price) < 1.5, 3.0),
-            (f.momentum_score > 0, 2.0),
-            (42 < f.rsi < 62, 2.0),
-            (f.volume_ratio > 0.8, 1.0),
+            (f.rsi < 35 or f.rsi > 72, 3.0),
+            (f.distance_from_20d_low < 3 or f.distance_from_20d_high < 3, 2.0),
+            (f.volume_ratio > 1.3, 1.5),
+            (f.atr_pct < 4.0, 1.0),
         ]
     ),
     "value_accumulation": lambda f: _score_rule(
@@ -162,32 +138,20 @@ STRATEGY_RULES: dict[str, Any] = {
             (f.volume_ratio > 0.7, 1.0),
         ]
     ),
+    "earnings_play": lambda f: _score_rule(
+        [
+            (f.earnings_within_5d, 4.0),
+            (f.volume_ratio > 1.2, 2.0),
+            (40 < f.rsi < 75, 1.5),
+            (f.market_cap > 2e9, 1.5),
+        ]
+    ),
     "intraday_scalp": lambda f: _score_rule(
         [
             (f.volume_ratio > 1.5, 3.0),
             (0.5 < f.atr_pct < 3.0, 2.0),
             (30 < f.rsi < 70, 1.5),
             (f.adx > 18, 1.5),
-        ]
-    ),
-    "ema_50_200_golden_cross": lambda f: _score_rule(
-        [
-            (f.ema_alignment in ("all_bullish", "mixed"), 3.0),
-            (f.ema50_vs_price > -1.5, 2.0),
-            (f.ema200_vs_price > -8.0, 1.5),
-            (f.volume_ratio > 1.0, 1.5),
-            (45 < f.rsi < 72, 1.5),
-            (not f.earnings_within_5d, 1.0),
-        ]
-    ),
-    "opening_range_breakout": lambda f: _score_rule(
-        [
-            (f.volume_ratio > 1.15, 2.5),
-            (f.momentum_score > 0.12, 2.0),
-            (f.distance_from_20d_high < 10.0, 2.0),
-            (0.7 < f.atr_pct < 5.0, 2.0),
-            (52 < f.rsi < 80, 1.5),
-            (not f.earnings_within_5d, 0.5),
         ]
     ),
     "crypto_swing": lambda f: _score_rule(
@@ -200,7 +164,7 @@ STRATEGY_RULES: dict[str, Any] = {
             (f.atr_pct < 8.5, 1.5),
         ]
     ),
-    "crypto_intraday": lambda f: _score_rule(
+    "crypto_intraday_scalp": lambda f: _score_rule(
         [
             (f.volume_ratio > 1.3, 2.5),
             (0.3 < f.atr_pct < 6.5, 2.5),
@@ -212,49 +176,40 @@ STRATEGY_RULES: dict[str, Any] = {
 
 REGIME_ACTIVE_STRATEGIES: dict[str, list[str]] = {
     "trending_bull": [
-        "swing",
         "momentum_breakout",
-        "ema_stack_momentum",
-        "ema_21_pullback",
+        "golden_cross_swing",
+        "bb_squeeze_breakout",
         "earnings_play",
-        "bollinger_band_squeeze_breakout",
-        "ema_50_200_golden_cross",
-        "opening_range_breakout",
+        "intraday_scalp",
         "crypto_swing",
-        "crypto_intraday",
+        "crypto_intraday_scalp",
     ],
     "trending_bear": [
         "mean_reversion",
-        "vwap_reversal_scalp",
         "value_accumulation",
-        "ema_21_pullback",
         "crypto_swing",
     ],
     "high_volatility": [
         "mean_reversion",
-        "bollinger_band_squeeze_breakout",
+        "bb_squeeze_breakout",
         "earnings_play",
-        "vwap_reversal_scalp",
         "value_accumulation",
         "intraday_scalp",
         "crypto_swing",
     ],
     "range_bound": [
         "mean_reversion",
-        "vwap_reversal_scalp",
-        "swing",
-        "bollinger_band_squeeze_breakout",
-        "ema_21_pullback",
-        "opening_range_breakout",
+        "bb_squeeze_breakout",
+        "value_accumulation",
         "crypto_swing",
     ],
-    "sector_rotation": ["swing", "ema_stack_momentum", "value_accumulation"],
+    "sector_rotation": ["momentum_breakout", "golden_cross_swing", "value_accumulation"],
     "risk_off": ["mean_reversion", "value_accumulation"],
 }
 
 _DEFAULT_ACTIVE = list(STRATEGY_RULES.keys())
 
-_CRYPTO_STRATEGIES: frozenset[str] = frozenset({"crypto_swing", "crypto_intraday"})
+_CRYPTO_STRATEGIES: frozenset[str] = frozenset({"crypto_swing", "crypto_intraday_scalp"})
 
 MIN_RULE_SCORE = 0.35
 MIN_ML_PROB = 0.52
@@ -262,33 +217,18 @@ MIN_COMBINED_SCORE = 0.45
 _RULE_WEIGHT = 0.4
 _ML_WEIGHT = 0.6
 
-_STRATEGY_TO_MODEL: dict[str, str] = {
-    "bollinger_band_squeeze_breakout": "bollinger_band_squeeze_breakout_swing",
-    "ema_21_pullback": "ema_21_pullback_swing",
-    "ema_stack_momentum": "ema_stack_momentum_intraday",
-    "ema_50_200_golden_cross": "ema_50_200_golden_cross_swing",
-}
+_STRATEGY_TO_MODEL: dict[str, str] = {}
 
-# Template `strategy_type` (templates/strategies.json) -> granular scanner rule keys.
 _TEMPLATE_TO_SCANNER_RULES: dict[str, list[str]] = {
-    "swing": [
-        "swing",
-        "momentum_breakout",
-        "bollinger_band_squeeze_breakout",
-        "ema_21_pullback",
-        "ema_50_200_golden_cross",
-    ],
+    "momentum_breakout": ["momentum_breakout"],
+    "golden_cross_swing": ["golden_cross_swing"],
+    "bb_squeeze_breakout": ["bb_squeeze_breakout"],
     "mean_reversion": ["mean_reversion"],
-    "value": ["value_accumulation"],
-    "event": ["earnings_play"],
-    "intraday": [
-        "ema_stack_momentum",
-        "vwap_reversal_scalp",
-        "intraday_scalp",
-        "opening_range_breakout",
-    ],
+    "value_accumulation": ["value_accumulation"],
+    "earnings_play": ["earnings_play"],
+    "intraday_scalp": ["intraday_scalp"],
     "crypto_swing": ["crypto_swing"],
-    "crypto_intraday": ["crypto_intraday"],
+    "crypto_intraday_scalp": ["crypto_intraday_scalp"],
 }
 
 
@@ -806,6 +746,13 @@ class StrategyScanner:
             feat.volatility_20d = ed.get("volatility_20d")
             feat.high_low_range = ed.get("high_low_range")
             feat.gap_pct = ed.get("gap_pct")
+            feat.bb_position = ed.get("bb_position")
+            feat.bb_width_percentile = ed.get("bb_width_percentile")
+            feat.squeeze_duration = ed.get("squeeze_duration")
+            feat.range_compression_20d = ed.get("range_compression_20d")
+            feat.ema_50_200_cross_direction = ed.get("ema_50_200_cross_direction")
+            feat.ema_50_200_cross_recency = ed.get("ema_50_200_cross_recency")
+            feat.oversold_duration = ed.get("oversold_duration")
             result[ticker] = feat
         return result
 
@@ -904,6 +851,14 @@ class StrategyScanner:
                 "volatility_20d": features.volatility_20d,
                 "high_low_range": features.high_low_range,
                 "gap_pct": features.gap_pct,
+                # Strategy-specific features (from raw candle computation)
+                "bb_position": features.bb_position,
+                "bb_width_percentile": features.bb_width_percentile,
+                "squeeze_duration": features.squeeze_duration,
+                "range_compression_20d": features.range_compression_20d,
+                "ema_50_200_cross_direction": features.ema_50_200_cross_direction,
+                "ema_50_200_cross_recency": features.ema_50_200_cross_recency,
+                "oversold_duration": features.oversold_duration,
                 # Weekly timeframe features
                 "tf_W_rsi_14": features.tf_W_rsi_14,
                 "tf_W_price_vs_ema_200": features.tf_W_price_vs_ema_200,
@@ -915,6 +870,13 @@ class StrategyScanner:
                 "tf_4H_ema_stack_score": features.tf_4H_ema_stack_score,
                 "tf_4H_momentum_score": features.tf_4H_momentum_score,
             }
+            # Scanner uses daily as primary TF (unprefixed). Strategies with
+            # chart_timeframe != "D" trained with daily as a secondary TF
+            # (prefixed tf_D_*), so mirror the primary daily features.
+            ta_dict["tf_D_rsi_14"] = features.rsi
+            ta_dict["tf_D_price_vs_ema_200"] = features.ema200_vs_price
+            ta_dict["tf_D_ema_stack_score"] = features.ema_stack_score
+            ta_dict["tf_D_momentum_score"] = features.momentum_score
             regime_ctx: dict[str, Any] = {
                 "regime_type": state.regime_type,
                 "vix_estimate": state.vix_estimate,
@@ -930,27 +892,19 @@ class StrategyScanner:
     def _get_matched_rules(strategy: str, f: TickerFeatures) -> list[str]:
         """Return human-readable labels for passing conditions."""
         labels: dict[str, list[tuple[bool, str]]] = {
-            "swing": [
-                (45 < f.rsi < 65, f"RSI {f.rsi:.0f}"),
-                (f.ema_alignment in ("all_bullish", "mixed"), "EMA aligned"),
-                (f.volume_ratio > 1.1, f"Vol {f.volume_ratio:.1f}x"),
-                (f.momentum_score > 0.1, f"Mom {f.momentum_score:+.2f}"),
-            ],
-            "mean_reversion": [
-                (f.rsi < 35, f"RSI oversold {f.rsi:.0f}"),
-                (f.rsi > 72, f"RSI overbought {f.rsi:.0f}"),
-                (f.volume_ratio > 1.3, f"Vol {f.volume_ratio:.1f}x"),
-            ],
             "momentum_breakout": [
                 (f.distance_from_20d_high < 3.0, "Near 20d high"),
                 (f.volume_ratio > 1.3, f"Vol {f.volume_ratio:.1f}x breakout"),
-                (
-                    f.ema_alignment in ("all_bullish", "mixed"),
-                    "EMA stack / mixed",
-                ),
+                (f.ema_alignment in ("all_bullish", "mixed"), "EMA stack"),
                 (f.momentum_score > 0.3, f"Strong mom {f.momentum_score:+.2f}"),
             ],
-            "bollinger_band_squeeze_breakout": [
+            "golden_cross_swing": [
+                (f.ema_alignment in ("all_bullish", "mixed"), "EMA alignment OK"),
+                (f.ema50_vs_price > -1.5, "Price vs 50EMA"),
+                (f.volume_ratio > 1.0, f"Vol {f.volume_ratio:.1f}x"),
+                (45 < f.rsi < 72, f"RSI {f.rsi:.0f}"),
+            ],
+            "bb_squeeze_breakout": [
                 (f.atr_pct < 2.5, f"ATR squeeze {f.atr_pct:.1f}%"),
                 (f.volume_ratio < 1.0, "Vol drying up"),
                 (
@@ -959,63 +913,31 @@ class StrategyScanner:
                 ),
                 (f.adx < 28, f"ADX {f.adx:.0f} (consolidation)"),
             ],
-            "ema_stack_momentum": [
-                (
-                    f.ema_alignment == "all_bullish" or f.ema_stack_score >= 3.0,
-                    "Bullish / partial stack",
-                ),
-                (0 < f.ema9_vs_price < 2.5, "Price near 9EMA"),
-                (f.volume_ratio > 1.15, f"Vol {f.volume_ratio:.1f}x"),
-                (f.momentum_score > 0.15, f"Mom {f.momentum_score:+.2f}"),
-            ],
-            "ema_21_pullback": [
-                (abs(f.ema21_vs_price) < 1.5, "Price at 21EMA"),
-                (f.momentum_score > 0, "Uptrend"),
-                (42 < f.rsi < 62, f"RSI neutral {f.rsi:.0f}"),
-            ],
-            "vwap_reversal_scalp": [
-                (f.rsi < 38 or f.rsi > 65, f"RSI extreme {f.rsi:.0f}"),
-                (f.volume_ratio > 1.3, f"Vol spike {f.volume_ratio:.1f}x"),
-                (0.4 < f.atr_pct < 6.0, f"ATR {f.atr_pct:.1f}%"),
-            ],
-            "earnings_play": [
-                (f.earnings_within_5d, "Earnings upcoming"),
-                (f.volume_ratio > 1.2, f"Vol {f.volume_ratio:.1f}x"),
+            "mean_reversion": [
+                (f.rsi < 35, f"RSI oversold {f.rsi:.0f}"),
+                (f.rsi > 72, f"RSI overbought {f.rsi:.0f}"),
+                (f.volume_ratio > 1.3, f"Vol {f.volume_ratio:.1f}x"),
             ],
             "value_accumulation": [
                 (f.rsi < 45, f"RSI low {f.rsi:.0f}"),
                 (f.distance_from_20d_low < 5, "Near 20d low"),
+            ],
+            "earnings_play": [
+                (f.earnings_within_5d, "Earnings upcoming"),
+                (f.volume_ratio > 1.2, f"Vol {f.volume_ratio:.1f}x"),
             ],
             "intraday_scalp": [
                 (f.volume_ratio > 1.5, f"Vol {f.volume_ratio:.1f}x"),
                 (0.5 < f.atr_pct < 3.0, f"ATR {f.atr_pct:.1f}%"),
                 (f.adx > 18, f"ADX {f.adx:.0f}"),
             ],
-            "ema_50_200_golden_cross": [
-                (
-                    f.ema_alignment in ("all_bullish", "mixed"),
-                    "EMA alignment OK",
-                ),
-                (f.ema50_vs_price > -1.5, "Price vs 50EMA"),
-                (f.volume_ratio > 1.0, f"Vol {f.volume_ratio:.1f}x"),
-                (45 < f.rsi < 72, f"RSI {f.rsi:.0f}"),
-            ],
-            "opening_range_breakout": [
-                (f.volume_ratio > 1.15, f"Vol {f.volume_ratio:.1f}x"),
-                (f.momentum_score > 0.12, f"Mom {f.momentum_score:+.2f}"),
-                (f.distance_from_20d_high < 10.0, "Under 20d high"),
-                (0.7 < f.atr_pct < 5.0, f"ATR {f.atr_pct:.1f}%"),
-            ],
             "crypto_swing": [
                 (43 < f.rsi < 70, f"RSI {f.rsi:.0f}"),
-                (
-                    f.ema_alignment in ("all_bullish", "mixed"),
-                    "EMA aligned",
-                ),
+                (f.ema_alignment in ("all_bullish", "mixed"), "EMA aligned"),
                 (f.volume_ratio > 1.05, f"Vol {f.volume_ratio:.1f}x"),
                 (f.atr_pct < 8.5, f"ATR {f.atr_pct:.1f}%"),
             ],
-            "crypto_intraday": [
+            "crypto_intraday_scalp": [
                 (f.volume_ratio > 1.3, f"Vol {f.volume_ratio:.1f}x"),
                 (0.3 < f.atr_pct < 6.5, f"ATR {f.atr_pct:.1f}%"),
                 (f.adx > 12, f"ADX {f.adx:.0f}"),

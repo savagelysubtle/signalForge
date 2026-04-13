@@ -23,6 +23,9 @@ def _find_latest_meta_files(
 ) -> dict[str, dict]:
     """Find the latest _meta.json per strategy+mode combo.
 
+    Scans both the root directory and all subdirectories (per-strategy
+    folders like ``combined/``, ``momentum_breakout/``, etc.).
+
     Args:
         artifacts_dir: Path to the artifacts directory.
         date_filter: If provided, only include artifacts from this date (YYYYMMDD).
@@ -30,14 +33,17 @@ def _find_latest_meta_files(
     Returns:
         Mapping of ``{strategy}_{mode}`` -> parsed meta dict.
     """
-    meta_files = sorted(artifacts_dir.glob("*_meta.json"), key=lambda p: p.stat().st_mtime)
+    meta_files = sorted(
+        (p for p in artifacts_dir.rglob("*_meta.json") if "archive" not in p.parts),
+        key=lambda p: p.stat().st_mtime,
+    )
 
     latest: dict[str, tuple[int, dict, str]] = {}
 
     for mf in meta_files:
         try:
             meta = json.loads(mf.read_text())
-        except (json.JSONDecodeError, OSError):
+        except json.JSONDecodeError, OSError:
             continue
 
         training_date = meta.get("training_date", "")
@@ -90,7 +96,7 @@ def print_report(artifacts_dir: Path, date_filter: str | None = None) -> list[di
     print(header)
     print("-" * len(header))
 
-    for key, meta in metas.items():
+    for _key, meta in metas.items():
         strategy = meta.get("strategy_type") or "combined"
         config = meta.get("training_config", {})
         mode = config.get("model_mode", "shadow")
@@ -131,7 +137,9 @@ def print_report(artifacts_dir: Path, date_filter: str | None = None) -> list[di
         if top_str:
             print(f"  {'Top SHAP:':<12} {top_str}")
 
-    holdout_rows = [r for r in rows if any("holdout" in k for k in (meta.get("holdout_metrics") or {}))]
+    holdout_rows = [
+        r for r in rows if any("holdout" in k for k in (meta.get("holdout_metrics") or {}))
+    ]
 
     print(f"\n{'─' * 60}")
     print("SUMMARY")
@@ -142,16 +150,16 @@ def print_report(artifacts_dir: Path, date_filter: str | None = None) -> list[di
 
     accs = [r["accuracy"] for r in rows if r["accuracy"] > 0]
     if accs:
-        print(f"  Accuracy range:  {min(accs):.1%} – {max(accs):.1%}  (mean {sum(accs)/len(accs):.1%})")
+        print(
+            f"  Accuracy range:  {min(accs):.1%} - {max(accs):.1%}  (mean {sum(accs) / len(accs):.1%})"
+        )
 
     active_ratios = [
-        r["active_features"] / r["total_features"]
-        for r in rows
-        if r["total_features"] > 0
+        r["active_features"] / r["total_features"] for r in rows if r["total_features"] > 0
     ]
     if active_ratios:
         print(
-            f"  Feature usage:   {sum(active_ratios)/len(active_ratios):.0%} of features "
+            f"  Feature usage:   {sum(active_ratios) / len(active_ratios):.0%} of features "
             f"have non-zero SHAP (mean)"
         )
 

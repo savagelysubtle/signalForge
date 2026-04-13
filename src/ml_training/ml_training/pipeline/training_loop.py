@@ -194,26 +194,34 @@ class TrainingLoop:
         from pathlib import Path
 
         dead_path = Path(__file__).resolve().parents[2] / "data" / "raw" / "dead_features.json"
-        strategy_counts: dict[str, int] = {}
+        strategy_strategies: dict[str, list[str]] = {}
         if dead_path.exists():
             try:
                 data = json.loads(dead_path.read_text())
-                strategy_counts = data.get("strategy_zero_count", {})
+                strategy_strategies = data.get("strategy_zero_count", {})
+                if strategy_strategies and isinstance(
+                    next(iter(strategy_strategies.values())), int
+                ):
+                    strategy_strategies = {}
             except json.JSONDecodeError, KeyError:
                 pass
 
         strategy_label = self._config.strategy_type or "combined"
         for feat in dead:
-            strategy_counts[feat] = strategy_counts.get(feat, 0) + 1
+            seen = strategy_strategies.setdefault(feat, [])
+            if strategy_label not in seen:
+                seen.append(strategy_label)
 
-        confirmed_dead = sorted(feat for feat, count in strategy_counts.items() if count >= 8)
+        confirmed_dead = sorted(
+            feat for feat, strats in strategy_strategies.items() if len(strats) >= 8
+        )
 
         dead_path.parent.mkdir(parents=True, exist_ok=True)
         dead_path.write_text(
             json.dumps(
                 {
                     "dead_features": confirmed_dead,
-                    "strategy_zero_count": strategy_counts,
+                    "strategy_zero_count": strategy_strategies,
                     "last_updated_by": strategy_label,
                 },
                 indent=2,
@@ -222,7 +230,7 @@ class TrainingLoop:
         logger.info(
             "Updated dead_features.json: %d confirmed dead, %d tracked",
             len(confirmed_dead),
-            len(strategy_counts),
+            len(strategy_strategies),
         )
 
     def _apply_round_adjustments(
@@ -376,17 +384,21 @@ class TrainingLoop:
         except Exception:
             logger.warning("Failed to write holdout metrics to %s", meta_path, exc_info=True)
 
+    _FUNDAMENTAL_STRATEGIES: frozenset[str] = frozenset(
+        {"value_accumulation", "earnings_play", "golden_cross_swing"}
+    )
+
     def _apply_strategy_feature_mask(self, dataset: pd.DataFrame) -> pd.DataFrame:
-        """Drop fundamental features for all strategies except value-oriented ones.
+        """Drop fundamental features for strategies that don't use FMP screening.
 
         Fundamental features (PE ratio, ROE, etc.) are static per-ticker and
         change at most quarterly.  SHAP analysis shows these act as ticker
         fingerprints that enable memorization rather than learning directional
-        patterns.  Only ``value`` strategies have a theoretical basis for
-        keeping them.
+        patterns.  Strategies with FMP-screened fundamentals keep them;
+        others (scalp, crypto, momentum, bb_squeeze, mean_reversion) drop them.
         """
         st = self._config.strategy_type or ""
-        if "value" not in st:
+        if st not in self._FUNDAMENTAL_STRATEGIES:
             drop = [c for c in FUNDAMENTAL_FEATURES if c in dataset.columns]
             if drop:
                 logger.info("Strategy mask: dropping %d fundamental features for %s", len(drop), st)
@@ -414,9 +426,19 @@ class TrainingLoop:
         if not scored:
             return dataset
 
+        n_scored = len(scored)
+        if n_scored <= 15:
+            frac = min(frac, 0.15)
+        elif n_scored <= 25:
+            frac = min(frac, 0.20)
+
         protected = {"primary_signal", "signal_strength"}
         sorted_feats = sorted(scored.items(), key=lambda x: x[1])
+        min_remaining = 12
         n_drop = max(1, int(len(sorted_feats) * frac))
+        n_drop = min(n_drop, max(0, len(sorted_feats) - min_remaining))
+        if n_drop <= 0:
+            return dataset
         drop_cols = {f for f, _ in sorted_feats[:n_drop]} - protected
 
         keep = [c for c in dataset.columns if c not in drop_cols]
