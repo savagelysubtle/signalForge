@@ -37,7 +37,7 @@ async def get_current_user(authorization: Annotated[str | None, Header()] = None
     """Extract and validate JWT token from Authorization header.
 
     Decodes the Bearer token using Supabase's JWKS endpoint (ES256).
-    Falls back to a dev user ID when SUPABASE_URL is not configured.
+    Falls back to a dev user ID when explicit dev auth bypass is enabled.
 
     Args:
         authorization: Authorization header value (injected by FastAPI).
@@ -48,13 +48,13 @@ async def get_current_user(authorization: Annotated[str | None, Header()] = None
     Raises:
         HTTPException: 401 if token is missing, invalid, or expired.
     """
-    if not settings.supabase_url:
+    if settings.dev_auth_bypass:
         if settings.environment == "production":
             raise RuntimeError(
-                "SUPABASE_URL is required in production. Set the SUPABASE_URL environment variable."
+                "DEV_AUTH_BYPASS is not allowed in production. Disable it before deploy."
             )
         logger.warning(
-            "SUPABASE_URL not configured — using dev user ID. "
+            "DEV_AUTH_BYPASS enabled — using dev user ID. "
             "This is only allowed in development mode."
         )
         return "dev-user-local"

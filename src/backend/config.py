@@ -30,6 +30,14 @@ APP_NAME = "SignalForge"
 APP_VERSION = "0.1.0"
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    """Parse a boolean env var, accepting common truthy spellings."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 class Settings(BaseModel):
     """Application settings loaded from environment variables.
 
@@ -40,6 +48,8 @@ class Settings(BaseModel):
         supabase_service_key: Supabase service role key for admin operations.
         supabase_jwt_secret: Secret for JWT verification.
         supabase_anon_key: Supabase anonymous key for client operations.
+        dev_auth_bypass: Allow local requests through without a JWT while still
+            keeping Supabase configured for DB/storage. Never valid in production.
         allowed_origins: CORS allowed origins for API access.
         port: HTTP server port.
     """
@@ -50,6 +60,7 @@ class Settings(BaseModel):
     supabase_service_key: str = ""
     supabase_jwt_secret: str = ""
     supabase_anon_key: str = ""
+    dev_auth_bypass: bool = False
     allowed_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:5173", "https://localhost:5173"]
     )
@@ -76,6 +87,7 @@ class Settings(BaseModel):
             supabase_service_key=os.environ.get("SUPABASE_SERVICE_KEY", ""),
             supabase_jwt_secret=os.environ.get("SUPABASE_JWT_SECRET", ""),
             supabase_anon_key=os.environ.get("SUPABASE_ANON_KEY", ""),
+            dev_auth_bypass=_bool_env("DEV_AUTH_BYPASS", False),
             allowed_origins=allowed_origins,
             port=int(os.environ.get("PORT", "8420")),
         )
