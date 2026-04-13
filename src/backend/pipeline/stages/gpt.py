@@ -20,7 +20,7 @@ from pydantic import BaseModel
 
 from ml.schemas import GateResult
 from pipeline.http_retry import with_transient_retry
-from pipeline.model_config import GPT_MODEL
+from pipeline.model_config import GPT_MAX_TOKENS, GPT_MODEL
 from pipeline.prompts.gpt_debate import (
     BEAR_SYSTEM_PROMPT,
     BULL_SYSTEM_PROMPT,
@@ -53,7 +53,6 @@ logger = logging.getLogger(__name__)
 
 _semaphore = asyncio.Semaphore(3)
 _GPT_REASONING_EFFORT = "high"
-_GPT_MAX_COMPLETION_TOKENS = 32_768
 
 
 def _openai_strict_schema(model: type[BaseModel]) -> dict[str, Any]:
@@ -227,7 +226,7 @@ async def _call_gpt(
             {"role": "user", "content": full_user_prompt},
         ],
         "reasoning_effort": _GPT_REASONING_EFFORT,
-        "max_completion_tokens": _GPT_MAX_COMPLETION_TOKENS,
+        "max_completion_tokens": GPT_MAX_TOKENS,
     }
     if response_format:
         api_kwargs["response_format"] = response_format
