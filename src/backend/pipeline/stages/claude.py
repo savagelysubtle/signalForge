@@ -80,7 +80,7 @@ def _get_client() -> AsyncAnthropic:
             raise RuntimeError(
                 "Anthropic API key not configured. Set ANTHROPIC_API_KEY in .env (see .env.example)."
             )
-        _anthropic_client = AsyncAnthropic(api_key=api_key, timeout=90.0)
+        _anthropic_client = AsyncAnthropic(api_key=api_key, timeout=240.0)
     return _anthropic_client
 
 
