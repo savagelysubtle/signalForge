@@ -943,17 +943,57 @@ def compute_tf_features(candles: list[dict[str, Any]], label: str) -> dict[str, 
     return result
 
 
-def compute_extra_daily_features(candles: list[dict[str, Any]]) -> dict[str, float | None]:
-    """Compute daily features that the ML models expect but the scanner didn't previously supply.
+def _ema_array(values: np.ndarray, period: int) -> np.ndarray:
+    """Compute an exponential moving average over an array (chronological)."""
+    alpha = 2.0 / (period + 1)
+    ema = np.empty_like(values)
+    ema[0] = values[0]
+    for i in range(1, len(values)):
+        ema[i] = alpha * values[i] + (1 - alpha) * ema[i - 1]
+    return ema
 
-    Covers ``price_change_1d``, ``price_change_5d``, ``price_change_20d``,
-    ``bollinger_width``, ``volatility_20d``, ``high_low_range``, and ``gap_pct``.
+
+def _rsi_array(closes: np.ndarray, period: int = 14) -> np.ndarray:
+    """Compute Wilder RSI for an array of chronological close prices."""
+    n = len(closes)
+    rsi = np.full(n, np.nan)
+    if n < period + 1:
+        return rsi
+
+    deltas = np.diff(closes)
+    gains = np.where(deltas > 0, deltas, 0.0)
+    losses = np.where(deltas < 0, -deltas, 0.0)
+
+    avg_gain = float(np.mean(gains[:period]))
+    avg_loss = float(np.mean(losses[:period]))
+
+    if avg_loss > 0:
+        rsi[period] = 100.0 - 100.0 / (1.0 + avg_gain / avg_loss)
+    else:
+        rsi[period] = 100.0
+
+    for i in range(period, len(deltas)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+        if avg_loss == 0:
+            rsi[i + 1] = 100.0
+        else:
+            rsi[i + 1] = 100.0 - 100.0 / (1.0 + avg_gain / avg_loss)
+
+    return rsi
+
+
+def compute_extra_daily_features(candles: list[dict[str, Any]]) -> dict[str, float | None]:
+    """Compute daily features that the ML models expect from raw OHLCV candles.
+
+    Includes price-change, Bollinger Band, range-compression, EMA-crossover,
+    and RSI-oversold features that match the ML training feature engineering.
 
     Args:
         candles: Daily OHLCV dicts sorted most-recent-first.
 
     Returns:
-        Dict of extra feature values. Missing features are ``None``.
+        Dict of feature values. Missing features are ``None``.
     """
     result: dict[str, float | None] = {
         "price_change_1d": None,
@@ -963,6 +1003,13 @@ def compute_extra_daily_features(candles: list[dict[str, Any]]) -> dict[str, flo
         "volatility_20d": None,
         "high_low_range": None,
         "gap_pct": None,
+        "bb_position": None,
+        "bb_width_percentile": None,
+        "squeeze_duration": None,
+        "range_compression_20d": None,
+        "ema_50_200_cross_direction": None,
+        "ema_50_200_cross_recency": None,
+        "oversold_duration": None,
     }
 
     if not candles or len(candles) < 2:
@@ -990,23 +1037,101 @@ def compute_extra_daily_features(candles: list[dict[str, Any]]) -> dict[str, flo
         if close_5d > 0:
             result["price_change_5d"] = round((close - close_5d) / close_5d * 100, 4)
 
-    if len(candles) >= 21:
+    # Build chronological arrays for rolling computations
+    n = min(len(candles), 200)
+    chrono = list(reversed(candles[:n]))
+    closes_arr = np.array(
+        [float(c.get("adjClose") or c.get("close") or 0) for c in chrono],
+        dtype=np.float64,
+    )
+    highs_arr = np.array([float(c.get("high") or 0) for c in chrono], dtype=np.float64)
+    lows_arr = np.array([float(c.get("low") or 0) for c in chrono], dtype=np.float64)
+    m = len(closes_arr)
+
+    if m >= 21:
         close_20d = float(candles[20].get("adjClose") or candles[20].get("close") or 0)
         if close_20d > 0:
             result["price_change_20d"] = round((close - close_20d) / close_20d * 100, 4)
 
-        chrono = list(reversed(candles[:21]))
-        closes_arr = np.array(
-            [float(c.get("adjClose") or c.get("close") or 0) for c in chrono],
-            dtype=np.float64,
-        )
-        sma20 = float(np.mean(closes_arr[-20:]))
-        std20 = float(np.std(closes_arr[-20:]))
-        if sma20 > 0:
+        daily_returns = np.diff(closes_arr) / np.where(closes_arr[:-1] > 0, closes_arr[:-1], 1.0)
+        result["volatility_20d"] = round(float(np.std(daily_returns[-20:])) * 100, 4)
+
+    # --- Bollinger Band features (20-period) ---
+    if m >= 20:
+        sma20_arr = np.full(m, np.nan)
+        std20_arr = np.full(m, np.nan)
+        for i in range(19, m):
+            window = closes_arr[i - 19 : i + 1]
+            sma20_arr[i] = np.mean(window)
+            std20_arr[i] = np.std(window)
+
+        idx = m - 1
+        sma20 = sma20_arr[idx]
+        std20 = std20_arr[idx]
+
+        if sma20 > 0 and not np.isnan(std20):
             result["bollinger_width"] = round((2 * std20 / sma20) * 100, 4)
 
-        daily_returns = np.diff(closes_arr) / closes_arr[:-1]
-        result["volatility_20d"] = round(float(np.std(daily_returns[-20:])) * 100, 4)
+            bb_upper = sma20 + 2 * std20
+            bb_lower = sma20 - 2 * std20
+            bb_denom = bb_upper - bb_lower
+            if bb_denom > 0:
+                result["bb_position"] = round(float((closes_arr[idx] - bb_lower) / bb_denom), 4)
+
+        # BB width percentile (rank vs last 100 bars, matching training)
+        bb_raw = np.where(sma20_arr > 0, 2 * std20_arr / sma20_arr, np.nan)
+        valid_mask = ~np.isnan(bb_raw)
+        valid_widths = bb_raw[valid_mask]
+
+        if len(valid_widths) >= 20:
+            current_w = bb_raw[idx]
+            if not np.isnan(current_w):
+                lookback = valid_widths[-min(100, len(valid_widths)) :]
+                result["bb_width_percentile"] = round(
+                    float(np.sum(lookback <= current_w) / len(lookback)), 4
+                )
+
+            # Squeeze duration (consecutive bars where width < 20-bar avg)
+            avg_width = float(np.mean(valid_widths[-20:]))
+            streak = 0
+            for i in range(m - 1, 18, -1):
+                if not np.isnan(bb_raw[i]) and bb_raw[i] < avg_width:
+                    streak += 1
+                else:
+                    break
+            result["squeeze_duration"] = float(streak)
+
+    # --- Range compression (5d range / 20d range) ---
+    if m >= 20:
+        range_5 = float(np.max(highs_arr[-5:])) - float(np.min(lows_arr[-5:]))
+        range_20 = float(np.max(highs_arr[-20:])) - float(np.min(lows_arr[-20:]))
+        if range_20 > 0:
+            result["range_compression_20d"] = round(float(range_5 / range_20), 4)
+
+    # --- EMA 50/200 crossover features ---
+    if m >= 50:
+        ema50 = _ema_array(closes_arr, 50)
+        if m >= 200:
+            ema200 = _ema_array(closes_arr, 200)
+            result["ema_50_200_cross_direction"] = 1.0 if ema50[-1] > ema200[-1] else -1.0
+            cross_dir = np.sign(ema50 - ema200)
+            recency = 0
+            for i in range(len(cross_dir) - 1, 0, -1):
+                if cross_dir[i] != cross_dir[i - 1]:
+                    break
+                recency += 1
+            result["ema_50_200_cross_recency"] = float(min(recency, 60))
+
+    # --- Oversold duration (consecutive bars with RSI < 35) ---
+    if m >= 15:
+        rsi_vals = _rsi_array(closes_arr, 14)
+        streak = 0
+        for i in range(len(rsi_vals) - 1, -1, -1):
+            if not np.isnan(rsi_vals[i]) and rsi_vals[i] < 35:
+                streak += 1
+            else:
+                break
+        result["oversold_duration"] = float(streak)
 
     return result
 

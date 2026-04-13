@@ -1,298 +1,471 @@
-# SignalForge ML Artifact Tracker
+# SignalForge ML Artifact Tracker — v2
 
-> Auto-generated 2026-04-07. Last log update: 2026-04-08 (Optuna v4 snapshot). This document tracks
-> model training runs, production deployments, and analysis findings across the
-> ML pipeline.
+> Started 2026-04-12. Previous tracker: `archive/ARTIFACT_TRACKER_v1_pre_strategy_overhaul.md`
 
 ---
 
-## Changelog: pipeline optimization (code) vs latest on-disk artifacts
+## Pipeline Changes (2026-04-12)
 
-**What changed in the codebase (ML pipeline optimization — implemented in repo):**
+### Strategy Overhaul
 
-| Area | Change | Files (high level) |
+Rationalized from 14+ strategies to 9 granular types. Dropped: EMA 21 Pullback,
+EMA Stack Momentum Intraday, Opening Range Breakout, VWAP Reversal Scalp, and
+generic `swing`/`intraday` buckets.
+
+| Strategy Type | R:R | Horizon |
 |---|---|---|
-| Tuning objective | GT-Score / Optuna now maximizes **(1 − Brier)** on binary folds, **−log loss** on multiclass; grid search logging uses `mean_brier_skill` | `hyperparameter_tuning.py` |
-| Sample weights | **Exponential temporal decay** layered on uniqueness weights; `CPCVConfig.decay_lambda` (default 0.05); Optuna searches `decay_lambda`, passes `sample_weight` in CV; tuned value stored as `_decay_lambda` (not a LightGBM arg) | `predictor.py`, `hyperparameter_tuning.py` |
-| Cross-validation | Default **8** splits; tiers: n &lt; 5k → cap 3 folds; 5k–100k → cap 5; **purge cap** `n_samples // (effective_splits * 4)` | `predictor.py` |
-| Production gate | **Kelly** sizing from per-strategy R:R; **regime** Kelly multiplier; optional **meta-labeler** blend (60/40) when `model_{strategy}_meta_active.joblib` exists | `gate.py`, `inference.py`, `schemas.py` |
-| Meta-labeler artifacts | `ModelArtifact.meta_labeler`; training loop persists MetaLabeler when `meta_label=True` | `registry.py`, `training_loop.py` |
+| `momentum_breakout` | 3.0:1 | 5 bars |
+| `golden_cross_swing` | 2.5:1 | 10 bars |
+| `bb_squeeze_breakout` | 1.5:1 | 5 bars |
+| `mean_reversion` | 1.5:1 | 5 bars |
+| `value_accumulation` | 1.33:1 | 40 bars |
+| `earnings_play` | 2.5:1 | 5 bars |
+| `intraday_scalp` | 1.2:1 | 5 bars |
+| `crypto_swing` | 2.0:1 | 5 bars |
+| `crypto_intraday_scalp` | 1.2:1 | 5 bars |
 
-**Where the new tuning shows up in artifacts**
+### Barrier Config Fixes
 
-| Signal | Meaning |
+- Mean Reversion profit_mult 1.0→1.5 (R:R was broken at 0.67:1, now 1.5:1)
+- All barrier config keys now match granular strategy types (were mismatched)
+- Golden Cross horizon 5→10 bars, Value Accumulation 20→40 bars
+
+### New Features (10)
+
+`williams_r`, `bb_position`, `bb_width_percentile`, `squeeze_duration`,
+`range_compression_20d`, `volume_surge`, `ema_50_200_cross_direction`,
+`ema_50_200_cross_recency`, `rsi_divergence`, `oversold_duration`
+
+Moved to inference-available: `bollinger_width`, `distance_from_20d_high`,
+`distance_from_20d_low`
+
+### Primary Signal Rewrite
+
+`compute_primary_signal()` rewritten with unique logic per strategy (momentum
+breakout uses 20d high breakout + volume surge, golden cross uses EMA 50/200
+crossover, mean reversion uses RSI extremes + divergence, etc.)
+
+### CLI: `--fresh` Flag
+
+New flag on `train` command — clears `dead_features.json`, `tuned_params.json`,
+archives old `.joblib`/`_meta.json`, auto-sets `--no-tuned`.
+
+### Backend/Frontend Sync
+
+Scanner rules, gate R:R, feature mapper, risk validator, frontend labels/colors
+all updated for 9 granular strategy types.
+
+### Artifact Subfolder Structure
+
+Models now save to per-strategy subdirectories: `artifacts/combined/`,
+`artifacts/momentum_breakout/`, etc. Baseline report scans all subdirs.
+`--fresh` archives from subfolders and cleans up empty dirs.
+
+### Default Independent Only
+
+`--model-mode` default changed from `both` to `independent`. Shadow model
+only trained on explicit `--model-mode shadow` or `--model-mode both`.
+
+---
+
+## Dataset (2026-04-12)
+
+| Metric | Value |
 |---|---|
-| `training_config.classifier_params._decay_lambda` | Optuna-selected temporal decay (saved JSON / joblib). **Absent on older runs** (e.g. independent v3 tier). |
-| `training_config.n_folds` | **Reported** fold count from the training round (often **5** for 5k–100k row datasets after the small/medium cap; **8** when the full split count is used). |
+| Total samples | 1,389,324 |
+| Features (inference-only) | 48 used / 124 in dataset |
+| Training split | 1,180,925 (85%) |
+| Holdout split | 208,399 (15%) |
+| Tickers | ~987 (434 TSX, 503 US, 50 crypto) |
+| Timeframes | D, W, 4H, 1H, 15m |
 
-**Latest batch on disk** — highest `v*` per strategy, suffix `20260407` (same calendar date; newer files supersede v3 / v21–v37 tier). **Optuna + Brier-style objective + decay in CV** apply to artifacts that include `_decay_lambda`.
+---
 
-### Shadow models (2026-04-07, max version — post–Optuna refresh)
+## Run Log
 
-| Strategy | Ver | Acc | Brier | OFGap | Judge | n | Folds | decay_λ |
-|---|---|---|---|---|---|---|---|---|
-| bollinger_band_squeeze_breakout_swing | v30 | 0.5766 | 0.2413 | -0.0063 | CONDITIONAL_PASS | 57,141 | 5 | 0.0503 |
-| crypto_intraday_scalp | v22 | 0.5626 | 0.2476 | -0.0090 | CONDITIONAL_PASS | 148,409 | 8 | 0.0131 |
-| crypto_swing | v22 | 0.5480 | 0.2508 | -0.0191 | CONDITIONAL_PASS | 763,328 | 8 | 0.0081 |
-| earnings_play | v27 | 0.6433 | 0.2293 | -0.0199 | CONDITIONAL_PASS | 84,888 | 5 | 0.0237 |
-| ema_21_pullback_swing | v26 | 0.5797 | 0.2420 | -0.0136 | CONDITIONAL_PASS | 63,031 | 5 | 0.0398 |
-| ema_50_200_golden_cross_swing | v35 | 0.5904 | 0.2381 | -0.0005 | CONDITIONAL_PASS | 49,685 | 5 | 0.0607 |
-| ema_stack_momentum_intraday | v22 | 0.5728 | 0.2433 | 0.0255 | CONDITIONAL_PASS | 13,634 | 5 | 0.0581 |
-| intraday | v22 | 0.5667 | 0.2458 | -0.0163 | CONDITIONAL_PASS | 45,093 | 5 | 0.1495 |
-| intraday_scalp | v24 | 0.5499 | 0.2477 | -0.0051 | CONDITIONAL_PASS | 21,307 | 5 | 0.1270 |
-| mean_reversion | v30 | 0.5611 | 0.2464 | 0.0150 | CONDITIONAL_PASS | 84,888 | 5 | 0.0582 |
-| momentum_breakout | v33 | 0.5834 | 0.2435 | -0.0074 | CONDITIONAL_PASS | 40,354 | 5 | 0.1395 |
-| swing | v38 | 0.5468 | 0.2477 | -0.0176 | CONDITIONAL_PASS | 210,211 | 8 | 0.0158 |
-| value_accumulation | v25 | 0.6719 | 0.2218 | -0.0163 | CONDITIONAL_PASS | 128,329 | 8 | 0.0067 |
-| vwap_reversal_scalp | v19 | 0.5732 | 0.2436 | 0.0165 | CONDITIONAL_PASS | 10,152 | 5 | 0.0059 |
+### Run 1: Fresh Combined Baseline (2026-04-12)
 
-### Independent / gate models (2026-04-07, **v4** tier)
+**Command:** `train --fresh --inference-only --rounds 3`
+**Artifact:** `combined/model_v1_20260412.joblib`
 
-| Strategy | Ver | Acc | Brier | OFGap | Judge | n | Folds | decay_λ |
-|---|---|---|---|---|---|---|---|---|
-| bollinger_band_squeeze_breakout_swing | v4 | 0.5766 | 0.2413 | -0.0063 | CONDITIONAL_PASS | 57,141 | 5 | 0.0503 |
-| crypto_intraday_scalp | v4 | 0.5626 | 0.2476 | -0.0090 | CONDITIONAL_PASS | 148,409 | 8 | 0.0131 |
-| crypto_swing | v4 | 0.5480 | 0.2508 | -0.0191 | CONDITIONAL_PASS | 763,328 | 8 | 0.0081 |
-| earnings_play | v4 | 0.6433 | 0.2293 | -0.0199 | CONDITIONAL_PASS | 84,888 | 5 | 0.0237 |
-| ema_21_pullback_swing | v4 | 0.5797 | 0.2420 | -0.0136 | CONDITIONAL_PASS | 63,031 | 5 | 0.0398 |
-| ema_50_200_golden_cross_swing | v4 | 0.5904 | 0.2381 | -0.0005 | CONDITIONAL_PASS | 49,685 | 5 | 0.0607 |
-| ema_stack_momentum_intraday | v4 | 0.5728 | 0.2433 | 0.0255 | CONDITIONAL_PASS | 13,634 | 5 | 0.0581 |
-| intraday | v4 | 0.5667 | 0.2458 | -0.0163 | CONDITIONAL_PASS | 45,093 | 5 | 0.1495 |
-| intraday_scalp | v4 | 0.5499 | 0.2477 | -0.0051 | CONDITIONAL_PASS | 21,307 | 5 | 0.1270 |
-| mean_reversion | v4 | 0.5611 | 0.2464 | 0.0150 | CONDITIONAL_PASS | 84,888 | 5 | 0.0582 |
-| momentum_breakout | v4 | 0.5834 | 0.2435 | -0.0074 | CONDITIONAL_PASS | 40,354 | 5 | 0.1395 |
-| swing | v4 | 0.5468 | 0.2477 | -0.0176 | CONDITIONAL_PASS | 210,211 | 8 | 0.0158 |
-| value_accumulation | v4 | 0.6719 | 0.2218 | -0.0163 | CONDITIONAL_PASS | 128,329 | 8 | 0.0067 |
-| vwap_reversal_scalp | v4 | 0.5732 | 0.2436 | 0.0165 | CONDITIONAL_PASS | 10,152 | 5 | 0.0059 |
+| Metric | Value |
+|---|---|
+| Mode | independent |
+| Accuracy | 55.1% |
+| Brier Score | 0.2499 |
+| Overfit Gap | -2.2% |
+| ECE | 0.0000 |
+| Verdict | CONDITIONAL_PASS |
+| Features used | 48 (0 with non-zero SHAP) |
+| CV Folds | 8 |
+| Boost rounds | 500 (best_iter=1 on all folds) |
 
-### Independent **v3 → v4** (same date folder; new Optuna + `_decay_lambda`)
+**Approved strategies:** all 9 (bb_squeeze_breakout, crypto_intraday_scalp,
+crypto_swing, earnings_play, golden_cross_swing, intraday_scalp,
+mean_reversion, momentum_breakout, value_accumulation)
 
-| Strategy | Acc v3 | Acc v4 | Δ Acc | Brier v3 | Brier v4 | Δ Brier |
+**Notes:**
+- Default LightGBM params, no tuning applied
+- Trees stop at iteration 1 — learning rate too conservative for this dataset
+- All SHAP importances are 0.0 (trees too shallow to produce meaningful splits)
+- Holdout eval fails (object dtype issue, see Known Issues #1)
+- Training time: ~42s (independent only)
+
+### Run 2: Optuna Tune 50 Trials — Broken GT-Score (2026-04-12)
+
+**Command:** `tune --inference-only --n-trials 50`
+**Result:** Best composite=0.7577 — but produced same best_iter=1 models
+
+The old GT-Score objective (`raw_brier_skill - 2*gap - 5*variance`) gave
+do-nothing models a free 0.75 baseline. Optuna converged on extreme
+regularization: `reg_lambda=24`, `min_gain_to_split=0.22`, preventing any
+meaningful splits. Training with these params produced identical 55.1% accuracy.
+
+### GT-Score Fix (2026-04-12)
+
+Three bugs fixed in `hyperparameter_tuning.py` and `predictor.py`:
+
+1. **Scoring: Raw Brier → Brier Skill Score (BSS)**
+   - Old: `1 - brier_score_loss()` → naive model scores 0.75
+   - New: `1 - (BS_model / BS_naive)` → naive model scores 0.0
+2. **Composite formula reworked**
+   - Old: `mean_test - 2*gap - 5*variance` (rewarded underfitting via negative gap)
+   - New: `mean_test - 1*max(gap,0) - 3*variance - learning_penalty`
+   - Learning penalty: -0.3 if median best_iter≤1, -0.1 if ≤3, 0 otherwise
+3. **`_decay_lambda` param leak fixed**
+   - `_decay_lambda` was stored in classifier_params → passed to LGBMClassifier
+     as invalid kwarg, silently corrupting param state
+   - Now popped from params and applied to CPCVConfig sample weights instead
+   - Training sample weights used hardcoded `decay_lambda=0.05` instead of
+     the tuned value — now uses the tuned value
+
+**Search space widened** to prevent over-regularization:
+`num_leaves` 7-31→15-63, `learning_rate` 0.005-0.05→0.01-0.1,
+`min_child_samples` 50-300→20-150, `reg_lambda` 1-50→0.1-10,
+`min_gain_to_split` 0.01-1.0→0.001-0.1, `max_depth` 3-6→4-8
+
+### Run 3: Optuna Tune 50 Trials — Fixed GT-Score (2026-04-12)
+
+**Command:** `tune --inference-only --n-trials 50`
+**Best composite:** -0.0010 (BSS scale; naive=0.0)
+**Duration:** ~10.5 min
+
+Best params found:
+| Param | Old (broken) | New (fixed) |
+|---|---|---|
+| `num_leaves` | 30 | 54 |
+| `learning_rate` | 0.006 | 0.016 |
+| `min_child_samples` | 187 | 137 |
+| `reg_alpha` | 1.53 | 0.61 |
+| `reg_lambda` | 24.0 | 0.46 |
+| `max_depth` | 4 | 7 |
+| `min_gain_to_split` | 0.22 | 0.001 |
+| `_decay_lambda` | 0.006 | 0.002 |
+
+### Run 4: Tuned Training — Fixed GT-Score (2026-04-12)
+
+**Command:** `train --inference-only --rounds 3`
+**Artifact:** `combined/model_v4_20260412.joblib`
+
+| Metric | Run 1 (untuned) | Run 4 (tuned+fixed) | Delta |
+|---|---|---|---|
+| Mode | independent | independent | — |
+| Accuracy | 55.1% | **56.0%** | +0.9pp |
+| Brier Score | 0.2499 | **0.2451** | -0.005 |
+| Overfit Gap | -2.2% | **-0.3%** | healthier |
+| ECE | 0.0000 | **0.0017** | actual calibration |
+| Verdict | CONDITIONAL_PASS | **PASS** | upgraded |
+| Active features | 0 | **35** | model learns |
+| Ensemble rounds | 1 | **30** | real ensemble |
+| best_iter range | 1 (all folds) | **1-142** | trees grow |
+
+**Top SHAP features (v4):**
+`tf_D_rsi_14=0.012`, `market_breadth_proxy=0.010`, `strategy_type=0.008`,
+`month=0.008`, `vix_level=0.007`, `price_vs_ema_200=0.006`,
+`market_regime=0.003`, `atr_pct=0.002`, `day_of_week=0.002`,
+`squeeze_duration=0.002`
+
+**Notes:**
+- First PASS verdict on combined model
+- Model differentiates strategies (`strategy_type` SHAP=0.008)
+- Macro features matter: `vix_level`, `market_breadth_proxy`, `month`
+- Technical features contribute: `tf_D_rsi_14`, `price_vs_ema_200`, `atr_pct`
+- Holdout eval still fails (Known Issue #1)
+
+### Run 5: Per-Strategy Baselines — Untuned (2026-04-12)
+
+**Command:** `train --fresh --inference-only --per-strategy --rounds 3`
+
+| Strategy | Acc | Brier | Gap | Verdict | Active Feats | Samples |
 |---|---|---|---|---|---|---|
-| bollinger_band_squeeze_breakout_swing | 0.5741 | 0.5766 | +0.0025 | 0.2437 | 0.2413 | -0.0024 |
-| ema_21_pullback_swing | 0.5775 | 0.5797 | +0.0022 | 0.2421 | 0.2420 | -0.0001 |
-| ema_50_200_golden_cross_swing | 0.5786 | 0.5904 | +0.0118 | 0.2429 | 0.2381 | -0.0048 |
-| ema_stack_momentum_intraday | 0.5754 | 0.5728 | -0.0026 | 0.2428 | 0.2433 | +0.0004 |
-| intraday_scalp | 0.5484 | 0.5499 | +0.0015 | 0.2477 | 0.2477 | ~0 |
-| momentum_breakout | 0.5810 | 0.5834 | +0.0025 | 0.2437 | 0.2435 | -0.0002 |
-| swing | 0.5433 | 0.5468 | +0.0035 | 0.2479 | 0.2477 | -0.0002 |
-| vwap_reversal_scalp | 0.5746 | 0.5732 | -0.0014 | 0.2441 | 0.2436 | -0.0005 |
-| crypto_intraday_scalp, crypto_swing, earnings_play, intraday, mean_reversion, value_accumulation | (unchanged acc to 4dp) | — | — | — | — |
+| earnings_play | 65.9% | 0.2242 | -2.7% | COND_PASS | 6 | 72,154 |
+| golden_cross_swing | 63.4% | 0.2331 | -4.6% | COND_PASS | 9 | 44,113 |
+| mean_reversion | 60.9% | 0.2365 | -0.8% | COND_PASS | 18 | 72,154 |
+| value_accumulation | 58.5% | 0.2430 | -1.8% | PASS | 6 | 108,805 |
+| momentum_breakout | 58.0% | 0.2442 | -3.3% | PASS | 11 | 35,520 |
+| bb_squeeze_breakout | 55.6% | 0.2457 | -2.3% | COND_PASS | 23 | 50,843 |
+| intraday_scalp | 53.7% | 0.2488 | +0.5% | COND_PASS | 19 | 18,110 |
+| crypto_intraday_scalp | 52.7% | 0.2490 | -1.1% | COND_PASS | 9 | 126,147 |
+| crypto_swing | 52.4% | 0.2552 | +0.0% | FAIL | 12 | 653,074 |
 
-**Readout:** Largest lift **ema_50_200_golden_cross_swing** (+1.18pp acc, -0.0048 Brier). Several strategies **unchanged** at 4 decimal places (Optuna may have landed near prior hyperparams). **Gate / Kelly** changes remain **out of band** for these tables — they affect live sizing only.
+**Mean accuracy: 57.9%** (vs 56.0% combined). All models use features (6-23 active).
 
-**Action:** Promote v4 independent + matching shadow after judge review; update production table above after `promote`.
+### Run 6: Per-Strategy Optuna Tune 50 Trials (2026-04-12)
 
----
+**Command:** `tune --inference-only --per-strategy --n-trials 50`
 
-## Current Production Models (deployed)
-
-These are the `*_active.joblib` artifacts in `src/backend/ml/artifacts/`.
-
-| Strategy | Ver | Acc | Brier | OFGap | ECE | Judge | Samples | Feats | 0-SHAP |
-|---|---|---|---|---|---|---|---|---|---|
-| bollinger_band_squeeze_breakout_swing | v26 | 0.5930 | 0.2402 | 0.0074 | 0.0156 | COND_PASS | 55,626 | 48 | 2 |
-| crypto_intraday | v12 | 0.4166 | 0.4362 | 0.0390 | 0.0172 | COND_PASS | 21,793 | 32 | 2 |
-| crypto_intraday_scalp | v18 | 0.5848 | 0.2429 | -0.0129 | 0.0000 | COND_PASS | 148,409 | 60 | 44 |
-| crypto_swing | v18 | 0.6293 | 0.2215 | 0.0632 | 0.0099 | **PASS** | 757,536 | 48 | 2 |
-| earnings_play | v23 | 0.6478 | 0.2287 | -0.0265 | 0.0111 | COND_PASS | 84,888 | 44 | 7 |
-| ema_21_pullback_swing | v22 | 0.5962 | 0.2386 | 0.0090 | 0.0143 | COND_PASS | 61,098 | 48 | 6 |
-| ema_50_200_golden_cross_swing | v31 | 0.5845 | 0.2399 | 0.0573 | 0.0277 | COND_PASS | 48,456 | 48 | 10 |
-| ema_stack_momentum_intraday | v18 | 0.6081 | 0.2375 | 0.0209 | 0.0001 | COND_PASS | 13,485 | 64 | 10 |
-| event | v16 | 0.4048 | 0.4278 | 0.2667 | 0.0219 | **FAIL** | 11,388 | 34 | 1 |
-| intraday | v18 | 0.5888 | 0.2418 | -0.0059 | 0.0000 | COND_PASS | 44,807 | 64 | 52 |
-| intraday_scalp | v20 | 0.5519 | 0.2473 | -0.0073 | 0.0000 | COND_PASS | 21,307 | 60 | 34 |
-| mean_reversion | v26 | 0.6478 | 0.2289 | -0.0265 | 0.0000 | COND_PASS | 84,888 | 48 | 42 |
-| momentum_breakout | v29 | 0.5912 | 0.2414 | 0.0113 | 0.0000 | COND_PASS | 39,310 | 48 | 9 |
-| opening_range_breakout | v8 | 0.5037 | 0.3921 | 0.2130 | 0.0374 | **FAIL** | 3,570 | 41 | 0 |
-| swing | v34 | 0.6037 | 0.2369 | 0.0351 | 0.0215 | COND_PASS | 204,490 | 48 | 2 |
-| value_accumulation | v21 | 0.6738 | 0.2177 | -0.0159 | 0.0491 | COND_PASS | 128,329 | 63 | 44 |
-| value | v16 | 0.3649 | 0.4388 | 0.1284 | 0.0241 | **FAIL** | 18,907 | 36 | 9 |
-| vwap_reversal_scalp | v15 | 0.6026 | 0.2390 | 0.0260 | 0.0000 | COND_PASS | 10,015 | 64 | 35 |
-
-**Production summary:** 19 models. 1 PASS, 15 CONDITIONAL_PASS, 3 FAIL.
-Best performers: `value_accumulation` (67.4%), `earnings_play` (64.8%), `crypto_swing` (62.9%).
-Weakest: `value` (36.5%), `event` (40.5%), `crypto_intraday` (41.7%) -- these need attention.
-
----
-
-## Latest Training Run: 2026-04-07 (shadow models)
-
-Tuned with Optuna on existing dataset. **Decision: NOT promoted** -- inconsistent
-improvement over production; several strategies showed feature collapse.
-
-| Strategy | v1 Acc | v2 Acc | Delta vs Prod | Brier | OFGap | 0-SHAP (v2) | Notes |
-|---|---|---|---|---|---|---|---|
-| bollinger_band_squeeze | 0.5872 / 0.5936 | +0.0006 | 0.2396 | 0.0416 | 7 | Stable |
-| crypto_intraday_scalp | 0.5651 / 0.5649 | -0.0199 | 0.2458 | -0.0121 | 27 | **Regressed**, feature collapse |
-| crypto_swing | 0.6354 / 0.6388 | +0.0095 | 0.2179 | 0.0620 | 3 | **Improved** |
-| earnings_play | 0.6478 / 0.6478 | 0.0000 | 0.2290 | -0.0265 | 40 | Same acc, severe collapse in v25 |
-| ema_21_pullback | 0.5962 / 0.5961 | -0.0001 | 0.2366 | 0.0460 | 4 | Stable |
-| ema_50_200_golden_cross | 0.5802 / 0.5805 | -0.0040 | 0.2400 | 0.0592 | 5 | Stable but worse than prod |
-| ema_stack_momentum | 0.5720 / 0.5728 | -0.0353 | 0.2437 | 0.0224 | 11 | **Regressed** from 0.6081 |
-| intraday | 0.5683 / 0.5641 | -0.0247 | 0.2451 | 0.0128 | 56 | **Severe collapse** in v20 |
-| intraday_scalp | 0.5419 / 0.5471 | -0.0048 | 0.2480 | 0.0128 | 29 | Feature collapse |
-| mean_reversion | 0.5953 / 0.6001 | -0.0477 | 0.2374 | 0.0582 | 16 | **Regressed** from 0.6478 |
-| momentum_breakout | 0.5854 / 0.5963 | +0.0051 | 0.2426 | 0.0312 | 6 | Slight improvement |
-| swing | 0.5922 / 0.5755 | -0.0282 | 0.2403 | 0.0641 | 3 | **Regressed** |
-| value_accumulation | 0.6761 / 0.6733 | -0.0005 | 0.2201 | -0.0162 | 57 | Stable but extreme collapse |
-| vwap_reversal_scalp | 0.5724 / 0.5725 | -0.0301 | 0.2445 | 0.0230 | 19 | **Regressed** from 0.6026 |
-
----
-
-## Feature Collapse Analysis (2026-04-07)
-
-Features consistently showing zero SHAP across multiple strategies -- candidates
-for removal or investigation.
-
-### Universally dead features (zero SHAP in 10+ strategies)
-
-| Feature | Strategies with 0-SHAP | Likely Cause |
+| Strategy | Best BSS | Duration |
 |---|---|---|
-| `ffd_return_1d` | 14/14 | FFD may be over-differencing at d=0.4 |
-| `hmm_regime` | 12/14 | Encoded as feature, should be gate modifier instead |
-| `ema_stack_score` | 10/14 | Redundant with individual EMA distances |
-| `tf_4H_ema_stack_score` | 12/14 | Weak signal on secondary timeframe |
-| `tf_W_ema_stack_score` | 12/14 | Weak signal on secondary timeframe |
-| `primary_signal` | 9/14 | By design (model already trains on signal subset) |
-| `signal_strength` | 8/14 | Same as above |
-| `rsi_zone` | 7/14 | Redundant with raw `rsi_14` |
-| `market_regime` | 7/14 | Redundant with `hmm_regime` |
-| `gap_pct` | 8/14 | Low signal for non-intraday strategies |
+| earnings_play | **+0.0120** | ~5 min |
+| mean_reversion | **+0.0106** | ~5 min |
+| crypto_swing | +0.0002 | ~9 min |
+| value_accumulation | -0.0020 | ~5 min |
+| intraday_scalp | -0.0046 | ~3 min |
+| crypto_intraday_scalp | -0.0047 | ~4 min |
+| bb_squeeze_breakout | -0.0080 | ~3 min |
+| momentum_breakout | -0.0102 | ~3 min |
+| golden_cross_swing | -0.0149 | ~3 min |
 
-### Trivially zero (expected by design)
+Two strategies achieved positive BSS (earnings_play, mean_reversion).
 
-| Feature | Reason |
-|---|---|
-| `strategy_type` | Model is per-strategy, so this is constant |
-| `sector` | Same rationale for crypto strategies |
+### Run 7: Per-Strategy Tuned Training (2026-04-12)
 
-### Strategies with severe feature collapse (50%+ features at zero)
+**Command:** `train --inference-only --per-strategy --rounds 3`
 
-| Strategy | Total Feats | Zero-SHAP | % Dead | Verdict |
+| Strategy | Untuned | Tuned | Delta | Verdict |
 |---|---|---|---|---|
-| value_accumulation v23 | 63 | 57 | 90.5% | Over-regularized |
-| intraday v20 | 64 | 56 | 87.5% | Over-regularized |
-| intraday_scalp v21 | 60 | 43 | 71.7% | Over-regularized |
-| earnings_play v25 | 44 | 40 | 90.9% | Over-regularized |
-| vwap_reversal_scalp v16 | 64 | 31 | 48.4% | Borderline |
+| earnings_play | 65.9% | **67.2%** | +1.3pp | COND_PASS |
+| golden_cross_swing | 63.4% | **63.6%** | +0.2pp | COND_PASS |
+| mean_reversion | 60.9% | **62.0%** | +1.1pp | COND_PASS |
+| value_accumulation | 58.5% | **59.6%** | +1.1pp | COND_PASS |
+| momentum_breakout | 58.0% | **58.0%** | +0.0pp | COND_PASS |
+| crypto_swing | 52.4% | **55.0%** | +2.6pp | COND_PASS |
+| bb_squeeze_breakout | 55.6% | 54.9% | -0.7pp | COND_PASS |
+| crypto_intraday_scalp | 52.7% | **53.8%** | +1.1pp | COND_PASS |
+| intraday_scalp | 53.7% | 53.5% | -0.2pp | COND_PASS |
 
----
+**Mean accuracy: 58.6%** (up from 57.9% untuned). Tuning improved 7 of 9 strategies.
+Biggest gains: crypto_swing +2.6pp, earnings_play +1.3pp, mean_reversion +1.1pp.
 
-## Training History Timeline
+**Top SHAP features across strategies:**
+- `tf_D_rsi_14` dominates earnings_play (0.110) and mean_reversion (0.067)
+- `month` is universally important (seasonal patterns)
+- `market_breadth_proxy` drives earnings_play and crypto_intraday_scalp
+- `bollinger_width` and `atr_pct` drive volatility strategies (bb_squeeze, golden_cross)
+- `momentum_score` appears in mean_reversion and value_accumulation
 
-| Date | Run Type | Key Changes | Outcome |
+### Pipeline Fixes Before Run 8 (2026-04-12)
+
+Three targeted fixes applied before re-training:
+
+1. **Re-enabled fundamental features for earnings_play + golden_cross_swing**
+   - `_apply_strategy_feature_mask()` was dropping all 15 fundamental features
+     unless strategy name contained `"value"`. Now uses explicit allowlist:
+     `{value_accumulation, earnings_play, golden_cross_swing}`.
+   - earnings_play gets 59→88 features (vs Run 7: 44 features, fundamentals stripped)
+
+2. **Fixed intraday_scalp data pipeline**
+   - `_HORIZON_MAP`: `("intraday_scalp", "4H"): 3→8` (12h→32h, ~1.5 trading days)
+   - `_HORIZON_MAP`: `("crypto_intraday_scalp", "4H"): 6→8` for consistency
+   - Added `"additional_timeframes": ["D"]` to both scalp templates in
+     `strategies.json` — unlocks `tf_D_rsi_14`, `tf_D_price_vs_ema_200`, etc.
+   - intraday_scalp features: 92→110, crypto_intraday_scalp: 92→110
+
+3. **Made `primary_signal` numeric instead of categorical**
+   - Was `FeatureType.CATEGORICAL` despite values `{-1, 0, 1}` having ordinal meaning
+   - Changed to `FeatureType.NUMERIC` with `min_val=-1, max_val=1`
+   - LightGBM can now split on thresholds (`signal > -0.5`) not just equality
+
+### Run 8: Per-Strategy Fresh Training with Fixes (2026-04-12)
+
+**Command:** `build-dataset --augment` then `train --fresh --inference-only --per-strategy --rounds 3`
+**Dataset:** 1,389,324 samples, 122 features, 9 strategies
+
+| Strategy | Run 7 | Run 8 | Delta | Verdict | Active Feats | Samples |
+|---|---|---|---|---|---|---|
+| earnings_play | 67.2% | **65.8%** | -1.4pp | COND_PASS | 8 | 72,154 |
+| golden_cross_swing | 63.6% | **63.4%** | -0.2pp | COND_PASS | 9 | 44,113 |
+| mean_reversion | 62.0% | **60.9%** | -1.1pp | COND_PASS | 18 | 72,154 |
+| intraday_scalp | 53.5% | **61.3%** | **+7.8pp** | FAIL* | 28 | 18,110 |
+| momentum_breakout | 58.0% | **58.0%** | +0.0pp | PASS | 8 | 35,520 |
+| value_accumulation | 59.6% | **58.6%** | -1.0pp | COND_PASS | 7 | 108,805 |
+| bb_squeeze_breakout | 54.9% | **55.6%** | +0.7pp | COND_PASS | 35 | 50,843 |
+| crypto_intraday_scalp | 53.8% | **55.4%** | +1.6pp | COND_PASS | 6 | 126,147 |
+| crypto_swing | 55.0% | **52.3%** | -2.7pp | FAIL | 13 | 653,074 |
+
+**Mean accuracy: 59.0%** (vs 58.6% Run 7). Mixed results — explained below.
+
+**Key observations:**
+- **intraday_scalp: massive +7.8pp gain** (53.5→61.3%). The wider horizon (3→8 bars)
+  and `tf_D_*` features transformed this strategy. `tf_D_rsi_14` is now its #1
+  feature (SHAP=0.413). Verdict is FAIL due to +14.1% overfit gap — needs tuning
+  with stronger regularization.
+- **crypto_intraday_scalp: +1.6pp** from daily timeframe features
+- **bb_squeeze_breakout: +0.7pp**, feature count jumped 23→35
+- **earnings_play: -1.4pp** — this is untuned fresh model vs Run 7's tuned model.
+  With tuning, should recover and likely improve with fundamentals restored.
+- **crypto_swing: -2.7pp** — fresh untuned vs Run 7 tuned. Needs per-strategy tuning.
+- Other strategies within noise range for untuned vs tuned comparison.
+
+**Top SHAP features:**
+- `tf_D_rsi_14` now dominates intraday_scalp (0.413!) and mean_reversion (0.050)
+- `bollinger_width` leads bb_squeeze_breakout (0.052)
+- `market_breadth_proxy` leads crypto_intraday_scalp, earnings_play, mean_reversion
+- `price_vs_ema_50` contributes to earnings_play (0.010)
+
+**Next steps:** Per-strategy Optuna tuning to optimize the new feature sets.
+Intraday_scalp especially needs tuning to reduce its 14% overfit gap.
+
+### Run 9: Per-Strategy Optuna Tune + Tuned Training (2026-04-13)
+
+**Tune command:** `tune --inference-only --per-strategy --n-trials 50`
+**Train command:** `train --inference-only --per-strategy --rounds 3`
+**Duration:** Tune ~11.5 min, Train ~51s
+
+**Tuning BSS scores:**
+
+| Strategy | Run 6 BSS | Run 9 BSS | Delta |
 |---|---|---|---|
-| 2026-04-05 | Full train (7yr data) | Multiple rounds per strategy, 3-5 fold CPCV | Current production models promoted |
-| 2026-04-07 (run 1) | Optuna tune | Attempted 15yr lookback expansion | Mixed results, NOT promoted |
-| 2026-04-07 (run 2) | Optuna tune | Same data, different trial count | Feature collapse on several strategies |
-| 2026-04-07 | Train + Optuna (late) | Shadow **v30–v38**, independent **v4**; `_decay_lambda` in `classifier_params`; Brier-oriented Optuna CV | See “Latest batch” + v3→v4 delta tables |
-| 2026-04-08 | Code + artifacts | Repo gate/training changes; training artifacts on `20260407` now include tuned decay | Compare v4 vs production before promote |
+| earnings_play | +0.0120 | **+0.0146** | +0.0026 |
+| mean_reversion | +0.0106 | **+0.0084** | -0.0022 |
+| crypto_intraday_scalp | -0.0047 | **+0.0059** | +0.0106 |
+| intraday_scalp | -0.0046 | **+0.0045** | +0.0091 |
+| crypto_swing | +0.0002 | **-0.0005** | -0.0007 |
+| value_accumulation | -0.0020 | **-0.0025** | -0.0005 |
+| bb_squeeze_breakout | -0.0080 | **-0.0087** | -0.0007 |
+| momentum_breakout | -0.0102 | **-0.0102** | +0.0000 |
+| golden_cross_swing | -0.0149 | **-0.0160** | -0.0011 |
 
----
+4 strategies now have positive BSS (vs 2 in Run 6). The two scalp strategies
+flipped from negative to positive after horizon + multi-TF fixes.
 
-## Production vs Latest Delta Summary
+**Tuned training results (Run 9 vs Run 8 untuned vs Run 7 tuned):**
 
-| Strategy | Prod Acc | Latest Best | Delta | Winner |
-|---|---|---|---|---|
-| bollinger_band_squeeze | 0.5930 | 0.5936 | +0.06% | Latest (marginal) |
-| crypto_intraday_scalp | 0.5848 | 0.5651 | -1.97% | **Production** |
-| crypto_swing | 0.6293 | 0.6388 | +0.95% | Latest |
-| earnings_play | 0.6478 | 0.6478 | 0.00% | Tie |
-| ema_21_pullback | 0.5962 | 0.5962 | 0.00% | Tie |
-| ema_50_200_golden_cross | 0.5845 | 0.5805 | -0.40% | **Production** |
-| ema_stack_momentum | 0.6081 | 0.5728 | -3.53% | **Production** |
-| intraday | 0.5888 | 0.5683 | -2.05% | **Production** |
-| intraday_scalp | 0.5519 | 0.5471 | -0.48% | **Production** |
-| mean_reversion | 0.6478 | 0.6001 | -4.77% | **Production** |
-| momentum_breakout | 0.5912 | 0.5963 | +0.51% | Latest |
-| swing | 0.6037 | 0.5922 | -1.15% | **Production** |
-| value_accumulation | 0.6738 | 0.6761 | +0.23% | Latest (marginal) |
-| vwap_reversal_scalp | 0.6026 | 0.5725 | -3.01% | **Production** |
+| Strategy | Run 7 Tuned | Run 8 Untuned | Run 9 Tuned | R9 vs R8 | R9 vs R7 | Verdict |
+|---|---|---|---|---|---|---|
+| earnings_play | 67.2% | 65.8% | **66.9%** | +1.1pp | -0.3pp | COND_PASS |
+| golden_cross_swing | 63.6% | 63.4% | **63.7%** | +0.3pp | +0.1pp | PASS |
+| mean_reversion | 62.0% | 60.9% | **62.3%** | +1.4pp | +0.3pp | COND_PASS |
+| value_accumulation | 59.6% | 58.6% | **59.3%** | +0.7pp | -0.3pp | COND_PASS |
+| bb_squeeze_breakout | 54.9% | 55.6% | **56.1%** | +0.5pp | +1.2pp | COND_PASS |
+| crypto_intraday_scalp | 53.8% | 55.4% | **58.5%** | **+3.1pp** | **+4.7pp** | COND_PASS |
+| momentum_breakout | 58.0% | 58.0% | **57.8%** | -0.2pp | -0.2pp | COND_PASS |
+| intraday_scalp | 53.5% | 61.3% | **57.5%** | -3.8pp | **+4.0pp** | COND_PASS |
+| crypto_swing | 55.0% | 52.3% | **54.7%** | +2.4pp | -0.3pp | COND_PASS |
 
-**Verdict:** Production wins on 8/14 strategies. Latest only clearly better on `crypto_swing` and `momentum_breakout`. Keeping production models.
+**Mean accuracy: 59.6%** (vs 59.0% Run 8, 58.6% Run 7). Best overall mean yet.
 
----
+**Key observations:**
+- **crypto_intraday_scalp: biggest winner at 58.5%** (+4.7pp vs Run 7). Tuning
+  unlocked the new daily TF features — `tf_D_rsi_14` (SHAP=0.075) now drives it.
+  Feature usage jumped from 6→33 active features.
+- **intraday_scalp: 57.5%** (+4.0pp vs Run 7). Tuning tamed the +14.1% overfit gap
+  from Run 8 down to +0.2% — much healthier. Accuracy dropped vs untuned (61.3%)
+  but the overfitting was unsustainable; 57.5% with near-zero gap is more reliable.
+- **bb_squeeze_breakout: 56.1%** (+1.2pp vs Run 7 best). New all-time high.
+- **golden_cross_swing: 63.7% PASS** — only PASS verdict. Healthy -4.0% gap.
+- **Feature usage: 64% mean** (vs 37% in Run 8). Tuning activated many more features.
+- **All 9 strategies COND_PASS or better** — no FAILs (vs 2 FAILs in Run 8).
+- **Overfit gaps all healthy** — worst is crypto_intraday_scalp at +3.9% (vs 14.1%
+  for intraday_scalp in Run 8). Tuning regularized effectively.
 
-## Identified Pipeline Issues (from analysis)
+**Top SHAP features across strategies:**
+- `tf_D_rsi_14` dominates earnings_play (0.106), mean_reversion (0.099),
+  crypto_intraday_scalp (0.075), value_accumulation (0.037)
+- `market_breadth_proxy` key for crypto_intraday_scalp (0.066), mean_reversion
+  (0.063), earnings_play (0.049), value_accumulation (0.041)
+- `momentum_score` drives mean_reversion (0.059), earnings_play (0.049)
+- `price_vs_ema_200` drives earnings_play (0.064)
+- `ema_spread_pct` newly important for value_accumulation (0.037)
+- `tf_D_momentum_score` leads intraday_scalp (0.017)
 
-These are the systemic issues identified through artifact analysis. See
-`ml_pipeline_optimization` plan for implementation details.
+### Pipeline Fixes Before Run 10 (2026-04-13)
 
-| # | Issue | Evidence from Artifacts | Planned Fix |
+Four targeted improvements to model training and tuning:
+
+1. **Adaptive feature pruning** — `_prune_features()` now scales prune fraction
+   inversely with feature count (30% for 25+ features, 20% for 15-25, 15% for
+   ≤15) and enforces a 12-feature minimum floor. Prevents pruning spiral on
+   low-feature strategies.
+
+2. **Dataset-scaled model complexity** — New `_scale_default_params()` in
+   `PredictionModel`. For >200K samples: `num_leaves=31, max_depth=7,
+   min_child_samples=300`. For >50K: `num_leaves=23, max_depth=6,
+   min_child_samples=150`. Only applies when using default (untuned) params.
+
+3. **Optuna search fixes** — `min_child_samples` range now adaptive:
+   `[20, max(150, n_samples//2000)]`. `bagging_freq=5→1` in saved params
+   template to match search. Default `n_trials` 30→50.
+
+4. **Bug fixes** — Dead feature counter changed from `dict[str, int]` to
+   `dict[str, list[str]]` tracking strategy names (prevents double-counting).
+   Exception syntax `except JSONDecodeError, KeyError` → `except (...):`.
+
+### Run 10: Per-Strategy Tuned Training with v2 Fixes (2026-04-13)
+
+**Tune command:** `tune --inference-only --per-strategy --n-trials 50`
+**Train command:** `train --inference-only --per-strategy --rounds 3`
+
+**Tuning BSS scores (Run 10 vs Run 9):**
+
+| Strategy | Run 9 BSS | Run 10 BSS | Delta |
 |---|---|---|---|
-| 1 | GT-Score optimizes accuracy, gate uses probability magnitudes | Brier scores cluster at 0.24 regardless of accuracy variation | Switch to Brier-score objective |
-| 2 | Meta-labeler trained but not used in production | `primary_signal` has 0 SHAP because model already filters on it | Wire meta-labeler into gate |
-| 3 | No temporal decay in sample weights | 15yr data didn't improve over 7yr despite more samples | Add exponential decay weighting |
-| 4 | Gate thresholds (0.52/0.58/0.65) are arbitrary | At 2:1 R:R, breakeven = 33.3% -- blocking +EV trades | Kelly-optimal thresholds |
-| 5 | HMM regime as feature has zero SHAP universally | `hmm_regime` = 0 SHAP in 12/14 strategies | Move to gate modifier |
-| 6 | Only 3-5 CV folds, noisy variance estimate | `fold_variance * 5.0` penalty is unreliable with 3 folds | Increase to 8 folds |
+| crypto_intraday_scalp | +0.0059 | **+0.0111** | +0.0052 |
+| mean_reversion | +0.0084 | **+0.0099** | +0.0015 |
+| earnings_play | +0.0146 | **+0.0097** | -0.0049 |
+| intraday_scalp | +0.0045 | **+0.0018** | -0.0027 |
+| crypto_swing | -0.0005 | **+0.0003** | +0.0008 |
+| value_accumulation | -0.0025 | **-0.0015** | +0.0010 |
+| bb_squeeze_breakout | -0.0087 | **-0.0082** | +0.0005 |
+| momentum_breakout | -0.0102 | **-0.0099** | +0.0003 |
+| golden_cross_swing | -0.0160 | **-0.0156** | +0.0004 |
+
+5 strategies improved BSS, crypto_swing flipped to positive. Adaptive
+`min_child_samples` range particularly helped crypto_intraday_scalp (+0.0052).
+
+**Tuned training results (Run 10 vs Run 9):**
+
+| Strategy | Run 9 | Run 10 | Delta | Verdict | Active Feats | Samples |
+|---|---|---|---|---|---|---|
+| earnings_play | 66.9% | **66.1%** | -0.8pp | COND_PASS | 21 | 72,154 |
+| golden_cross_swing | 63.7% | **63.6%** | -0.1pp | PASS | 9 | 44,113 |
+| mean_reversion | 62.3% | **61.9%** | -0.4pp | COND_PASS | 18 | 72,154 |
+| crypto_intraday_scalp | 58.5% | **61.6%** | **+3.1pp** | COND_PASS | 32 | 126,147 |
+| value_accumulation | 59.3% | **59.3%** | +0.0pp | COND_PASS | 27 | 108,805 |
+| momentum_breakout | 57.8% | **58.2%** | +0.4pp | COND_PASS | 16 | 35,520 |
+| intraday_scalp | 57.5% | **57.5%** | +0.0pp | COND_PASS | 18 | 18,110 |
+| bb_squeeze_breakout | 56.1% | **55.1%** | -1.0pp | COND_PASS | 30 | 50,843 |
+| crypto_swing | 54.7% | **54.7%** | +0.0pp | COND_PASS | 7 | 653,074 |
+
+**Mean accuracy: 59.8%** (vs 59.6% Run 9). Best mean overall.
+
+**Key observations:**
+- **crypto_intraday_scalp: +3.1pp** — biggest winner. Adaptive `min_child_samples`
+  let Optuna explore higher regularization for this 126K-sample dataset. Feature
+  usage jumped to 32 active. `tf_D_rsi_14` dominates (SHAP=0.263).
+- **All 9 strategies COND_PASS or better** — zero FAILs for second consecutive run.
+- **All overfit gaps healthy** — worst is crypto_intraday_scalp at +5.7%, improved
+  from the rampant 14.1% seen in Run 8. Pruning floor prevents feature starvation.
+- **momentum_breakout: +0.4pp** — pruning fix preserved features it needs.
+- **Feature usage: 55% mean** — still solid with more features surviving pruning.
+
+**Top SHAP features:**
+- `tf_D_rsi_14` dominates crypto_intraday_scalp (0.263), intraday_scalp (0.063),
+  value_accumulation (0.050)
+- `atr_pct` leads bb_squeeze_breakout (0.059) and golden_cross_swing (0.007)
+- `market_breadth_proxy` drives value_accumulation (0.059)
+- `ema_spread_pct` newly important for value_accumulation (0.058)
 
 ---
 
-## Metric Definitions
+## Known Issues
 
-| Metric | Range | Good | Description |
-|---|---|---|---|
-| **Acc** (Accuracy) | 0-1 | >0.55 | Overall prediction accuracy |
-| **Brier** (Brier Score) | 0-1 | <0.24 | Mean squared probability error (lower = better calibration) |
-| **OFGap** (Overfit Gap) | -inf to inf | <0.10 | Train acc - test acc (negative = underfit, high positive = overfit) |
-| **ECE** (Expected Calibration Error) | 0-1 | <0.08 | How well probabilities match observed frequencies |
-| **0-SHAP** | 0-N | <10% of features | Features with exactly zero SHAP importance |
-| **Judge** | PASS/COND/FAIL | PASS | Multi-layer validation verdict |
-
----
-
-## Strategy Barrier Configs (R:R ratios)
-
-These define the triple-barrier labeling for each strategy and affect Kelly sizing.
-
-| Strategy | Profit Mult | Stop Mult | Effective R:R |
-|---|---|---|---|
-| mean_reversion | 1.0 | 1.5 | 0.67:1 |
-| momentum_breakout | 3.0 | 1.0 | 3.0:1 |
-| swing | 2.0 | 1.0 | 2.0:1 |
-| earnings_play | 2.5 | 1.0 | 2.5:1 |
-| value_accumulation | 2.0 | 1.5 | 1.33:1 |
-| bollinger_band_squeeze | 1.5 | 1.0 | 1.5:1 |
-| intraday_scalp | 1.2 | 1.0 | 1.2:1 |
-| vwap_reversal_scalp | 1.0 | 1.0 | 1.0:1 |
-| ema_21_pullback | 2.0 | 1.0 | 2.0:1 |
-| ema_50_200_golden_cross | 2.5 | 1.0 | 2.5:1 |
-| ema_stack_momentum | 2.0 | 1.0 | 2.0:1 |
-| crypto_swing | 2.0 | 1.0 | 2.0:1 |
-| crypto_intraday | 1.5 | 1.0 | 1.5:1 |
-| crypto_intraday_scalp | 1.2 | 1.0 | 1.2:1 |
-| intraday | 1.5 | 1.0 | 1.5:1 |
-
----
-
-## Kelly Breakeven Thresholds (by R:R)
-
-At each R:R ratio, this is the minimum accuracy needed for positive expected value.
-
-| R:R | Breakeven Accuracy | Current Gate (0.52) Wastes? |
+| # | Issue | Status |
 |---|---|---|
-| 3.0:1 | 25.0% | Yes -- blocking 25-52% range |
-| 2.5:1 | 28.6% | Yes -- blocking 29-52% range |
-| 2.0:1 | 33.3% | Yes -- blocking 33-52% range |
-| 1.5:1 | 40.0% | Yes -- blocking 40-52% range |
-| 1.33:1 | 42.9% | Yes -- blocking 43-52% range |
-| 1.2:1 | 45.5% | Yes -- blocking 46-52% range |
-| 1.0:1 | 50.0% | Marginal waste at 50-52% |
-| 0.67:1 | 60.0% | No -- 0.52 threshold is too low for this R:R |
-
----
-
-## Artifact File Inventory
-
-| Category | Count |
-|---|---|
-| Production (`*_active.joblib`) | 19 |
-| Training 2026-04-07 shadow | 28 |
-| Training 2026-04-07 independent | 28 |
-| Training 2026-04-05 shadow | 136 |
-| **Total artifacts** | **436** |
-| Judge PASS | 5 (1.1%) |
-| Judge CONDITIONAL_PASS | 186 (42.7%) |
-| Judge FAIL | 245 (56.2%) |
+| 1 | Holdout eval dtype error (object cols: strategy_type, analyst_target_upside, insider_buy_ratio, market_regime, sector, tf_D_ema_stack_score) | Open |
+| 2 | GT-Score tuning objective rewarded "do nothing" models | **Fixed** — BSS scoring + learning penalty + search space widened |
+| 3 | `_decay_lambda` leaked into LGBMClassifier as invalid param | **Fixed** — popped and applied to sample weights |
+| 4 | Baseline report shows stale per-strategy models from pre-overhaul runs | **Fixed** — excluded `archive/` from rglob scan |
+| 5 | Dead feature counter double-counted same strategy | **Fixed** — uses strategy name sets instead of int counter |
+| 6 | Invalid `except` syntax (comma instead of tuple) in dead feature tracking | **Fixed** — `except (JSONDecodeError, KeyError):` |
+| 7 | `bagging_freq` mismatch between Optuna search (1) and saved params (5) | **Fixed** — saved params now use `bagging_freq=1` |

@@ -231,6 +231,15 @@ def _train_single(
 
     print(f"  [{label}] Loaded {dataset_name}: {len(df)} samples x {len(df.columns)} features")
 
+    from ml_training.pipeline.training_loop import MIN_STRATEGY_SAMPLES
+
+    if strategy_type and len(df) < MIN_STRATEGY_SAMPLES:
+        print(
+            f"  [{label}] Only {len(df)} samples (minimum {MIN_STRATEGY_SAMPLES}). "
+            "Skipping per-strategy training -- combined model will be used as fallback."
+        )
+        return []
+
     classifier_params = None
     if not args.no_tuned:
         classifier_params = load_tuned_params(Path(args.data_dir), strategy_type=strategy_type)
@@ -268,6 +277,7 @@ def _train_single(
             model_type=model_type,
             meta_label=meta_label if meta_label else False,
             model_mode=mode,
+            inference_only=getattr(args, "inference_only", False),
         )
 
         loop = TrainingLoop(config)
@@ -284,6 +294,52 @@ def _train_single(
     return all_results
 
 
+def _apply_fresh_reset(data_dir: Path) -> None:
+    """Reset training state for a fully fresh training run.
+
+    Clears dead_features.json and archives old model artifacts so the
+    new training starts with zero accumulated state.
+    """
+    import shutil
+
+    dead_path = data_dir / "dead_features.json"
+    if dead_path.exists():
+        dead_path.unlink()
+        print("  [fresh] Cleared dead_features.json")
+
+    tuned_path = data_dir / "tuned_params.json"
+    if tuned_path.exists():
+        tuned_path.unlink()
+        print("  [fresh] Cleared tuned_params.json")
+
+    artifacts_dir = Path(__file__).resolve().parents[1] / "models" / "artifacts"
+    if artifacts_dir.exists():
+        archive_dir = artifacts_dir / "archive"
+        archive_dir.mkdir(exist_ok=True)
+        moved = 0
+        for f in artifacts_dir.rglob("*"):
+            if not f.is_file():
+                continue
+            if f.suffix not in (".joblib", ".json"):
+                continue
+            if "archive" in f.parts:
+                continue
+            if f.name in ("baseline_report.py", "ARTIFACT_TRACKER.md", "__init__.py"):
+                continue
+            rel = f.relative_to(artifacts_dir)
+            dest = archive_dir / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(f), str(dest))
+            moved += 1
+        for d in artifacts_dir.iterdir():
+            if d.is_dir() and d.name != "archive" and not any(d.iterdir()):
+                d.rmdir()
+        if moved:
+            print(f"  [fresh] Archived {moved} old artifact files to artifacts/archive/")
+
+    print("  [fresh] Training will start from scratch with default hyperparameters\n")
+
+
 def cmd_train(args: argparse.Namespace) -> None:
     """Run the training loop, optionally per-strategy.
 
@@ -292,6 +348,10 @@ def cmd_train(args: argparse.Namespace) -> None:
     """
     from ml_training.data.storage import ParquetStore
     from ml_training.threading import optimal_workers
+
+    if getattr(args, "fresh", False):
+        args.no_tuned = True
+        _apply_fresh_reset(Path(args.data_dir))
 
     store = ParquetStore(Path(args.data_dir))
 
@@ -355,7 +415,11 @@ def _tune_single(
     if binary_mode:
         print(f"  [{label}] Binary mode (triple barrier: hit TP before SL?)")
 
-    tuner = HyperparameterTuner(target_col=target_col, binary_mode=binary_mode)
+    tuner = HyperparameterTuner(
+        target_col=target_col,
+        binary_mode=binary_mode,
+        inference_only=getattr(args, "inference_only", False),
+    )
     n_trials = getattr(args, "n_trials", 0)
     result = tuner.search_optuna(df, n_trials=n_trials) if n_trials > 0 else tuner.search(df)
 
@@ -442,6 +506,56 @@ def cmd_promote(args: argparse.Namespace) -> None:
     print(f"Promoted {len(promoted)} model(s):")
     for p in promoted:
         print(f"  -> {p}")
+
+
+def cmd_inspect(args: argparse.Namespace) -> None:
+    """Print a summary table of active models in the backend artifacts directory."""
+    import json
+
+    from ml_training.models.registry import BACKEND_ARTIFACTS_DIR
+
+    raw_dir = getattr(args, "backend_dir", None)
+    backend_dir = Path(raw_dir) if raw_dir else BACKEND_ARTIFACTS_DIR
+    if not backend_dir.is_dir():
+        print(f"Backend artifacts directory not found: {backend_dir}")
+        sys.exit(1)
+
+    meta_files = sorted(backend_dir.glob("*_meta.json"))
+    if not meta_files:
+        joblib_files = list(backend_dir.glob("*.joblib"))
+        if joblib_files:
+            print(f"Found {len(joblib_files)} .joblib file(s) but no _meta.json companions.")
+            print("Re-promote models to generate metadata files.")
+        else:
+            print("No active models found.")
+        return
+
+    header = f"{'Model':<40} {'Version':<8} {'Strategy':<25} {'Accuracy':>9} {'Verdict':<8} {'Features':>8} {'Date':<12}"
+    print(header)
+    print("-" * len(header))
+
+    for meta_path in meta_files:
+        with meta_path.open() as f:
+            meta = json.load(f)
+
+        name = meta_path.stem.replace("_meta", "")
+        version = meta.get("model_version", "?")
+        strategy = meta.get("strategy_type") or "combined"
+        metrics = meta.get("metrics", {})
+        accuracy = metrics.get("test_accuracy") or metrics.get("overall_accuracy", 0)
+        verdict = meta.get("judge_verdict", "?")
+        n_features = len(meta.get("feature_names", []))
+        date = meta.get("training_date", "?")
+
+        print(
+            f"{name:<40} {version:<8} {strategy:<25} {accuracy:>8.1%} {verdict:<8} {n_features:>8} {date:<12}"
+        )
+
+        shap_imp = meta.get("shap_importance")
+        if shap_imp:
+            top_features = sorted(shap_imp.items(), key=lambda x: abs(x[1]), reverse=True)[:5]
+            top_str = ", ".join(f"{k}={v:.4f}" for k, v in top_features)
+            print(f"  {'Top SHAP:':<12} {top_str}")
 
 
 def cmd_resolve_outcomes(args: argparse.Namespace) -> None:
@@ -968,7 +1082,9 @@ def main() -> None:
         "--api-key", default=None, help="FMP API key (reads from .env if omitted)"
     )
     p_acquire.add_argument("--data-dir", default="data/raw", help="Output directory")
-    p_acquire.add_argument("--timeframes", default="D,4H,1H", help="Comma-separated timeframes")
+    p_acquire.add_argument(
+        "--timeframes", default="D,W,4H,1H,15m", help="Comma-separated timeframes"
+    )
     p_acquire.add_argument("--lookback-days", type=int, default=5475, help="Daily lookback (days)")
     p_acquire.add_argument("--category", choices=["all", "tsx", "us", "crypto"], default="all")
     p_acquire.set_defaults(func=cmd_acquire)
@@ -1009,6 +1125,13 @@ def main() -> None:
     p_train.add_argument(
         "--no-tuned", action="store_true", help="Ignore tuned params, use defaults"
     )
+    p_train.add_argument(
+        "--fresh",
+        action="store_true",
+        default=False,
+        help="Train from scratch: ignore tuned params, clear dead_features.json, "
+        "and archive old model artifacts before training",
+    )
     p_train.add_argument("--per-strategy", action="store_true", help="Train per-strategy models")
     p_train.add_argument(
         "--strategy", default=None, help="Train a single strategy (requires --per-strategy)"
@@ -1028,8 +1151,15 @@ def main() -> None:
     p_train.add_argument(
         "--model-mode",
         choices=["independent", "shadow", "both"],
-        default="both",
-        help="independent = no LLM features (gate model), shadow = all features, both = train both",
+        default="independent",
+        help="independent = gate model (default), shadow = comparison model, both = train both",
+    )
+    p_train.add_argument(
+        "--inference-only",
+        action="store_true",
+        default=False,
+        help="Exclude training-only features (TSFresh, FFD, HMM) so models use only "
+        "features available at live inference",
     )
     p_train.add_argument("--data-dir", default="data/raw")
     p_train.set_defaults(func=cmd_train)
@@ -1056,6 +1186,13 @@ def main() -> None:
         action="store_true",
         default=False,
         help="Use 3-class direction (UP/DOWN/FLAT) instead of binary triple-barrier",
+    )
+    p_tune.add_argument(
+        "--inference-only",
+        action="store_true",
+        default=False,
+        help="Exclude training-only features (TSFresh, FFD, HMM) so models use only "
+        "features available at live inference",
     )
     p_tune.add_argument("--data-dir", default="data/raw")
     p_tune.set_defaults(func=cmd_tune)
@@ -1167,6 +1304,15 @@ def main() -> None:
     )
     p_priors.add_argument("--data-dir", default="data/raw", help="Root data directory")
     p_priors.set_defaults(func=cmd_compute_priors)
+
+    # inspect
+    p_inspect = sub.add_parser("inspect", help="Show summary of active models in backend")
+    p_inspect.add_argument(
+        "--backend-dir",
+        default=None,
+        help="Backend artifacts directory (auto-detected if omitted)",
+    )
+    p_inspect.set_defaults(func=cmd_inspect)
 
     # resolve-shadow
     p_shadow = sub.add_parser("resolve-shadow", help="Resolve shadow prediction outcomes")

@@ -21,21 +21,15 @@ EMA_PERIODS = [9, 21, 50, 200]
 # each strategy's natural edge: mean-reversion needs tight TP with wider SL,
 # momentum should let winners run, scalps need symmetric tight barriers, etc.
 STRATEGY_BARRIER_CONFIG: dict[str, dict[str, float]] = {
-    "mean_reversion": {"profit_mult": 1.0, "stop_mult": 1.5},
     "momentum_breakout": {"profit_mult": 3.0, "stop_mult": 1.0},
-    "swing": {"profit_mult": 2.0, "stop_mult": 1.0},
-    "earnings_play": {"profit_mult": 2.5, "stop_mult": 1.0},
+    "golden_cross_swing": {"profit_mult": 2.5, "stop_mult": 1.0},
+    "bb_squeeze_breakout": {"profit_mult": 1.5, "stop_mult": 1.0},
+    "mean_reversion": {"profit_mult": 1.5, "stop_mult": 1.0},
     "value_accumulation": {"profit_mult": 2.0, "stop_mult": 1.5},
-    "bollinger_band_squeeze_breakout": {"profit_mult": 1.5, "stop_mult": 1.0},
+    "earnings_play": {"profit_mult": 2.5, "stop_mult": 1.0},
     "intraday_scalp": {"profit_mult": 1.2, "stop_mult": 1.0},
-    "vwap_reversal_scalp": {"profit_mult": 1.0, "stop_mult": 1.0},
-    "ema_21_pullback": {"profit_mult": 2.0, "stop_mult": 1.0},
-    "ema_50_200_golden_cross": {"profit_mult": 2.5, "stop_mult": 1.0},
-    "ema_stack_momentum": {"profit_mult": 2.0, "stop_mult": 1.0},
     "crypto_swing": {"profit_mult": 2.0, "stop_mult": 1.0},
-    "crypto_intraday": {"profit_mult": 1.5, "stop_mult": 1.0},
     "crypto_intraday_scalp": {"profit_mult": 1.2, "stop_mult": 1.0},
-    "intraday": {"profit_mult": 1.5, "stop_mult": 1.0},
 }
 _DEFAULT_BARRIER = {"profit_mult": 2.0, "stop_mult": 1.0}
 
@@ -52,12 +46,8 @@ def get_barrier_config(strategy_type: str) -> dict[str, float]:
 # needs less differencing; high-frequency intraday has more noise to remove.
 FFD_D_BY_STRATEGY: dict[str, float] = {
     "crypto_swing": 0.3,
-    "crypto_intraday": 0.3,
     "crypto_intraday_scalp": 0.3,
     "intraday_scalp": 0.5,
-    "vwap_reversal_scalp": 0.5,
-    "ema_stack_momentum": 0.5,
-    "intraday": 0.45,
 }
 _DEFAULT_FFD_D = 0.4
 
@@ -176,6 +166,90 @@ def compute_technical_features(
         features["distance_from_20d_low"] = (
             (df["close"] - rolling_low_20) / rolling_low_20 * 100
         ).replace([np.inf, -np.inf], np.nan)
+
+    # --- Strategy-specific features ---
+
+    # Williams %R (14-period)
+    if "high" in df.columns and "low" in df.columns:
+        hh14 = df["high"].rolling(14, min_periods=5).max()
+        ll14 = df["low"].rolling(14, min_periods=5).min()
+        denom = (hh14 - ll14).replace(0, np.nan)
+        features["williams_r"] = ((hh14 - df["close"]) / denom * -100).replace(
+            [np.inf, -np.inf], np.nan
+        )
+    else:
+        features["williams_r"] = np.nan
+
+    # Bollinger Band position (0-1 scale within bands)
+    if "close" in df.columns:
+        bb_upper = sma_20 + 2 * sma_std
+        bb_lower = sma_20 - 2 * sma_std
+        bb_denom = (bb_upper - bb_lower).replace(0, np.nan)
+        features["bb_position"] = ((df["close"] - bb_lower) / bb_denom).replace(
+            [np.inf, -np.inf], np.nan
+        )
+
+        # BB width percentile (rank vs last 100 days)
+        bb_raw = (2 * sma_std / sma_20).replace([np.inf, -np.inf], np.nan)
+        features["bb_width_percentile"] = bb_raw.rolling(100, min_periods=20).rank(pct=True)
+
+        # Squeeze duration (consecutive bars with BB width below its 20d average)
+        bb_avg = bb_raw.rolling(20, min_periods=5).mean()
+        is_narrow = (bb_raw < bb_avg).astype(int)
+        groups = (is_narrow != is_narrow.shift()).cumsum()
+        features["squeeze_duration"] = is_narrow.groupby(groups).cumsum()
+
+    # Range compression (5-day range / 20-day range)
+    if "high" in df.columns and "low" in df.columns:
+        range_5 = (
+            df["high"].rolling(5, min_periods=3).max() - df["low"].rolling(5, min_periods=3).min()
+        )
+        range_20 = (
+            df["high"].rolling(20, min_periods=10).max()
+            - df["low"].rolling(20, min_periods=10).min()
+        )
+        features["range_compression_20d"] = (range_5 / range_20.replace(0, np.nan)).replace(
+            [np.inf, -np.inf], np.nan
+        )
+
+    # Volume surge flag (volume_ratio > 1.5)
+    if "volume_ratio" in features.columns:
+        features["volume_surge"] = (features["volume_ratio"] > 1.5).astype(float)
+    else:
+        features["volume_surge"] = 0.0
+
+    # EMA 50/200 crossover features
+    if "ema_50" in df.columns and "ema_200" in df.columns:
+        ema50 = df["ema_50"]
+        ema200 = df["ema_200"]
+        cross_dir = (ema50 > ema200).astype(int) - (ema50 < ema200).astype(int)
+        features["ema_50_200_cross_direction"] = cross_dir.astype(float)
+        direction_changed = cross_dir.diff().abs() > 0
+        cumcount = (~direction_changed).astype(int).groupby(direction_changed.cumsum()).cumsum()
+        features["ema_50_200_cross_recency"] = cumcount.clip(upper=60).astype(float)
+    else:
+        features["ema_50_200_cross_direction"] = np.nan
+        features["ema_50_200_cross_recency"] = np.nan
+
+    # RSI divergence (simplified: price new 14-day low but RSI NOT new 14-day low)
+    if "rsi" in df.columns and "close" in df.columns:
+        price_is_new_low = df["close"] <= df["close"].rolling(14, min_periods=5).min()
+        rsi_is_new_low = df["rsi"] <= df["rsi"].rolling(14, min_periods=5).min()
+        price_is_new_high = df["close"] >= df["close"].rolling(14, min_periods=5).max()
+        rsi_is_new_high = df["rsi"] >= df["rsi"].rolling(14, min_periods=5).max()
+        bullish_div = (price_is_new_low & ~rsi_is_new_low).astype(float)
+        bearish_div = (price_is_new_high & ~rsi_is_new_high).astype(float)
+        features["rsi_divergence"] = bullish_div - bearish_div
+    else:
+        features["rsi_divergence"] = np.nan
+
+    # Oversold duration (consecutive bars with RSI < 35)
+    if "rsi" in df.columns:
+        is_oversold = (df["rsi"] < 35).astype(int)
+        os_groups = (is_oversold != is_oversold.shift()).cumsum()
+        features["oversold_duration"] = is_oversold.groupby(os_groups).cumsum()
+    else:
+        features["oversold_duration"] = np.nan
 
     ffd = compute_ffd_features(df, d=ffd_d)
     features["ffd_close"] = ffd["ffd_close"]
@@ -469,45 +543,100 @@ def compute_primary_signal(
 
     signal = 0
     strength = 0.0
+    high = prices["high"].values
+    volume = prices["volume"].values if "volume" in prices.columns else None
 
-    if strategy_type in ("swing", "crypto_swing"):
-        ema_9 = _safe_ema_at(indicators, "ema_9", idx)
-        ema_21 = _safe_ema_at(indicators, "ema_21", idx)
-        if ema_9 is not None and ema_21 is not None:
-            if ema_9 > ema_21:
+    if strategy_type == "momentum_breakout":
+        if idx >= 20:
+            high_20 = float(np.max(high[idx - 20 : idx]))
+            vol_ratio = (
+                volume[idx] / np.mean(volume[max(0, idx - 20) : idx]) if volume is not None else 1.0
+            )
+            if close[idx] > high_20 and vol_ratio > 1.5:
                 signal = 1
-                strength = min(1.0, (ema_9 - ema_21) / ema_21 * 100)
-            elif ema_9 < ema_21:
+                strength = min(1.0, vol_ratio / 3.0)
+            elif close[idx] < float(np.min(prices["low"].values[idx - 20 : idx])):
                 signal = -1
-                strength = min(1.0, (ema_21 - ema_9) / ema_21 * 100)
+                strength = 0.5
+
+    elif strategy_type in ("golden_cross_swing", "crypto_swing"):
+        ema_50 = _safe_ema_at(indicators, "ema_50", idx)
+        ema_200 = _safe_ema_at(indicators, "ema_200", idx)
+        if ema_50 is not None and ema_200 is not None and ema_200 > 0:
+            if ema_50 > ema_200:
+                signal = 1
+                strength = min(1.0, (ema_50 - ema_200) / ema_200 * 100)
+            elif ema_50 < ema_200:
+                signal = -1
+                strength = min(1.0, (ema_200 - ema_50) / ema_200 * 100)
+
+    elif strategy_type == "bb_squeeze_breakout":
+        if idx >= 20:
+            rolling_std = float(np.std(close[max(0, idx - 20) : idx]))
+            sma_20 = float(np.mean(close[max(0, idx - 20) : idx]))
+            if sma_20 > 0 and rolling_std > 0:
+                current_width = rolling_std / sma_20
+                lookback_start = max(0, idx - 40)
+                prev_widths = [
+                    float(np.std(close[max(0, j - 20) : j]))
+                    / float(np.mean(close[max(0, j - 20) : j]))
+                    for j in range(lookback_start + 20, idx)
+                    if float(np.mean(close[max(0, j - 20) : j])) > 0
+                ]
+                is_squeeze = prev_widths and current_width <= sorted(prev_widths)[0]
+                upper_band = sma_20 + 2 * rolling_std
+                if close[idx] > upper_band:
+                    signal = 1
+                    strength = 0.8 if is_squeeze else 0.4
+                elif close[idx] < sma_20 - 2 * rolling_std:
+                    signal = -1
+                    strength = 0.8 if is_squeeze else 0.4
 
     elif strategy_type == "mean_reversion":
         rsi = _safe_indicator_at(indicators, "rsi", idx)
         if rsi is not None:
+            if idx >= 20:
+                low_20 = float(np.min(prices["low"].values[idx - 20 : idx]))
+                near_low = close[idx] <= low_20 * 1.02
+            else:
+                near_low = False
             if rsi < 30:
                 signal = 1
-                strength = (30 - rsi) / 30
+                strength = min(1.0, (30 - rsi) / 30 + (0.3 if near_low else 0.0))
             elif rsi > 70:
                 signal = -1
-                strength = (rsi - 70) / 30
+                strength = min(1.0, (rsi - 70) / 30)
 
-    elif strategy_type in ("value", "value_accumulation"):
-        if idx > 0:
-            ret_20 = (close[idx] - close[max(0, idx - 20)]) / close[max(0, idx - 20)]
+    elif strategy_type == "value_accumulation":
+        if idx >= 20:
+            ret_20 = (close[idx] - close[idx - 20]) / close[idx - 20]
             if ret_20 < -0.05:
                 signal = 1
-                strength = min(1.0, abs(ret_20) / 0.10)
+                strength = min(1.0, abs(ret_20) / 0.15)
 
-    elif strategy_type in ("event", "earnings_play"):
-        signal = 1
-        strength = 0.5
+    elif strategy_type == "earnings_play":
+        ema_50 = _safe_ema_at(indicators, "ema_50", idx)
+        if ema_50 is not None and close[idx] > ema_50:
+            if volume is not None and idx >= 5:
+                recent_vol = np.mean(volume[idx - 5 : idx])
+                prior_vol = np.mean(volume[max(0, idx - 20) : max(1, idx - 5)])
+                vol_declining = recent_vol < prior_vol * 0.9 if prior_vol > 0 else False
+            else:
+                vol_declining = False
+            signal = 1
+            strength = 0.7 if vol_declining else 0.4
+        elif ema_50 is not None and close[idx] < ema_50:
+            signal = -1
+            strength = 0.3
 
-    elif strategy_type in ("intraday", "crypto_intraday"):
-        if idx >= 5:
-            high_5 = float(np.max(prices["high"].values[idx - 5 : idx]))
-            if close[idx] > high_5:
-                signal = 1
-                strength = min(1.0, (close[idx] - high_5) / high_5 * 100)
+    elif strategy_type in ("intraday_scalp", "crypto_intraday_scalp") and idx >= 5:
+        high_5 = float(np.max(high[idx - 5 : idx]))
+        vol_ratio = (
+            volume[idx] / np.mean(volume[max(0, idx - 20) : idx]) if volume is not None else 1.0
+        )
+        if close[idx] > high_5 and vol_ratio > 1.5:
+            signal = 1
+            strength = min(1.0, vol_ratio / 3.0)
 
     return {"primary_signal": signal, "signal_strength": strength}
 
@@ -912,11 +1041,17 @@ def compute_llm_features(
     }
 
 
-CATEGORICAL_FEATURES = {"strategy_type", "market_regime", "sector"}
+from ml_training.features.feature_spec import (  # noqa: E402
+    CATEGORICAL_FEATURE_NAMES,
+    TRAINING_ONLY_NAMES,
+    is_training_only,
+)
 
-# Feature groups for model modes.  The independent (gate) model uses only
-# market-observable features — no LLM outputs — so it can run *before* GPT
-# and serve as an independent check.  The shadow model gets everything.
+CATEGORICAL_FEATURES = CATEGORICAL_FEATURE_NAMES
+TRAINING_ONLY_FEATURES = TRAINING_ONLY_NAMES
+is_training_only_feature = is_training_only
+
+# Re-export for backward compatibility
 LLM_FEATURES: frozenset[str] = frozenset(
     {
         "llm_action_encoded",
@@ -928,6 +1063,26 @@ LLM_FEATURES: frozenset[str] = frozenset(
         "llm_warning_count",
     }
 )
+
+
+def load_dead_features() -> frozenset[str]:
+    """Load the auto-generated dead features list from disk.
+
+    Returns an empty frozenset if the file doesn't exist yet.
+    """
+    from pathlib import Path
+
+    dead_path = Path(__file__).resolve().parents[2] / "data" / "raw" / "dead_features.json"
+    if not dead_path.exists():
+        return frozenset()
+    import json
+
+    try:
+        data = json.loads(dead_path.read_text())
+        return frozenset(data.get("dead_features", []))
+    except json.JSONDecodeError, KeyError:
+        return frozenset()
+
 
 _NEUTRALIZE_EXCLUDE = {
     "ticker",

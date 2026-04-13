@@ -4,37 +4,27 @@ import clsx from 'clsx';
 import type { ScannerLatestResponse, ScannerResultItem } from '../../types';
 
 const STRATEGY_LABELS: Record<string, string> = {
-  swing: 'Swing',
-  mean_reversion: 'Mean Reversion',
   momentum_breakout: 'Momentum Breakout',
-  bollinger_band_squeeze_breakout: 'BB Squeeze',
-  vwap_reversal_scalp: 'VWAP Reversal',
-  earnings_play: 'Earnings Play',
-  ema_stack_momentum: 'EMA Stack',
-  ema_21_pullback: 'EMA 21 Pullback',
-  ema_50_200_golden_cross: '50/200 Golden',
-  opening_range_breakout: 'ORB',
+  golden_cross_swing: '50/200 Golden Cross',
+  bb_squeeze_breakout: 'BB Squeeze',
+  mean_reversion: 'Mean Reversion',
   value_accumulation: 'Value Accum.',
+  earnings_play: 'Earnings Play',
   intraday_scalp: 'Intraday Scalp',
   crypto_swing: 'Crypto Swing',
-  crypto_intraday: 'Crypto Intraday',
+  crypto_intraday_scalp: 'Crypto Intraday',
 };
 
 const STRATEGY_COLORS: Record<string, string> = {
-  swing: 'border-accent-signal/30 bg-accent-signal/5',
-  mean_reversion: 'border-accent-alert/30 bg-accent-alert/5',
   momentum_breakout: 'border-accent-profit/30 bg-accent-profit/5',
-  bollinger_band_squeeze_breakout: 'border-accent-electric/30 bg-accent-electric/5',
-  vwap_reversal_scalp: 'border-accent-loss/30 bg-accent-loss/5',
-  earnings_play: 'border-accent-alert/30 bg-accent-alert/5',
-  ema_stack_momentum: 'border-accent-profit/30 bg-accent-profit/5',
-  ema_21_pullback: 'border-accent-signal/30 bg-accent-signal/5',
-  ema_50_200_golden_cross: 'border-accent-profit/30 bg-accent-profit/5',
-  opening_range_breakout: 'border-accent-electric/30 bg-accent-electric/5',
+  golden_cross_swing: 'border-accent-profit/30 bg-accent-profit/5',
+  bb_squeeze_breakout: 'border-accent-electric/30 bg-accent-electric/5',
+  mean_reversion: 'border-accent-alert/30 bg-accent-alert/5',
   value_accumulation: 'border-accent-electric/30 bg-accent-electric/5',
+  earnings_play: 'border-accent-alert/30 bg-accent-alert/5',
   intraday_scalp: 'border-accent-alert/30 bg-accent-alert/5',
   crypto_swing: 'border-accent-electric/30 bg-accent-electric/5',
-  crypto_intraday: 'border-accent-alert/30 bg-accent-alert/5',
+  crypto_intraday_scalp: 'border-accent-alert/30 bg-accent-alert/5',
 };
 
 function ScoreBar({ value, max = 1 }: { value: number; max?: number }) {

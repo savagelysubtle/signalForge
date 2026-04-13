@@ -128,6 +128,7 @@ class HyperparameterTuner:
         purge_window: int = DEFAULT_PURGE_WINDOW,
         embargo_window: int = DEFAULT_EMBARGO_WINDOW,
         binary_mode: bool = False,
+        inference_only: bool = False,
     ) -> None:
         self._target_col = target_col
         self._n_splits = n_cv_splits
@@ -136,6 +137,7 @@ class HyperparameterTuner:
         self._purge_window = purge_window
         self._embargo_window = embargo_window
         self._binary_mode = binary_mode
+        self._inference_only = inference_only
 
     def search(self, dataset: pd.DataFrame) -> HyperparameterSearchResult:
         """Run hyperparameter search across the parameter grid.
@@ -152,7 +154,7 @@ class HyperparameterTuner:
         """
         df = dataset.dropna(subset=[self._target_col]).sort_values("date").reset_index(drop=True)
 
-        feature_cols = _identify_feature_columns(df)
+        feature_cols = _identify_feature_columns(df, inference_only=self._inference_only)
 
         X, _encoders = _prepare_features(df, feature_cols)
         if self._binary_mode:
@@ -217,21 +219,27 @@ class HyperparameterTuner:
                     callbacks=[lgb.log_evaluation(0), lgb.early_stopping(50, verbose=False)],
                 )
                 if self._binary_mode:
-                    test_probs = clf.predict_proba(X_test)[:, 1]
-                    train_probs = clf.predict_proba(X_train)[:, 1]
-                    fold_scores.append(1.0 - float(brier_score_loss(y_test, test_probs)))
-                    fold_train_scores.append(1.0 - float(brier_score_loss(y_train, train_probs)))
+                    te_bs = float(brier_score_loss(y_test, clf.predict_proba(X_test)[:, 1]))
+                    tr_bs = float(brier_score_loss(y_train, clf.predict_proba(X_train)[:, 1]))
+                    base_rate = float(np.mean(y_test))
+                    bs_ref = base_rate * (1.0 - base_rate)
+                    fold_scores.append(1.0 - (te_bs / bs_ref) if bs_ref > 1e-9 else 0.0)
+                    fold_train_scores.append(1.0 - (tr_bs / bs_ref) if bs_ref > 1e-9 else 0.0)
                 else:
-                    fold_scores.append(-float(log_loss(y_test, clf.predict_proba(X_test))))
-                    fold_train_scores.append(-float(log_loss(y_train, clf.predict_proba(X_train))))
+                    te_ll = float(log_loss(y_test, clf.predict_proba(X_test)))
+                    tr_ll = float(log_loss(y_train, clf.predict_proba(X_train)))
+                    class_dist = np.bincount(y_test, minlength=3).astype(float) / len(y_test)
+                    naive_ll = -float(np.sum(class_dist * np.log(np.clip(class_dist, 1e-15, 1.0))))
+                    fold_scores.append(1.0 - (te_ll / naive_ll) if naive_ll > 1e-9 else 0.0)
+                    fold_train_scores.append(1.0 - (tr_ll / naive_ll) if naive_ll > 1e-9 else 0.0)
 
             mean_score = float(np.mean(fold_scores))
             std_score = float(np.std(fold_scores))
             mean_train = float(np.mean(fold_train_scores))
-            overfit_gap = mean_train - mean_score
+            overfit_gap = max(mean_train - mean_score, 0.0)
             fold_variance = float(np.var(fold_scores))
-            consistency_penalty = fold_variance * 5.0
-            composite = mean_score - 2.0 * overfit_gap - consistency_penalty
+            consistency_penalty = fold_variance * 3.0
+            composite = mean_score - 1.0 * overfit_gap - consistency_penalty
 
             return {
                 "params": params,
@@ -298,7 +306,7 @@ class HyperparameterTuner:
     def search_optuna(
         self,
         dataset: pd.DataFrame,
-        n_trials: int = 30,
+        n_trials: int = 50,
     ) -> HyperparameterSearchResult:
         """Bayesian hyperparameter search using Optuna TPE sampler.
 
@@ -320,7 +328,7 @@ class HyperparameterTuner:
         optuna.logging.set_verbosity(optuna.logging.WARNING)
 
         df = dataset.dropna(subset=[self._target_col]).sort_values("date").reset_index(drop=True)
-        feature_cols = _identify_feature_columns(df)
+        feature_cols = _identify_feature_columns(df, inference_only=self._inference_only)
 
         X, _encoders = _prepare_features(df, feature_cols)
         if self._binary_mode:
@@ -340,6 +348,65 @@ class HyperparameterTuner:
         else:
             obj_name, obj_metric = "multiclass", "multi_logloss"
 
+        workers = min(optimal_workers("cpu"), 4)
+        per_model_njobs = balanced_lgb_njobs(workers) if workers > 1 else -1
+        splits = list(tscv.split(X))
+
+        logger.info(
+            "Optuna search: %d trials, %d parallel folds, n_jobs=%d per model",
+            n_trials,
+            workers,
+            per_model_njobs,
+        )
+
+        purge_window = self._purge_window
+        embargo_window = self._embargo_window
+        n_rounds = self._n_rounds
+        binary_mode = self._binary_mode
+
+        def _eval_fold(
+            fold_args: tuple[np.ndarray, np.ndarray, dict[str, Any], np.ndarray],
+        ) -> tuple[float, float, int]:
+            """Evaluate one CV fold.  Returns (test_bss, train_bss, best_iter)."""
+            raw_train_idx, test_idx, params, sample_weights = fold_args
+            train_idx = _purged_split(
+                n_samples,
+                raw_train_idx,
+                test_idx,
+                purge_window,
+                embargo_window,
+            )
+            X_tr, X_te = X.iloc[train_idx], X.iloc[test_idx]
+            y_tr, y_te = y[train_idx], y[test_idx]
+            w_tr = sample_weights[train_idx]
+
+            clf = lgb.LGBMClassifier(**params, n_estimators=n_rounds)
+            clf.fit(
+                X_tr,
+                y_tr,
+                sample_weight=w_tr,
+                categorical_feature=categorical_indices,
+                eval_set=[(X_te, y_te)],
+                callbacks=[lgb.log_evaluation(0), lgb.early_stopping(50, verbose=False)],
+            )
+            best_iter = getattr(clf, "best_iteration_", n_rounds)
+
+            if binary_mode:
+                te_bs = float(brier_score_loss(y_te, clf.predict_proba(X_te)[:, 1]))
+                tr_bs = float(brier_score_loss(y_tr, clf.predict_proba(X_tr)[:, 1]))
+                base_rate = float(np.mean(y_te))
+                bs_ref = base_rate * (1.0 - base_rate)
+                te_bss = 1.0 - (te_bs / bs_ref) if bs_ref > 1e-9 else 0.0
+                tr_bss = 1.0 - (tr_bs / bs_ref) if bs_ref > 1e-9 else 0.0
+            else:
+                te_ll = float(log_loss(y_te, clf.predict_proba(X_te)))
+                tr_ll = float(log_loss(y_tr, clf.predict_proba(X_tr)))
+                class_dist = np.bincount(y_te, minlength=3).astype(float) / len(y_te)
+                naive_ll = -float(np.sum(class_dist * np.log(np.clip(class_dist, 1e-15, 1.0))))
+                te_bss = 1.0 - (te_ll / naive_ll) if naive_ll > 1e-9 else 0.0
+                tr_bss = 1.0 - (tr_ll / naive_ll) if naive_ll > 1e-9 else 0.0
+            return te_bss, tr_bss, best_iter
+
         def objective(trial: optuna.Trial) -> float:
             params: dict[str, Any] = {
                 "objective": obj_name,
@@ -347,66 +414,63 @@ class HyperparameterTuner:
                 "boosting_type": "gbdt",
                 "is_unbalance": True,
                 "verbose": -1,
-                "n_jobs": -1,
+                "n_jobs": per_model_njobs,
                 "seed": 42,
             }
             if not self._binary_mode:
                 params["num_class"] = 3
             params.update(
                 {
-                    "num_leaves": trial.suggest_int("num_leaves", 7, 31),
-                    "learning_rate": trial.suggest_float("learning_rate", 0.005, 0.05, log=True),
-                    "min_child_samples": trial.suggest_int("min_child_samples", 50, 300),
-                    "feature_fraction": trial.suggest_float("feature_fraction", 0.3, 0.7),
-                    "bagging_fraction": trial.suggest_float("bagging_fraction", 0.5, 0.8),
+                    "num_leaves": trial.suggest_int("num_leaves", 15, 63),
+                    "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.1, log=True),
+                    "min_child_samples": trial.suggest_int(
+                        "min_child_samples", 20, max(150, n_samples // 2000)
+                    ),
+                    "feature_fraction": trial.suggest_float("feature_fraction", 0.4, 0.8),
+                    "bagging_fraction": trial.suggest_float("bagging_fraction", 0.6, 0.9),
                     "bagging_freq": 1,
-                    "reg_alpha": trial.suggest_float("reg_alpha", 0.1, 10.0, log=True),
-                    "reg_lambda": trial.suggest_float("reg_lambda", 1.0, 50.0, log=True),
-                    "max_depth": trial.suggest_int("max_depth", 3, 6),
-                    "min_gain_to_split": trial.suggest_float("min_gain_to_split", 0.01, 1.0),
+                    "reg_alpha": trial.suggest_float("reg_alpha", 0.01, 5.0, log=True),
+                    "reg_lambda": trial.suggest_float("reg_lambda", 0.1, 10.0, log=True),
+                    "max_depth": trial.suggest_int("max_depth", 4, 8),
+                    "min_gain_to_split": trial.suggest_float(
+                        "min_gain_to_split", 0.001, 0.1, log=True
+                    ),
                 }
             )
             decay_lambda = trial.suggest_float("decay_lambda", 0.0, 0.15)
-            sample_weights = compute_sample_weights(n_samples, horizon=10, decay_lambda=decay_lambda)
+            sample_weights = compute_sample_weights(
+                n_samples, horizon=10, decay_lambda=decay_lambda
+            )
 
-            fold_test_scores: list[float] = []
-            fold_train_scores: list[float] = []
-            for raw_train_idx, test_idx in tscv.split(X):
-                train_idx = _purged_split(
-                    n_samples,
-                    raw_train_idx,
-                    test_idx,
-                    self._purge_window,
-                    self._embargo_window,
-                )
-                X_tr, X_te = X.iloc[train_idx], X.iloc[test_idx]
-                y_tr, y_te = y[train_idx], y[test_idx]
-                w_tr = sample_weights[train_idx]
+            fold_args = [
+                (raw_train_idx, test_idx, params, sample_weights)
+                for raw_train_idx, test_idx in splits
+            ]
 
-                clf = lgb.LGBMClassifier(**params, n_estimators=self._n_rounds)
-                clf.fit(
-                    X_tr,
-                    y_tr,
-                    sample_weight=w_tr,
-                    categorical_feature=categorical_indices,
-                    eval_set=[(X_te, y_te)],
-                    callbacks=[lgb.log_evaluation(0), lgb.early_stopping(50, verbose=False)],
-                )
-                if self._binary_mode:
-                    te_probs = clf.predict_proba(X_te)[:, 1]
-                    tr_probs = clf.predict_proba(X_tr)[:, 1]
-                    fold_test_scores.append(1.0 - float(brier_score_loss(y_te, te_probs)))
-                    fold_train_scores.append(1.0 - float(brier_score_loss(y_tr, tr_probs)))
-                else:
-                    fold_test_scores.append(-float(log_loss(y_te, clf.predict_proba(X_te))))
-                    fold_train_scores.append(-float(log_loss(y_tr, clf.predict_proba(X_tr))))
+            if workers > 1:
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    results = list(pool.map(_eval_fold, fold_args))
+            else:
+                results = [_eval_fold(fa) for fa in fold_args]
+
+            fold_test_scores = [r[0] for r in results]
+            fold_train_scores = [r[1] for r in results]
+            fold_iters = [r[2] for r in results]
 
             mean_test = float(np.mean(fold_test_scores))
             mean_train = float(np.mean(fold_train_scores))
-            gap = mean_train - mean_test
+            gap = max(mean_train - mean_test, 0.0)
             fold_variance = float(np.var(fold_test_scores))
-            consistency_penalty = fold_variance * 5.0
-            return mean_test - 2.0 * gap - consistency_penalty
+
+            median_iter = float(np.median(fold_iters))
+            if median_iter <= 1:
+                learning_penalty = 0.3
+            elif median_iter <= 3:
+                learning_penalty = 0.1
+            else:
+                learning_penalty = 0.0
+
+            return mean_test - 1.0 * gap - 3.0 * fold_variance - learning_penalty
 
         study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler())
         study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
@@ -421,7 +485,7 @@ class HyperparameterTuner:
             "verbose": -1,
             "n_jobs": -1,
             "seed": 42,
-            "bagging_freq": 5,
+            "bagging_freq": 1,
             **lgb_params,
         }
         if not self._binary_mode:

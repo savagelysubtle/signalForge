@@ -36,6 +36,7 @@ class ModelMetadata:
     status: str = "trained"
     strategy_type: str | None = None
     shap_importance: dict[str, float] | None = None
+    holdout_metrics: dict[str, float] | None = None
 
 
 @dataclass
@@ -64,9 +65,15 @@ class ModelRegistry:
         artifacts_dir: Path | None = None,
         backend_dir: Path | None = None,
     ) -> None:
-        self._artifacts_dir = artifacts_dir or ARTIFACTS_DIR
+        self._artifacts_root = artifacts_dir or ARTIFACTS_DIR
         self._backend_dir = backend_dir or BACKEND_ARTIFACTS_DIR
-        self._artifacts_dir.mkdir(parents=True, exist_ok=True)
+        self._artifacts_root.mkdir(parents=True, exist_ok=True)
+
+    def _strategy_dir(self, strategy_type: str | None = None) -> Path:
+        """Return the per-strategy subfolder, creating it if needed."""
+        subdir = self._artifacts_root / (strategy_type or "combined")
+        subdir.mkdir(parents=True, exist_ok=True)
+        return subdir
 
     def _next_version(self, strategy_type: str | None = None) -> str:
         """Generate the next model version string.
@@ -74,8 +81,8 @@ class ModelRegistry:
         Args:
             strategy_type: If provided, version is scoped to that strategy.
         """
-        pattern = f"model_{strategy_type}_v*.joblib" if strategy_type else "model_v*.joblib"
-        existing = list(self._artifacts_dir.glob(pattern))
+        target_dir = self._strategy_dir(strategy_type)
+        existing = list(target_dir.glob("model_v*.joblib"))
         if not existing:
             return "v1"
 
@@ -97,24 +104,24 @@ class ModelRegistry:
     ) -> Path:
         """Save a model artifact to disk.
 
+        Artifacts are stored in per-strategy subdirectories under the
+        artifacts root: ``artifacts/{strategy_type}/model_v{N}_{date}.joblib``.
+        Combined (non-strategy) models go into ``artifacts/combined/``.
+
         Args:
             artifact: Complete model artifact with all components.
             version: Explicit version string. Auto-generated if None.
-            strategy_type: Strategy type key (e.g. "swing"). If provided,
-                the artifact is stored as ``model_{strategy_type}_v{N}_{date}.joblib``.
+            strategy_type: Strategy type key (e.g. "momentum_breakout").
 
         Returns:
             Path to the saved .joblib file.
         """
         version = version or self._next_version(strategy_type)
         date_str = datetime.now(tz=UTC).strftime("%Y%m%d")
+        filename = f"model_{version}_{date_str}.joblib"
 
-        if strategy_type:
-            filename = f"model_{strategy_type}_{version}_{date_str}.joblib"
-        else:
-            filename = f"model_{version}_{date_str}.joblib"
-
-        path = self._artifacts_dir / filename
+        target_dir = self._strategy_dir(strategy_type)
+        path = target_dir / filename
 
         if artifact.metadata is None:
             artifact.metadata = ModelMetadata(
@@ -150,33 +157,44 @@ class ModelRegistry:
             raise TypeError(f"Expected ModelArtifact, got {type(artifact)}")
         return artifact
 
-    def list_versions(self) -> list[dict[str, Any]]:
+    def list_versions(self, strategy_type: str | None = None) -> list[dict[str, Any]]:
         """List all available model versions with metadata.
+
+        Args:
+            strategy_type: Scope to a specific strategy. If None, lists
+                across all strategy subdirectories.
 
         Returns:
             List of dicts with version, path, and metadata for each model.
         """
         versions: list[dict[str, Any]] = []
-        for p in sorted(self._artifacts_dir.glob("model_v*.joblib")):
-            meta_path = p.with_suffix("").with_name(p.stem + "_meta.json")
-            meta = {}
-            if meta_path.exists():
-                meta = json.loads(meta_path.read_text())
-            versions.append({"path": str(p), "filename": p.name, **meta})
+        if strategy_type is not None:
+            dirs = [self._strategy_dir(strategy_type)]
+        else:
+            dirs = [d for d in self._artifacts_root.iterdir() if d.is_dir() and d.name != "archive"]
+        for d in dirs:
+            for p in sorted(d.glob("model_v*.joblib")):
+                meta_path = p.with_suffix("").with_name(p.stem + "_meta.json")
+                meta = {}
+                if meta_path.exists():
+                    meta = json.loads(meta_path.read_text())
+                versions.append(
+                    {"path": str(p), "filename": p.name, "strategy_dir": d.name, **meta}
+                )
         return versions
 
     def get_latest(self, strategy_type: str | None = None) -> Path | None:
         """Get the path to the latest (highest version) model artifact.
 
         Args:
-            strategy_type: If provided, returns the latest per-strategy model.
-                If None, returns the latest combined (non-strategy) model.
+            strategy_type: If provided, returns the latest for that strategy.
+                If None, returns the latest combined model.
 
         Returns:
             Path to the most recent .joblib file, or None if none exist.
         """
-        pattern = f"model_{strategy_type}_v*.joblib" if strategy_type else "model_v*.joblib"
-        artifacts = list(self._artifacts_dir.glob(pattern))
+        target_dir = self._strategy_dir(strategy_type)
+        artifacts = list(target_dir.glob("model_v*.joblib"))
         if not artifacts:
             return None
 
@@ -189,24 +207,29 @@ class ModelRegistry:
         return max(artifacts, key=_version_key)
 
     def list_strategy_models(self) -> dict[str, Path]:
-        """List the latest (highest version) model artifact for each strategy type.
+        """List the latest model artifact for each strategy type.
+
+        Scans subdirectories of the artifacts root (excluding ``archive``
+        and ``combined``) for per-strategy models.
 
         Returns:
             Mapping of strategy_type → Path for each available per-strategy model.
         """
         models: dict[str, Path] = {}
-        versions: dict[str, int] = {}
-        for p in self._artifacts_dir.glob("model_*_v*.joblib"):
-            parts = p.stem.split("_")
-            v_idx = next(
-                (i for i, x in enumerate(parts) if x.startswith("v") and x[1:].isdigit()), None
-            )
-            if v_idx is not None and v_idx > 1:
-                strategy = "_".join(parts[1:v_idx])
-                version_num = int(parts[v_idx][1:])
-                if version_num > versions.get(strategy, -1):
-                    versions[strategy] = version_num
-                    models[strategy] = p
+        for d in self._artifacts_root.iterdir():
+            if not d.is_dir() or d.name in ("archive", "combined"):
+                continue
+            latest = list(d.glob("model_v*.joblib"))
+            if not latest:
+                continue
+
+            def _version_key(p: Path) -> int:
+                for part in p.stem.split("_"):
+                    if part.startswith("v") and part[1:].isdigit():
+                        return int(part[1:])
+                return 0
+
+            models[d.name] = max(latest, key=_version_key)
         return models
 
     def promote_to_shadow(
@@ -214,7 +237,7 @@ class ModelRegistry:
         artifact_path: Path,
         strategy_type: str | None = None,
     ) -> Path:
-        """Copy a model artifact to the backend for shadow mode.
+        """Copy a model artifact and its metadata to the backend for shadow mode.
 
         Args:
             artifact_path: Path to the source .joblib artifact.
@@ -231,6 +254,13 @@ class ModelRegistry:
             dest = self._backend_dir / "model_active.joblib"
         shutil.copy2(artifact_path, dest)
         logger.info("Promoted model to shadow: %s -> %s", artifact_path, dest)
+
+        src_meta = artifact_path.with_suffix("").with_name(artifact_path.stem + "_meta.json")
+        if src_meta.exists():
+            dest_meta = dest.with_suffix("").with_name(dest.stem + "_meta.json")
+            shutil.copy2(src_meta, dest_meta)
+            logger.info("Promoted metadata: %s -> %s", src_meta, dest_meta)
+
         return dest
 
     def promote_all_strategies(self) -> list[Path]:

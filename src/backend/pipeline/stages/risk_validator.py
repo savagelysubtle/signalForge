@@ -233,7 +233,9 @@ def validate_risks(
             and rec.entry_price
             and rec.entry_price > 0
         ):
-            atr_mult = {"intraday": 1.0, "crypto_intraday": 1.0}.get(config.strategy_type, 1.5)
+            atr_mult = {"intraday_scalp": 1.0, "crypto_intraday_scalp": 1.0}.get(
+                config.strategy_type, 1.5
+            )
             dollar_risk_per_share = atr * atr_mult
             max_risk_pct = rp.max_portfolio_risk_pct / max(rp.max_position_pct / 2, 1.0)
             atr_based_pct = round(

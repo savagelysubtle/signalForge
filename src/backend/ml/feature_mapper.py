@@ -118,6 +118,46 @@ def _map_single_snapshot(snapshot_dict: dict[str, Any]) -> dict[str, Any]:
         if p_open is not None and p_open > 0:
             flat["gap_pct"] = (p_open - price) / price
 
+    # Strategy-specific features -- pass through if present in snapshot
+    for key in (
+        "williams_r",
+        "bb_position",
+        "bb_width_percentile",
+        "squeeze_duration",
+        "range_compression_20d",
+        "volume_surge",
+        "ema_50_200_cross_direction",
+        "ema_50_200_cross_recency",
+        "rsi_divergence",
+        "oversold_duration",
+        "bollinger_width",
+        "distance_from_20d_high",
+        "distance_from_20d_low",
+    ):
+        val = snapshot_dict.get(key)
+        if val is not None:
+            flat[key] = val
+
+    # Derive volume_surge from volume_ratio if not already present
+    if "volume_surge" not in flat and "volume_ratio" in flat:
+        vr = flat["volume_ratio"]
+        if vr is not None:
+            flat["volume_surge"] = 1.0 if vr > 1.5 else 0.0
+
+    # Derive ema_50_200_cross_direction from EMAs if available
+    if "ema_50_200_cross_direction" not in flat:
+        emas_list = snapshot_dict.get("emas")
+        if isinstance(emas_list, list) and price is not None:
+            ema_vals: dict[int, float] = {}
+            for ema in emas_list:
+                if isinstance(ema, dict):
+                    p = ema.get("period")
+                    v = ema.get("current_value")
+                    if p is not None and v is not None:
+                        ema_vals[p] = v
+            if 50 in ema_vals and 200 in ema_vals:
+                flat["ema_50_200_cross_direction"] = 1.0 if ema_vals[50] > ema_vals[200] else -1.0
+
     return flat
 
 

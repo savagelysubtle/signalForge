@@ -27,21 +27,15 @@ logger = logging.getLogger(__name__)
 # Per-strategy reward-to-risk ratios derived from training barrier configs.
 # profit_mult / stop_mult — determines Kelly breakeven and optimal sizing.
 _STRATEGY_RR: dict[str, float] = {
-    "mean_reversion": 1.0 / 1.5,
     "momentum_breakout": 3.0 / 1.0,
-    "swing": 2.0 / 1.0,
-    "earnings_play": 2.5 / 1.0,
+    "golden_cross_swing": 2.5 / 1.0,
+    "bb_squeeze_breakout": 1.5 / 1.0,
+    "mean_reversion": 1.5 / 1.0,
     "value_accumulation": 2.0 / 1.5,
-    "bollinger_band_squeeze_breakout": 1.5 / 1.0,
+    "earnings_play": 2.5 / 1.0,
     "intraday_scalp": 1.2 / 1.0,
-    "vwap_reversal_scalp": 1.0 / 1.0,
-    "ema_21_pullback": 2.0 / 1.0,
-    "ema_50_200_golden_cross": 2.5 / 1.0,
-    "ema_stack_momentum": 2.0 / 1.0,
     "crypto_swing": 2.0 / 1.0,
-    "crypto_intraday": 1.5 / 1.0,
     "crypto_intraday_scalp": 1.2 / 1.0,
-    "intraday": 1.5 / 1.0,
 }
 _DEFAULT_RR = 2.0
 _MIN_KELLY = 0.05

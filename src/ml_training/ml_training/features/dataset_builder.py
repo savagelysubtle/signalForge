@@ -45,22 +45,22 @@ LOOKBACK_BUFFER = 250
 ATR_THRESHOLD_MULTIPLIER = 1.0
 
 _HORIZON_MAP: dict[tuple[str, str], int] = {
-    ("intraday", "15m"): 10,
-    ("intraday", "30m"): 8,
-    ("intraday", "1H"): 4,
-    ("intraday", "4H"): 3,
-    ("swing", "D"): 5,
-    ("swing", "4H"): 10,
+    ("momentum_breakout", "D"): 5,
+    ("golden_cross_swing", "D"): 10,
+    ("bb_squeeze_breakout", "D"): 7,
     ("mean_reversion", "D"): 5,
     ("mean_reversion", "4H"): 10,
-    ("value", "D"): 10,
-    ("value", "4H"): 20,
-    ("event", "D"): 10,
-    ("event", "4H"): 10,
-    ("crypto_intraday", "4H"): 6,
-    ("crypto_intraday", "1H"): 12,
+    ("value_accumulation", "D"): 10,
+    ("value_accumulation", "4H"): 40,
+    ("earnings_play", "D"): 10,
+    ("earnings_play", "4H"): 10,
+    ("intraday_scalp", "4H"): 8,
+    ("intraday_scalp", "15m"): 10,
+    ("intraday_scalp", "1H"): 4,
     ("crypto_swing", "D"): 5,
     ("crypto_swing", "4H"): 12,
+    ("crypto_intraday_scalp", "4H"): 8,
+    ("crypto_intraday_scalp", "1H"): 12,
 }
 
 
@@ -495,7 +495,7 @@ class DatasetBuilder:
                 for k, v in signal_data.items():
                     row_dict[k] = v
 
-                if strategy.strategy_type in ("intraday", "crypto_intraday"):
+                if strategy.strategy_type in ("intraday_scalp", "crypto_intraday_scalp"):
                     tsf = compute_tsfresh_features(prices, idx)
                     for k, v in tsf.items():
                         row_dict[k] = v
@@ -894,20 +894,24 @@ class DatasetBuilder:
 
     @staticmethod
     def _infer_strategy_type(strategy_template: str) -> str:
-        """Map a strategy template name to a strategy_type key."""
+        """Map a strategy template name to a granular strategy_type key."""
         if not strategy_template:
-            return "swing"
+            return "momentum_breakout"
         tpl = strategy_template.lower()
-        if "crypto" in tpl and "intraday" in tpl:
-            return "crypto_intraday"
+        if "crypto" in tpl and ("intraday" in tpl or "scalp" in tpl):
+            return "crypto_intraday_scalp"
         if "crypto" in tpl:
             return "crypto_swing"
-        if "intraday" in tpl or "scalp" in tpl or "opening_range" in tpl or "vwap" in tpl:
-            return "intraday"
-        if "mean_reversion" in tpl:
+        if "intraday" in tpl or "scalp" in tpl:
+            return "intraday_scalp"
+        if "mean_reversion" in tpl or "mean reversion" in tpl:
             return "mean_reversion"
-        if "value" in tpl:
-            return "value"
+        if "value" in tpl or "accumulation" in tpl:
+            return "value_accumulation"
         if "event" in tpl or "earnings" in tpl:
-            return "event"
-        return "swing"
+            return "earnings_play"
+        if "golden" in tpl or "50_200" in tpl or "50/200" in tpl:
+            return "golden_cross_swing"
+        if "bollinger" in tpl or "squeeze" in tpl or "bb_squeeze" in tpl:
+            return "bb_squeeze_breakout"
+        return "momentum_breakout"

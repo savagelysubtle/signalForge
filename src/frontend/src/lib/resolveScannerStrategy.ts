@@ -5,20 +5,15 @@ import type { StrategyConfig } from '../types';
  * substring of the corresponding template name in `templates/strategies.json`.
  */
 const SCANNER_RULE_TO_NAME_HINT: Record<string, string> = {
-  swing: 'Momentum Breakout',
   momentum_breakout: 'Momentum Breakout',
-  bollinger_band_squeeze_breakout: 'Bollinger Band Squeeze',
-  ema_21_pullback: 'EMA 21 Pullback',
-  ema_50_200_golden_cross: 'EMA 50/200',
+  golden_cross_swing: 'EMA 50/200 Golden Cross',
+  bb_squeeze_breakout: 'Bollinger Band Squeeze',
   mean_reversion: 'Mean Reversion',
   value_accumulation: 'Value Accumulation',
   earnings_play: 'Earnings Play',
-  ema_stack_momentum: 'EMA Stack Momentum',
   intraday_scalp: 'Intraday Scalp',
-  opening_range_breakout: 'Opening Range Breakout',
-  vwap_reversal_scalp: 'VWAP Reversal',
   crypto_swing: 'Crypto Swing',
-  crypto_intraday: 'Crypto Intraday',
+  crypto_intraday_scalp: 'Crypto Intraday',
 };
 
 /**

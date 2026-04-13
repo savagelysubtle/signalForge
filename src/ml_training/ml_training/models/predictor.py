@@ -135,6 +135,8 @@ class TrainingResult:
 def _identify_feature_columns(
     df: pd.DataFrame,
     model_mode: str = "shadow",
+    inference_only: bool = False,
+    prune_dead: bool = True,
 ) -> list[str]:
     """Identify columns that should be used as features.
 
@@ -146,8 +148,17 @@ def _identify_feature_columns(
         df: Dataset DataFrame.
         model_mode: ``"independent"`` excludes LLM-derived features (for the
             gate model that runs before GPT).  ``"shadow"`` includes everything.
+        inference_only: If True, also excludes training-only features (FFD,
+            TSFresh, HMM, rolling stats) that are unavailable at live inference.
+        prune_dead: If True, exclude features listed in ``dead_features.json``
+            (features with zero SHAP importance across 8+ strategies).
     """
-    from ml_training.features.engineering import LLM_FEATURES
+    from ml_training.features.engineering import (
+        LLM_FEATURES,
+        TRAINING_ONLY_FEATURES,
+        is_training_only_feature,
+        load_dead_features,
+    )
 
     exclude = {
         "ticker",
@@ -166,11 +177,21 @@ def _identify_feature_columns(
     }
     if model_mode == "independent":
         exclude |= LLM_FEATURES
+    if inference_only:
+        exclude |= TRAINING_ONLY_FEATURES
+    if prune_dead:
+        dead = load_dead_features()
+        if dead:
+            logger.info("Pruning %d dead features from training", len(dead))
+            exclude |= dead
 
     cols = [
         c
         for c in df.columns
-        if c not in exclude and not c.startswith("return_") and not c.startswith("direction_")
+        if c not in exclude
+        and not c.startswith("return_")
+        and not c.startswith("direction_")
+        and not (inference_only and is_training_only_feature(c))
     ]
 
     if model_mode == "independent":
@@ -311,18 +332,41 @@ class PredictionModel:
         regressor_params: dict[str, Any] | None = None,
         binary_mode: bool = False,
         model_mode: str = "shadow",
+        inference_only: bool = False,
     ) -> None:
         self._target_col = target_col
         self._return_col = return_col
         self._cpcv = cpcv_config or CPCVConfig()
         self._binary_mode = binary_mode
         self._model_mode = model_mode
+        self._inference_only = inference_only
         if binary_mode:
             self._clf_params = classifier_params or BINARY_CLASSIFIER_PARAMS.copy()
         else:
             self._clf_params = classifier_params or CLASSIFIER_PARAMS.copy()
+        tuned_decay = self._clf_params.pop("_decay_lambda", None)
+        if tuned_decay is not None:
+            self._cpcv.decay_lambda = tuned_decay
         self._reg_params = regressor_params or REGRESSOR_PARAMS.copy()
+        self._using_default_params = classifier_params is None
         self._result: TrainingResult | None = None
+
+    @staticmethod
+    def _scale_default_params(params: dict[str, Any], n_samples: int) -> dict[str, Any]:
+        """Scale tree complexity for large datasets that would underfit with defaults.
+
+        Only called when using default (untuned) params, so direct overrides are safe.
+        """
+        params = params.copy()
+        if n_samples > 200_000:
+            params["num_leaves"] = 31
+            params["max_depth"] = 7
+            params["min_child_samples"] = 300
+        elif n_samples > 50_000:
+            params["num_leaves"] = 23
+            params["max_depth"] = 6
+            params["min_child_samples"] = 150
+        return params
 
     def train(self, df: pd.DataFrame, n_rounds: int = 500) -> TrainingResult:
         """Train the model using CPCV walk-forward optimization.
@@ -336,7 +380,12 @@ class PredictionModel:
         """
         df = df.dropna(subset=[self._target_col]).sort_values("date").reset_index(drop=True)
 
-        feature_cols = _identify_feature_columns(df, model_mode=self._model_mode)
+        if self._using_default_params:
+            self._clf_params = self._scale_default_params(self._clf_params, len(df))
+
+        feature_cols = _identify_feature_columns(
+            df, model_mode=self._model_mode, inference_only=self._inference_only
+        )
         X, _encoders = _prepare_features(df, feature_cols)
 
         if self._binary_mode:
