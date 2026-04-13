@@ -763,24 +763,34 @@ async def _run_pipeline(
     )
 
     if isinstance(gather_results[0], BaseException):
-        logger.error(" Gemini track failed: %s", gather_results[0])
+        gemini_exc = gather_results[0]
+        logger.error(
+            "Gemini track failed (%s): %s",
+            type(gemini_exc).__name__,
+            gemini_exc or "(no message)",
+        )
         result.stage_errors.append(
             StageError(
                 stage="gemini",
-                error=str(gather_results[0]),
-                type=type(gather_results[0]).__name__,
+                error=str(gemini_exc) or type(gemini_exc).__name__,
+                type=type(gemini_exc).__name__,
             )
         )
     else:
         gemini_result = gather_results[0]
 
     if isinstance(gather_results[1], BaseException):
-        logger.error(" Claude track failed: %s", gather_results[1])
+        claude_exc = gather_results[1]
+        logger.error(
+            "Claude track failed (%s): %s",
+            type(claude_exc).__name__,
+            claude_exc or "(no message)",
+        )
         result.stage_errors.append(
             StageError(
                 stage="claude",
-                error=str(gather_results[1]),
-                type=type(gather_results[1]).__name__,
+                error=str(claude_exc) or type(claude_exc).__name__,
+                type=type(claude_exc).__name__,
             )
         )
     else:

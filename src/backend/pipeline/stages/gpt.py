@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 
 _semaphore = asyncio.Semaphore(3)
 _GPT_REASONING_EFFORT = "high"
-_GPT_MAX_COMPLETION_TOKENS = 16_384
+_GPT_MAX_COMPLETION_TOKENS = 32_768
 
 
 def _openai_strict_schema(model: type[BaseModel]) -> dict[str, Any]:
@@ -235,7 +235,25 @@ async def _call_gpt(
     async with _semaphore:
         response = await client.chat.completions.create(**api_kwargs)
 
-    return response.choices[0].message.content or ""
+    choice = response.choices[0]
+    if choice.finish_reason == "length":
+        logger.warning(
+            "GPT response truncated (finish_reason=length, model=%s, "
+            "max_completion_tokens=%s) — reasoning may have exhausted the budget",
+            GPT_MODEL,
+            api_kwargs.get("max_completion_tokens"),
+        )
+    content = choice.message.content
+    if not content:
+        logger.warning(
+            "GPT returned empty content (finish_reason=%s, model=%s)",
+            choice.finish_reason,
+            GPT_MODEL,
+        )
+        raise ValueError(
+            f"GPT returned empty response content (finish_reason={choice.finish_reason})"
+        )
+    return content
 
 
 async def run_debate(

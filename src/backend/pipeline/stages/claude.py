@@ -39,7 +39,7 @@ from services.keyring_service import get_api_key
 
 logger = logging.getLogger(__name__)
 
-_semaphore = asyncio.Semaphore(3)
+_semaphore = asyncio.Semaphore(5)
 _anthropic_client: AsyncAnthropic | None = None
 
 
