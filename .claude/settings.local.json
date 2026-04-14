@@ -69,7 +69,12 @@
       "Bash(find D:/Coding/signalForge -name *.joblib -o -name *model* -type f)",
       "Bash(git fetch:*)",
       "Bash(git merge:*)",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "Bash(git:*)",
+      "Bash(git --no-pager diff src/backend/pipeline/stages/claude.py)",
+      "Read(//tmp/**)",
+      "Bash(tail -n 80 \"C:\\\\\\\\Users\\\\\\\\nseni\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\C--Users-nseni-Documents-Coding-signalForge\\\\\\\\840943c6-98dc-428f-b1c0-492a070fa0d1\\\\\\\\tasks\\\\\\\\bw4ij13aj.output\")",
+      "Bash(tail -n 50 \"C:\\\\\\\\Users\\\\\\\\nseni\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\C--Users-nseni-Documents-Coding-signalForge\\\\\\\\840943c6-98dc-428f-b1c0-492a070fa0d1\\\\\\\\tasks\\\\\\\\bw4ij13aj.output\")"
     ]
   },
   "disabledMcpjsonServers": [

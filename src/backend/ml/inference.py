@@ -88,12 +88,37 @@ def _unpack_artifact(artifact: Any) -> dict[str, Any]:
     }
 
 
+def _artifact_paths(pattern: str) -> list[Path]:
+    """Resolve joblib paths under ``ARTIFACTS_DIR`` and ``ARTIFACTS_DIR/archive``.
+
+    When the same filename exists in both, the root ``ml/artifacts/`` copy wins
+    so promoted models override archived defaults without deleting history.
+
+    Args:
+        pattern: Glob pattern (e.g. ``model_*_active.joblib``).
+
+    Returns:
+        Sorted list of paths to load.
+    """
+    by_name: dict[str, Path] = {}
+    archive_dir = ARTIFACTS_DIR / "archive"
+    if archive_dir.is_dir():
+        for path in sorted(archive_dir.glob(pattern)):
+            by_name[path.name] = path
+    for path in sorted(ARTIFACTS_DIR.glob(pattern)):
+        by_name[path.name] = path
+    return sorted(by_name.values(), key=lambda p: p.name)
+
+
 def _load_all_models() -> None:
     """Discover and load all active models from the artifacts directory.
 
     Looks for:
       - ``model_{strategy}_active.joblib`` → per-strategy models
       - ``model_active.joblib`` → combined fallback model
+
+    Also loads the same filenames from ``ml/artifacts/archive/`` when present
+    (root-level files override archive on name collision).
 
     LLM-free models are auto-promoted to the independent registry so
     they can serve as gate models without a separate artifact file.
@@ -109,18 +134,23 @@ def _load_all_models() -> None:
         _loaded = True
         return
 
-    fallback_path = ARTIFACTS_DIR / ACTIVE_MODEL_NAME
-    if fallback_path.exists():
+    for fallback_path in (
+        ARTIFACTS_DIR / ACTIVE_MODEL_NAME,
+        ARTIFACTS_DIR / "archive" / ACTIVE_MODEL_NAME,
+    ):
+        if not fallback_path.exists():
+            continue
         try:
             _fallback_model = _unpack_artifact(joblib.load(fallback_path))
             version = (
                 _fallback_model["metadata"].model_version if _fallback_model["metadata"] else "?"
             )
-            logger.info("Loaded combined fallback model: %s", version)
+            logger.info("Loaded combined fallback model from %s: %s", fallback_path.name, version)
+            break
         except Exception:
-            logger.exception("Failed to load fallback model")
+            logger.exception("Failed to load fallback model from %s", fallback_path)
 
-    for p in sorted(ARTIFACTS_DIR.glob("model_*_active.joblib")):
+    for p in _artifact_paths("model_*_active.joblib"):
         if p.name == ACTIVE_MODEL_NAME:
             continue
         parts = p.stem.split("_")
@@ -152,7 +182,7 @@ def _load_all_models() -> None:
         except Exception:
             logger.exception("Failed to load model: %s", p.name)
 
-    for p in sorted(ARTIFACTS_DIR.glob("model_*_meta_active.joblib")):
+    for p in _artifact_paths("model_*_meta_active.joblib"):
         parts = p.stem.split("_")
         meta_idx = parts.index("meta")
         strategy_type = "_".join(parts[1:meta_idx])
