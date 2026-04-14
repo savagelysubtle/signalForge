@@ -360,6 +360,14 @@ async def get_pipeline_progress(run_id: str, user_id: CurrentUser) -> PipelinePr
             )
         )
 
+    # Guard: if the DB says "completed" but GPT hasn't produced any
+    # stage_outputs yet, keep reporting "running" so the frontend doesn't
+    # prematurely fetch an empty result.
+    if run_status == "completed" and "gpt" not in stage_counts:
+        has_upstream = bool(stage_counts.get("gemini") or stage_counts.get("claude"))
+        if has_upstream:
+            run_status = "running"
+
     return PipelineProgress(
         run_id=run_id,
         run_status=run_status,

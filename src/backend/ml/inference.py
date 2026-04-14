@@ -52,6 +52,13 @@ _meta_labeler_models: dict[str, Any] = {}
 _fallback_model: dict[str, Any] | None = None
 _loaded: bool = False
 
+# Bridge short strategy-template names → full ML-artifact names.
+# The ML training pipeline uses descriptive names; strategy templates use abbreviations.
+_STRATEGY_ALIASES: dict[str, str] = {
+    "golden_cross_swing": "ema_50_200_golden_cross_swing",
+    "bb_squeeze_breakout": "bollinger_band_squeeze_breakout_swing",
+}
+
 
 def _to_float(val: Any) -> float:
     """Coerce a feature value to float, returning NaN for missing/non-numeric.
@@ -178,17 +185,19 @@ def _get_model(
     if not _loaded:
         _load_all_models()
 
+    resolved = _STRATEGY_ALIASES.get(strategy_type, strategy_type) if strategy_type else None
+
     if mode == "independent":
-        if strategy_type and strategy_type in _independent_models:
-            return _independent_models[strategy_type]
+        if resolved and resolved in _independent_models:
+            return _independent_models[resolved]
         if _fallback_model is not None:
             feat_set = frozenset(_fallback_model.get("feature_names", []))
             if not (feat_set & LLM_FEATURES):
                 return _fallback_model
         return None
 
-    if strategy_type and strategy_type in _strategy_models:
-        return _strategy_models[strategy_type]
+    if resolved and resolved in _strategy_models:
+        return _strategy_models[resolved]
     return _fallback_model
 
 

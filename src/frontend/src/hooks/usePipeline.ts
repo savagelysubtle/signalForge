@@ -14,6 +14,14 @@ const POLL_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 /** Number of consecutive poll failures before surfacing an error. */
 const MAX_CONSECUTIVE_POLL_FAILURES = 5;
 
+/**
+ * Retry fetching the full result when the pipeline just completed but
+ * recommendations haven't landed in the DB yet (race condition between
+ * the pipeline_runs status update and the recommendations INSERT).
+ */
+const RESULT_SETTLE_RETRIES = 4;
+const RESULT_SETTLE_DELAY_MS = 3000;
+
 export function usePipeline() {
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -84,8 +92,16 @@ export function usePipeline() {
 
       if (cancelledRef.current) return null as unknown as PipelineResult;
 
-      // Fetch the full result now that the run has completed
-      const result = await api.getPipelineResult(run_id);
+      // Fetch the full result now that the run has completed.
+      // GPT recommendations may not have landed in the DB yet — retry
+      // a few times with a short delay if the result looks incomplete.
+      let result = await api.getPipelineResult(run_id);
+      for (let i = 0; i < RESULT_SETTLE_RETRIES; i++) {
+        if (result.recommendations && result.recommendations.length > 0) break;
+        await new Promise<void>((r) => setTimeout(r, RESULT_SETTLE_DELAY_MS));
+        if (cancelledRef.current) break;
+        result = await api.getPipelineResult(run_id);
+      }
       setCurrentResult(result);
       return result;
     } catch (err: unknown) {
@@ -111,7 +127,13 @@ export function usePipeline() {
 
   const getResult = useCallback(async (runId: string) => {
     try {
-      const result = await api.getPipelineResult(runId);
+      let result = await api.getPipelineResult(runId);
+      // Same settle-retry: GPT may still be persisting recommendations
+      for (let i = 0; i < RESULT_SETTLE_RETRIES; i++) {
+        if (result.recommendations && result.recommendations.length > 0) break;
+        await new Promise<void>((r) => setTimeout(r, RESULT_SETTLE_DELAY_MS));
+        result = await api.getPipelineResult(runId);
+      }
       setCurrentResult(result);
       return result;
     } catch (err: unknown) {

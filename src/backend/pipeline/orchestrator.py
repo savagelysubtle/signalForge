@@ -41,6 +41,7 @@ from pipeline.schemas import (
     ChartAnalysis,
     ChartError,
     FmpScreenerConfig,
+    FundamentalData,
     MultiTimeframeTechnical,
     PipelineResult,
     Recommendation,
@@ -661,6 +662,24 @@ async def _run_pipeline(
         ticker_symbols = ticker_symbols[: config.max_tickers]
 
     result.chart_indicators = config.chart_indicators
+
+    # ── Sync screening.tickers to match final ticker_symbols ────────────
+    # Perplexity may return different tickers than what pre_filter, scanner
+    # additions, or max_tickers capping select.  The frontend sidebar is
+    # driven by screening.tickers, so they must match the tickers that
+    # actually flow through Gemini/Claude/GPT — otherwise the UI shows
+    # stale screening entries with no corresponding recommendations.
+    if screening:
+        existing = {canonical_ticker_match_key(td.ticker): td for td in screening.tickers}
+        synced: list[FundamentalData] = []
+        for sym in ticker_symbols:
+            key = canonical_ticker_match_key(sym)
+            if key in existing:
+                synced.append(existing[key])
+            else:
+                synced.append(FundamentalData(ticker=sym))
+        screening.tickers = synced
+        result.screening = screening
 
     # ── Numerical TA + Live Quotes (CONCURRENT) ─────────────────────────
     # Both need ticker_symbols but are independent of each other.

@@ -8,7 +8,7 @@ import { FeedbackTab } from './FeedbackTab';
 import { RawTab } from './RawTab';
 import { motion, AnimatePresence } from 'motion/react';
 import clsx from 'clsx';
-import { AlertTriangle, X } from 'lucide-react';
+import { AlertTriangle, ChevronDown, X } from 'lucide-react';
 import { canonicalTickerMatchKey } from '../../utils/ticker';
 
 const STAGE_DISPLAY: Record<string, string> = {
@@ -96,6 +96,7 @@ function relativeTime(iso: string): string {
 export function DetailView({ tickerData, fullResult, initialTab = 'overview' }: DetailViewProps) {
   const [activeTab, setActiveTab] = useState<TabType>(initialTab);
   const [stageErrorBannerDismissed, setStageErrorBannerDismissed] = useState(false);
+  const [summaryExpanded, setSummaryExpanded] = useState(false);
 
   useEffect(() => {
     setStageErrorBannerDismissed(false);
@@ -167,9 +168,26 @@ export function DetailView({ tickerData, fullResult, initialTab = 'overview' }: 
           )}
         </div>
         {screeningSummary && (
-          <p className="text-xs text-text-secondary font-body leading-relaxed mt-3 max-w-4xl">
-            {screeningSummary}
-          </p>
+          <button
+            type="button"
+            onClick={() => setSummaryExpanded(prev => !prev)}
+            className="group flex items-start gap-1.5 mt-2 max-w-4xl text-left cursor-pointer"
+          >
+            <ChevronDown
+              className={clsx(
+                'w-3.5 h-3.5 shrink-0 mt-0.5 text-text-muted transition-transform duration-200',
+                summaryExpanded && 'rotate-180',
+              )}
+            />
+            <p
+              className={clsx(
+                'text-xs text-text-secondary font-body leading-relaxed',
+                !summaryExpanded && 'line-clamp-1',
+              )}
+            >
+              {screeningSummary}
+            </p>
+          </button>
         )}
       </div>
 
