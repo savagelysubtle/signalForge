@@ -36,6 +36,8 @@ Maps strategy indicator names to Chart-Img `studies[]` objects:
 | ATR       | `ATR@tv-basicstudies`    |
 | Stochastic| `Stochastic@tv-basicstudies` |
 | ADX       | `ADX@tv-basicstudies`    |
+| Supertrend| `Super Trend`            |
+| Williams_R| `Williams %R`            |
 
 ### TIMEFRAME_MAP
 

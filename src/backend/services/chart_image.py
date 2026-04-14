@@ -62,7 +62,7 @@ INDICATOR_MAP: dict[str, str] = {
     "DMI": "Directional Movement",
     "ADX": "Directional Movement",
     "Parabolic SAR": "Parabolic SAR",
-    "Supertrend": "Supertrend",
+    "Supertrend": "Super Trend",
     "Williams_R": "Williams %R",
 }
 

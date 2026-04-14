@@ -3,6 +3,7 @@ import { usePipeline } from '../../hooks/usePipeline';
 import { TickerCardList } from '../recommendations/TickerCardList';
 import { DetailView } from '../recommendations/DetailView';
 import { TabContentSkeleton } from '../shared/Skeleton';
+import { PipelineProgressBar } from './PipelineProgressBar';
 import { canonicalTickerMatchKey } from '../../utils/ticker';
 
 interface ResultsScreenProps {
@@ -10,7 +11,7 @@ interface ResultsScreenProps {
 }
 
 export function ResultsScreen({ runId }: ResultsScreenProps) {
-  const { getResult, currentResult, isRunning } = usePipeline();
+  const { getResult, currentResult, isRunning, progress } = usePipeline();
 
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -87,18 +88,32 @@ export function ResultsScreen({ runId }: ResultsScreenProps) {
             </div>
           ))}
         </div>
-        {/* Detail panel skeleton */}
+        {/* Detail panel — show progress bar when pipeline is running, skeleton otherwise */}
         <div className="flex-1 flex flex-col">
-          <div className="px-6 py-4 border-b border-border-gutter bg-bg-asphalt/70 space-y-2">
-            <div className="h-7 w-32 animate-pulse rounded bg-bg-steel" />
-            <div className="h-3 w-48 animate-pulse rounded bg-bg-steel" />
-          </div>
-          <div className="border-b border-border-gutter bg-bg-asphalt px-4 py-3 flex gap-4">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className="h-4 w-16 animate-pulse rounded bg-bg-steel" />
-            ))}
-          </div>
-          <TabContentSkeleton />
+          {isRunning && progress ? (
+            <div className="flex-1 flex items-center justify-center p-8">
+              <div className="w-full max-w-lg">
+                <PipelineProgressBar
+                  progress={progress}
+                  isRunning={isRunning}
+                  runningLabel="Pipeline in progress…"
+                />
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="px-6 py-4 border-b border-border-gutter bg-bg-asphalt/70 space-y-2">
+                <div className="h-7 w-32 animate-pulse rounded bg-bg-steel" />
+                <div className="h-3 w-48 animate-pulse rounded bg-bg-steel" />
+              </div>
+              <div className="border-b border-border-gutter bg-bg-asphalt px-4 py-3 flex gap-4">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <div key={i} className="h-4 w-16 animate-pulse rounded bg-bg-steel" />
+                ))}
+              </div>
+              <TabContentSkeleton />
+            </>
+          )}
         </div>
       </div>
     );

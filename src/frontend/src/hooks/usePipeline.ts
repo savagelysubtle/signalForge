@@ -127,11 +127,47 @@ export function usePipeline() {
 
   const getResult = useCallback(async (runId: string) => {
     try {
+      // Check if the pipeline is still running before fetching results.
+      // This handles the case where a user navigates to /?run=xxx while
+      // the pipeline is mid-execution (e.g. GPT stage still in progress).
+      const p = await api.getPipelineProgress(runId);
+
+      if (!DONE_STATUSES.has(p.run_status)) {
+        setIsRunning(true);
+        setProgress(p);
+
+        const pollStart = Date.now();
+        let consecutiveFailures = 0;
+        while (!cancelledRef.current) {
+          await new Promise<void>((r) => setTimeout(r, POLL_MS));
+          if (cancelledRef.current) break;
+
+          if (Date.now() - pollStart > POLL_TIMEOUT_MS) {
+            setError('Pipeline timed out — it may still be running. Check history later.');
+            break;
+          }
+
+          try {
+            const prog = await api.getPipelineProgress(runId);
+            consecutiveFailures = 0;
+            setProgress(prog);
+            if (DONE_STATUSES.has(prog.run_status)) break;
+          } catch {
+            consecutiveFailures++;
+            if (consecutiveFailures >= MAX_CONSECUTIVE_POLL_FAILURES) {
+              setError('Lost connection. The pipeline may still be running — check history later.');
+              break;
+            }
+          }
+        }
+        setIsRunning(false);
+      }
+
       let result = await api.getPipelineResult(runId);
-      // Same settle-retry: GPT may still be persisting recommendations
       for (let i = 0; i < RESULT_SETTLE_RETRIES; i++) {
         if (result.recommendations && result.recommendations.length > 0) break;
         await new Promise<void>((r) => setTimeout(r, RESULT_SETTLE_DELAY_MS));
+        if (cancelledRef.current) break;
         result = await api.getPipelineResult(runId);
       }
       setCurrentResult(result);
