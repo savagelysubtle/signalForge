@@ -70,6 +70,7 @@ from pipeline.stages.risk_validator import validate_risks
 from services.chart_image import clear_run_symbol_cache, fetch_annotated_chart
 from services.fmp_service import (
     FmpEnrichedStock,
+    apply_regime_filter_adjustments,
     apply_regime_weight_adjustments,
     compute_composite_scores,
     fetch_quotes,
@@ -365,6 +366,7 @@ async def _run_pipeline(
     """
     client = await get_db()
     cost_tracker = PipelineCostTracker()
+    stage_timings: dict[str, float] = {}
 
     # ── Stage 0 + 0.5: FMP Pre-Screening || Regime (CONCURRENT) ─────────
     # FMP screening and regime classification are independent — run in parallel
@@ -446,6 +448,7 @@ async def _run_pipeline(
         return regime_out, regime_meta
 
     # Launch both concurrently
+    _stage0_start = time.perf_counter()
     fmp_task = asyncio.create_task(_fmp_screening())
     regime_task = asyncio.create_task(_regime_classification())
 
@@ -491,18 +494,26 @@ async def _run_pipeline(
 
     fmp_map: dict[str, FmpEnrichedStock] = {}
     if fmp_candidates:
-        fmp_map = {s.symbol: s for s in fmp_candidates}
+        fmp_map = {
+            canonical_ticker_match_key(normalize_ticker(s.symbol)): s for s in fmp_candidates
+        }
 
     regime_context = format_regime_header(regime) if regime else ""
 
-    # Re-score FMP with regime-adjusted weights (sync point — needs both)
+    # Re-score FMP with regime-adjusted weights + filters (sync point — needs both)
     if regime and fmp_candidates and config.fmp_screener:
         adjusted_config = apply_regime_weight_adjustments(config.fmp_screener, regime.regime_type)
+        adjusted_config = apply_regime_filter_adjustments(adjusted_config, regime.regime_type)
         fmp_candidates = compute_composite_scores(fmp_candidates, adjusted_config)
         fmp_candidates.sort(key=lambda s: s.composite_score or 0, reverse=True)
-        fmp_map = {s.symbol: s for s in fmp_candidates}
+        fmp_map = {
+            canonical_ticker_match_key(normalize_ticker(s.symbol)): s for s in fmp_candidates
+        }
+
+    stage_timings["fmp_regime"] = round(time.perf_counter() - _stage0_start, 2)
 
     # ── Stage 1: Perplexity (get ticker list) ─────────────────────────────
+    _stage1_start = time.perf_counter()
     screening: ScreeningResult | None = None
     try:
 
@@ -616,11 +627,16 @@ async def _run_pipeline(
 
     if not ticker_symbols and fmp_candidates:
         cap = config.max_tickers if config.max_tickers else 20
-        ticker_symbols = [normalize_ticker(s.symbol) for s in fmp_candidates[:cap]]
+        qualified = [s for s in fmp_candidates if (s.composite_score or 0) >= 60]
+        fallback_pool = qualified or fmp_candidates
+        ticker_symbols = [normalize_ticker(s.symbol) for s in fallback_pool[:cap]]
         result.meta["ticker_source"] = "fmp_fallback"
+        result.meta["fmp_fallback_qualified"] = len(qualified)
         logger.info(
-            " No tickers from discovery/screening; using top %d FMP pre-screened symbols",
+            " No tickers from discovery/screening; using top %d FMP pre-screened symbols"
+            " (%d with composite >= 60)",
             len(ticker_symbols),
+            len(qualified),
         )
 
     ticker_symbols = dedupe_ticker_symbols_preserve_order(ticker_symbols)
@@ -639,7 +655,9 @@ async def _run_pipeline(
             )
         )
         result.meta["halt_reason"] = "no_tickers"
-        return await _finalize(run_id, result, start, client, regime_context, cost_tracker)
+        return await _finalize(
+            run_id, result, start, client, regime_context, cost_tracker, stage_timings
+        )
 
     # ── Lightweight pre-filter (no LLM) ──────────────────────────────────
     _tickers_before_pre_filter = list(ticker_symbols)
@@ -680,6 +698,8 @@ async def _run_pipeline(
                 synced.append(FundamentalData(ticker=sym))
         screening.tickers = synced
         result.screening = screening
+
+    stage_timings["perplexity"] = round(time.perf_counter() - _stage1_start, 2)
 
     # ── Numerical TA + Live Quotes (CONCURRENT) ─────────────────────────
     # Both need ticker_symbols but are independent of each other.
@@ -731,6 +751,7 @@ async def _run_pipeline(
             logger.warning("Failed to update enriched screening: %s", exc)
 
     # ── Three Independent Parallel Tracks ────────────────────────────────
+    _stage23_start = time.perf_counter()
     # Track A: Perplexity results already collected above (screening)
     # Track B: Gemini (FMP context + Perplexity article URLs/highlights)
     # Track C: Claude (numerical TA + chart + live quotes — NO sentiment)
@@ -758,7 +779,7 @@ async def _run_pipeline(
         return sentiments_b, meta_b
 
     async def _track_c_claude() -> tuple[list[ChartAnalysis], list[dict]]:
-        """Track C: Technical analysis with numerical TA + live quotes (no sentiment)."""
+        """Track C: Technical analysis with numerical TA + live quotes + FMP context."""
         charts_c, meta_c = await run_chart_analysis(
             ticker_symbols,
             config,
@@ -767,6 +788,7 @@ async def _run_pipeline(
             user_id,
             regime_context=regime_context,
             live_quotes=claude_live_quotes or None,
+            fmp_context=fmp_map or None,
             is_crypto=config.fmp_screener.is_crypto if config.fmp_screener else False,
         )
         for cm in meta_c:
@@ -871,6 +893,8 @@ async def _run_pipeline(
             cost_tracker,
         )
 
+    stage_timings["gemini_claude"] = round(time.perf_counter() - _stage23_start, 2)
+
     # ── Stage 3.5: Pre-GPT ML prior (prompt injection + debate escalation) ──
     pre_gpt_hints: dict[str, Any] = {}
     ml_escalation_flag = False
@@ -933,6 +957,7 @@ async def _run_pipeline(
             )
 
     # ── Stage 4: GPT Synthesis (convergence point — track-aware) ─────────
+    _stage4_start = time.perf_counter()
     sector_consensus = _aggregate_sector_sentiment(sentiments, screening)
     live_quotes: dict = {}
     reflection_metrics: dict | None = None
@@ -990,6 +1015,8 @@ async def _run_pipeline(
             )
             logger.exception("GPT stage failed")
 
+    stage_timings["gpt"] = round(time.perf_counter() - _stage4_start, 2)
+
     # Track agreement (Perplexity + Gemini + Claude — true 3-track consensus)
     for rec in result.recommendations:
         try:
@@ -1022,26 +1049,6 @@ async def _run_pipeline(
         for rec in result.recommendations:
             if rec.raw_gpt_confidence is None:
                 rec.raw_gpt_confidence = rec.confidence
-
-        # Clamp confidence by action — GPT often interprets confidence as
-        # "certainty in its verdict" rather than "directional trade conviction."
-        # NO_TRADE should be low (no edge), WATCH moderate (developing setup).
-        _ACTION_CONFIDENCE_CAPS: dict[str, float] = {
-            "NO_TRADE": 0.25,
-            "HOLD": 0.35,
-            "WATCH": 0.55,
-        }
-        for rec in result.recommendations:
-            cap = _ACTION_CONFIDENCE_CAPS.get(rec.action)
-            if cap is not None and rec.confidence > cap:
-                logger.info(
-                    "Clamped %s %s confidence %.2f -> %.2f",
-                    rec.ticker,
-                    rec.action,
-                    rec.confidence,
-                    cap,
-                )
-                rec.confidence = cap
 
     # Confidence calibration (Phase 7)
     if result.recommendations:
@@ -1319,7 +1326,9 @@ async def _run_pipeline(
         rec_dicts = [r.model_dump(mode="json") for r in result.recommendations]
         _paper_task = asyncio.create_task(schedule_paper_tracking(run_id, rec_dicts, user_id))  # noqa: RUF006 — fire-and-forget; ref stored to prevent GC
 
-    return await _finalize(run_id, result, start, client, regime_context, cost_tracker)
+    return await _finalize(
+        run_id, result, start, client, regime_context, cost_tracker, stage_timings
+    )
 
 
 async def _finalize(
@@ -1329,6 +1338,7 @@ async def _finalize(
     client: Any,
     regime_context: str,
     cost_tracker: PipelineCostTracker | None = None,
+    stage_timings: dict[str, float] | None = None,
 ) -> PipelineResult:
     """Finalize pipeline run: timing, prompt versions, cost, DB update.
 
@@ -1339,12 +1349,39 @@ async def _finalize(
         client: Supabase client.
         regime_context: Unused, kept for signature consistency.
         cost_tracker: Accumulated LLM cost data for this run.
+        stage_timings: Per-stage wall-clock durations in seconds.
 
     Returns:
         Completed PipelineResult.
     """
     elapsed = time.perf_counter() - start
     result.total_duration_seconds = round(elapsed, 2)
+
+    timing_parts = [f"total={elapsed:.1f}s"]
+    if stage_timings:
+        for stage, secs in stage_timings.items():
+            timing_parts.append(f"{stage}={secs:.1f}s")
+        result.meta["stage_timings"] = stage_timings
+    error_count = len(result.stage_errors)
+    rec_count = len(result.recommendations)
+    ticker_count = len(result.input_tickers) if result.input_tickers else 0
+    logger.info(
+        "[Pipeline Summary] run=%s strategy=%s tickers=%d recs=%d errors=%d | %s",
+        run_id[:12],
+        result.strategy_name or "N/A",
+        ticker_count,
+        rec_count,
+        error_count,
+        ", ".join(timing_parts),
+    )
+    if result.stage_errors:
+        for err in result.stage_errors:
+            logger.warning(
+                "[Pipeline Summary] stage_error: stage=%s type=%s error=%s",
+                err.stage,
+                err.type,
+                err.error[:200] if err.error else "",
+            )
     result.prompt_versions = {
         "regime": regime_hash(),
         "perplexity": discovery_hash(),
@@ -1432,6 +1469,9 @@ def _stage_output_row(run_id: str, metadata: dict) -> dict:
         "prompt_text": metadata.get("prompt_text", ""),
         "raw_response": metadata.get("raw_response", ""),
         "model_used": metadata.get("model") or metadata.get("model_used", ""),
+        "tokens_in": metadata.get("tokens_in"),
+        "tokens_out": metadata.get("tokens_out"),
+        "cost_estimate": metadata.get("cost_estimate"),
         "duration_ms": metadata.get("duration_ms", 0),
         "status": metadata.get("status", "unknown"),
         "retry_count": metadata.get("retry_count", 0),
@@ -1465,18 +1505,32 @@ async def _save_stage_output(
     if not metadata:
         return
 
-    if cost_tracker and should_estimate_cost_from_metadata(metadata):
+    if should_estimate_cost_from_metadata(metadata):
+        from pipeline.cost_tracker import _PRICING
         from pipeline.token_budget import count_tokens
 
         model = (metadata.get("model") or metadata.get("model_used") or "").strip()
-        input_tokens = count_tokens(metadata.get("prompt_text", ""))
-        output_tokens = count_tokens(metadata.get("raw_response", ""))
-        cost_tracker.record(
-            stage=metadata.get("stage", "unknown"),
-            model=model,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-        )
+
+        in_tok = metadata.get("tokens_in")
+        out_tok = metadata.get("tokens_out")
+        if in_tok is None:
+            in_tok = count_tokens(metadata.get("prompt_text", ""))
+            metadata["tokens_in"] = in_tok
+        if out_tok is None:
+            out_tok = count_tokens(metadata.get("raw_response", ""))
+            metadata["tokens_out"] = out_tok
+
+        input_rate, output_rate = _PRICING.get(model, (5.0, 15.0))
+        cost = (in_tok * input_rate + out_tok * output_rate) / 1_000_000
+        metadata["cost_estimate"] = round(cost, 6)
+
+        if cost_tracker:
+            cost_tracker.record(
+                stage=metadata.get("stage", "unknown"),
+                model=model,
+                input_tokens=in_tok,
+                output_tokens=out_tok,
+            )
 
     await _save_stage_outputs_batch(run_id, [metadata])
 

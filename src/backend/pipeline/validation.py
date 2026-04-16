@@ -133,25 +133,29 @@ def with_validation_retry(  # noqa: UP047
     ) -> Callable[..., Awaitable[T | None]]:
         @wraps(fn)
         async def wrapper(*args: object, **kwargs: object) -> T | None:
+            import time
+
+            fn_name = getattr(fn, "__name__", repr(fn))
             breaker_provider = provider or fn.__module__.split(".")[-1]
             try:
                 check_provider(breaker_provider)
             except CircuitOpenError as exc:
-                logger.warning("Skipping %s: %s", fn.__name__, exc)
+                logger.warning("Skipping %s: %s", fn_name, exc)
                 return None
 
             last_error: str = ""
+            total_start = time.perf_counter()
 
             for attempt in range(1 + max_retries):
                 if attempt > 0:
                     delay = base_delay * (2 ** (attempt - 1))
                     if delay > 0:
                         logger.info(
-                            "Backing off %.1fs before retry %d/%d for %s",
+                            "[Validation] Backing off %.1fs before retry %d/%d for %s",
                             delay,
                             attempt,
                             max_retries,
-                            fn.__name__,
+                            fn_name,
                         )
                         await asyncio.sleep(delay)
 
@@ -161,31 +165,69 @@ def with_validation_retry(  # noqa: UP047
                         f"{schema.model_json_schema()}"
                     )
                     logger.warning(
-                        "Retry %d/%d for %s: %s",
+                        "[Validation] Retry %d/%d for %s — error: %s",
                         attempt,
                         max_retries,
-                        fn.__name__,
+                        fn_name,
                         last_error,
                     )
 
+                attempt_start = time.perf_counter()
                 try:
                     raw_text = await fn(*args, **kwargs)
+                    attempt_elapsed = time.perf_counter() - attempt_start
                     validated = validate_llm_json(raw_text, schema)
                     validated.__dict__["_retry_count"] = attempt
+                    total_elapsed = time.perf_counter() - total_start
+                    logger.info(
+                        "[Validation] %s succeeded — attempt %d/%d, "
+                        "attempt_time=%.1fs, total_time=%.1fs",
+                        fn_name,
+                        attempt + 1,
+                        1 + max_retries,
+                        attempt_elapsed,
+                        total_elapsed,
+                    )
                     record_success(breaker_provider)
                     return validated
                 except (ValueError, json.JSONDecodeError) as exc:
+                    attempt_elapsed = time.perf_counter() - attempt_start
                     last_error = f"JSON parse error: {exc}"
+                    logger.warning(
+                        "[Validation] %s attempt %d failed after %.1fs — %s",
+                        fn_name,
+                        attempt + 1,
+                        attempt_elapsed,
+                        last_error,
+                    )
                 except ValidationError as exc:
+                    attempt_elapsed = time.perf_counter() - attempt_start
                     last_error = f"Schema validation error: {exc}"
+                    logger.warning(
+                        "[Validation] %s attempt %d failed after %.1fs — %s",
+                        fn_name,
+                        attempt + 1,
+                        attempt_elapsed,
+                        last_error,
+                    )
                 except Exception as exc:
+                    attempt_elapsed = time.perf_counter() - attempt_start
                     last_error = f"Provider error: {exc}"
+                    logger.warning(
+                        "[Validation] %s attempt %d failed after %.1fs — %s",
+                        fn_name,
+                        attempt + 1,
+                        attempt_elapsed,
+                        last_error,
+                    )
                     record_failure(breaker_provider)
 
+            total_elapsed = time.perf_counter() - total_start
             logger.error(
-                "All %d attempts failed for %s. Last error: %s",
+                "[Validation] All %d attempts failed for %s after %.1fs total. Last error: %s",
                 1 + max_retries,
-                fn.__name__,
+                fn_name,
+                total_elapsed,
                 last_error,
             )
             record_failure(breaker_provider)

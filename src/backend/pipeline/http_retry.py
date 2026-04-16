@@ -63,12 +63,26 @@ def with_transient_retry(
     def decorator(fn: Callable[..., Awaitable[T]]) -> Callable[..., Awaitable[T]]:
         @wraps(fn)
         async def wrapper(*args: object, **kwargs: object) -> T:
+            import time
+
             last_exc: Exception | None = None
+            total_start = time.perf_counter()
             for attempt in range(max_retries):
+                attempt_start = time.perf_counter()
                 try:
-                    return await fn(*args, **kwargs)
+                    result = await fn(*args, **kwargs)
+                    if attempt > 0:
+                        logger.info(
+                            "[HTTPRetry] %s succeeded on attempt %d/%d after %.1fs total",
+                            getattr(fn, "__name__", repr(fn)),
+                            attempt + 1,
+                            max_retries,
+                            time.perf_counter() - total_start,
+                        )
+                    return result
                 except Exception as exc:
                     last_exc = exc
+                    attempt_elapsed = time.perf_counter() - attempt_start
                     code = _extract_status_code(exc)
                     if code not in transient_codes:
                         raise
@@ -77,16 +91,25 @@ def with_transient_retry(
                     if not isinstance(fn_label, str):
                         fn_label = repr(fn)
                     logger.warning(
-                        "Transient error in %s (attempt %d/%d, code=%s), retrying in %.0fs: %s",
+                        "[HTTPRetry] Transient error in %s (attempt %d/%d, code=%s, "
+                        "attempt_time=%.1fs), retrying in %.0fs: %s",
                         fn_label,
                         attempt + 1,
                         max_retries,
                         code,
+                        attempt_elapsed,
                         wait,
                         exc,
                     )
                     await asyncio.sleep(wait)
 
+            total_elapsed = time.perf_counter() - total_start
+            logger.error(
+                "[HTTPRetry] All %d attempts failed for %s after %.1fs total",
+                max_retries,
+                getattr(fn, "__name__", repr(fn)),
+                total_elapsed,
+            )
             raise last_exc  # type: ignore[misc]
 
         return wrapper

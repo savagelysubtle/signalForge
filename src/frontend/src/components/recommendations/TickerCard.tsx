@@ -11,7 +11,8 @@ const ACTION_PILL: Record<string, { text: string; bg: string; border: string; te
   WATCH:    { text: 'WATCH',    bg: 'bg-accent-electric/20', border: 'border-accent-electric/35', text_color: 'text-accent-electric' },
 };
 
-function confidencePercentClass(confidence: number): string {
+function confidencePercentClass(confidence: number, action?: string): string {
+  if (action === 'NO_TRADE') return 'text-[var(--text-muted)]';
   if (confidence >= 0.7) return 'text-[var(--accent-profit)]';
   if (confidence >= 0.5) return 'text-[var(--accent-alert)]';
   return 'text-[var(--accent-loss)]';
@@ -53,7 +54,7 @@ export function TickerCard({ data, action, confidence, isSelected, onClick, onRi
           <AssetTypeBadge type={data.asset_type} />
           {confidence !== undefined && !Number.isNaN(confidence) && (
             <span
-              className={clsx('text-sm font-mono tabular-nums font-medium', confidencePercentClass(confidence))}
+              className={clsx('text-sm font-mono tabular-nums font-medium', confidencePercentClass(confidence, action))}
             >
               {Math.round(confidence * 100)}%
             </span>

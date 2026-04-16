@@ -11,7 +11,7 @@ from __future__ import annotations
 from pipeline.schemas import StrategyConfig
 from utils.hashing import prompt_hash
 
-PROMPT_VERSION = "v11"
+PROMPT_VERSION = "v12"
 
 CHART_SYSTEM_PROMPT = """\
 You are a technical analyst. Your PRIMARY data source is the precise numerical
@@ -94,12 +94,14 @@ def build_chart_prompt(
     indicators_override: list[str] | None = None,
     regime_context: str = "",
     live_quote_context: str | None = None,
+    fmp_context_str: str | None = None,
 ) -> str:
     """Build the user prompt for independent technical chart analysis.
 
     Claude receives numerical TA data as its PRIMARY input. The chart image
     is a visual sanity check. Live quotes provide real-time price calibration
-    for support/resistance/entry levels.
+    for support/resistance/entry levels. FMP context provides fundamental
+    anchors (earnings dates, quality scores, insider activity).
 
     Args:
         ticker: Stock/crypto ticker symbol.
@@ -112,6 +114,7 @@ def build_chart_prompt(
             strategy's ``chart_indicators``.
         regime_context: Pre-formatted market regime header block, or empty.
         live_quote_context: Pre-formatted real-time quote string, or None.
+        fmp_context_str: Pre-formatted FMP fundamental context, or None.
 
     Returns:
         The formatted user prompt string.
@@ -140,6 +143,17 @@ def build_chart_prompt(
             "to calibrate your current_price, support/resistance, and entry levels. "
             "If the live price diverges significantly from the TA data, note it."
             "\n--- END LIVE MARKET DATA ---"
+        )
+
+    if fmp_context_str:
+        parts.append(
+            "\n--- FUNDAMENTAL CONTEXT (from FMP pre-screening) ---"
+            f"\n{fmp_context_str}"
+            "\nUse this to contextualize your technical analysis: upcoming earnings "
+            "may explain volatility compression, insider buying supports bullish setups, "
+            "quality scores anchor conviction. Do NOT override your technical read — "
+            "treat this as supplementary evidence."
+            "\n--- END FUNDAMENTAL CONTEXT ---"
         )
 
     if config.ta_focus:

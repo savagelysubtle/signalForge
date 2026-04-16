@@ -54,6 +54,8 @@ logger = logging.getLogger(__name__)
 _semaphore = asyncio.Semaphore(3)
 _GPT_REASONING_EFFORT = "high"
 
+_last_usage: dict[str, Any] = {}
+
 
 def _openai_strict_schema(model: type[BaseModel]) -> dict[str, Any]:
     """Build a fully inlined OpenAI strict JSON schema for structured outputs."""
@@ -213,11 +215,26 @@ async def _call_gpt(
     Returns:
         Raw response text from the API.
     """
+    from pipeline.token_budget import count_tokens
+
     client = _get_client()
 
     full_user_prompt = user_prompt
     if error_context:
         full_user_prompt = f"{user_prompt}\n\n---\nCORRECTION: {error_context}"
+
+    sys_tokens = count_tokens(system_prompt)
+    user_tokens = count_tokens(full_user_prompt)
+    logger.info(
+        "[GPT API] Sending request — model=%s, system_tokens=%d, user_tokens=%d, "
+        "total_input=%d, max_completion_tokens=%d, reasoning_effort=%s",
+        GPT_MODEL,
+        sys_tokens,
+        user_tokens,
+        sys_tokens + user_tokens,
+        GPT_MAX_TOKENS,
+        _GPT_REASONING_EFFORT,
+    )
 
     api_kwargs: dict[str, Any] = {
         "model": GPT_MODEL,
@@ -231,13 +248,47 @@ async def _call_gpt(
     if response_format:
         api_kwargs["response_format"] = response_format
 
+    call_start = time.perf_counter()
     async with _semaphore:
         response = await client.chat.completions.create(**api_kwargs)
+    call_elapsed = time.perf_counter() - call_start
+
+    usage = response.usage
+    usage_str = ""
+    reasoning_tokens = None
+    if usage:
+        usage_str = (
+            f", prompt_tokens={usage.prompt_tokens}, completion_tokens={usage.completion_tokens}"
+            f", total_tokens={usage.total_tokens}"
+        )
+        reasoning_tokens = getattr(
+            getattr(usage, "completion_tokens_details", None), "reasoning_tokens", None
+        )
+        if reasoning_tokens:
+            usage_str += f", reasoning_tokens={reasoning_tokens}"
+
+        _last_usage.update(
+            {
+                "prompt_tokens": usage.prompt_tokens,
+                "completion_tokens": usage.completion_tokens,
+                "total_tokens": usage.total_tokens,
+                "reasoning_tokens": reasoning_tokens,
+                "api_call_seconds": round(call_elapsed, 2),
+            }
+        )
 
     choice = response.choices[0]
+    logger.info(
+        "[GPT API] Response received — %.1fs, finish_reason=%s, model=%s%s",
+        call_elapsed,
+        choice.finish_reason,
+        response.model,
+        usage_str,
+    )
+
     if choice.finish_reason == "length":
         logger.warning(
-            "GPT response truncated (finish_reason=length, model=%s, "
+            "[GPT API] Response TRUNCATED (finish_reason=length, model=%s, "
             "max_completion_tokens=%s) — reasoning may have exhausted the budget",
             GPT_MODEL,
             api_kwargs.get("max_completion_tokens"),
@@ -245,7 +296,7 @@ async def _call_gpt(
     content = choice.message.content
     if not content:
         logger.warning(
-            "GPT returned empty content (finish_reason=%s, model=%s)",
+            "[GPT API] Empty content (finish_reason=%s, model=%s)",
             choice.finish_reason,
             GPT_MODEL,
         )
@@ -571,19 +622,46 @@ async def _run_judge_phase(
         ml_escalation=ml_escalation,
     )
 
+    from pipeline.token_budget import count_tokens
+
+    pre_budget_tokens = count_tokens(JUDGE_SYSTEM_PROMPT) + count_tokens(judge_prompt)
     judge_prompt = enforce_token_budget(JUDGE_SYSTEM_PROMPT, judge_prompt, model=GPT_MODEL)
+    post_budget_tokens = count_tokens(JUDGE_SYSTEM_PROMPT) + count_tokens(judge_prompt)
+
+    if pre_budget_tokens != post_budget_tokens:
+        logger.warning(
+            "[Judge] Token budget enforced: %d → %d tokens (trimmed %d)",
+            pre_budget_tokens,
+            post_budget_tokens,
+            pre_budget_tokens - post_budget_tokens,
+        )
+    else:
+        logger.info(
+            "[Judge] Prompt within budget: %d tokens, %d tickers",
+            post_budget_tokens,
+            len(tickers),
+        )
 
     metadata: dict = {
         "stage": "gpt_judge",
         "model": GPT_MODEL,
         "prompt_hash": get_judge_hash(),
         "prompt_text": f"{JUDGE_SYSTEM_PROMPT}\n---\n{judge_prompt}",
+        "input_tokens_estimate": post_budget_tokens,
+        "ticker_count": len(tickers),
     }
 
     start = time.perf_counter()
+    _last_usage.clear()
     try:
         result = await _call_gpt_judge(JUDGE_SYSTEM_PROMPT, judge_prompt)
         metadata["duration_ms"] = int((time.perf_counter() - start) * 1000)
+
+        if _last_usage:
+            metadata["tokens_in"] = _last_usage.get("prompt_tokens")
+            metadata["tokens_out"] = _last_usage.get("completion_tokens")
+            metadata["reasoning_tokens"] = _last_usage.get("reasoning_tokens")
+            metadata["api_call_seconds"] = _last_usage.get("api_call_seconds")
 
         if result is not None:
             metadata["status"] = "success"
@@ -598,6 +676,10 @@ async def _run_judge_phase(
         return [], metadata
     except Exception as exc:
         metadata["duration_ms"] = int((time.perf_counter() - start) * 1000)
+        if _last_usage:
+            metadata["tokens_in"] = _last_usage.get("prompt_tokens")
+            metadata["tokens_out"] = _last_usage.get("completion_tokens")
+            metadata["reasoning_tokens"] = _last_usage.get("reasoning_tokens")
         metadata["status"] = "api_error"
         metadata["error"] = str(exc)
         logger.exception("GPT judge failed")

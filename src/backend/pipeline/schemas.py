@@ -725,6 +725,23 @@ class ScoringWeights(BaseModel):
     quality: float = 0.25
 
 
+class TechnicalFilters(BaseModel):
+    """Technical indicator filters applied after FMP screening.
+
+    These filters require per-candidate API calls to ``fetch_technical_indicator``
+    and are applied post-enrichment. They close the gap between what the screener
+    can express and what the strategy actually trades.
+    """
+
+    ema_50_vs_200: Literal["golden_cross", "death_cross", "above", "below"] | None = None
+    rsi_period: int = 14
+    rsi_min: float | None = None
+    rsi_max: float | None = None
+    adx_min: float | None = None
+    distance_from_52wk_high_pct_max: float | None = None
+    distance_from_52wk_low_pct_min: float | None = None
+
+
 class FmpScreenerConfig(BaseModel):
     """Strategy-level FMP stock screener configuration.
 
@@ -750,8 +767,10 @@ class FmpScreenerConfig(BaseModel):
     is_crypto: bool = False
 
     # API-level screener filters (stocks only — ignored when is_crypto=True)
-    country: str | None = None
-    exchange: str | None = None
+    # Accept a single string or list of strings for multi-exchange support.
+    # Defaults to CA/TSX when omitted — we are Canadian traders.
+    country: str | list[str] | None = None
+    exchange: str | list[str] | None = None
     sector: str | None = None
     industry: str | None = None
     market_cap_min: int | None = None
@@ -787,6 +806,7 @@ class FmpScreenerConfig(BaseModel):
     price_change_1m_min: float | None = None
     price_change_1m_max: float | None = None
     price_change_3m_min: float | None = None
+    price_change_6m_min: float | None = None
 
     # Insider activity filter (from /stable/insider-trading/statistics)
     require_insider_buying: bool = False
@@ -808,6 +828,9 @@ class FmpScreenerConfig(BaseModel):
     weight_quality: float | None = None
 
     enrich_with_ratios: bool = True
+
+    # Technical indicator filters (applied post-enrichment via per-candidate API calls)
+    technical_filters: TechnicalFilters | None = None
 
 
 class ScreenerOverrides(BaseModel):

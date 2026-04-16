@@ -193,6 +193,8 @@ def format_fmp_for_gpt(
             momentum_parts.append(f"1M:{stock.price_change_1m:+.1f}%")
         if stock.price_change_3m is not None:
             momentum_parts.append(f"3M:{stock.price_change_3m:+.1f}%")
+        if stock.price_change_6m is not None:
+            momentum_parts.append(f"6M:{stock.price_change_6m:+.1f}%")
         if momentum_parts:
             lines.append(f"Price momentum: {' '.join(momentum_parts)}")
         if stock.earnings_date:

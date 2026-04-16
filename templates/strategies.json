@@ -58,7 +58,6 @@
       "price_max": 200.0,
       "market_cap_min": 500000000,
       "market_cap_max": 15000000000,
-      "beta_min": 1.0,
       "beta_max": 3.0,
       "is_actively_trading": true,
       "is_etf": false,
@@ -66,19 +65,23 @@
       "enrich_with_ratios": true,
       "pe_min": 3.0,
       "pe_max": 40.0,
-      "roe_min": 5.0,
       "debt_equity_max": 2.5,
-      "piotroski_min": 3,
-      "altman_z_min": 1.8,
-      "price_change_3m_min": 5.0,
-      "price_change_1m_min": 0.0,
+      "price_change_6m_min": 20.0,
+      "price_change_3m_min": 10.0,
+      "price_change_1m_min": 2.0,
       "rvol_min": 1.0,
       "require_insider_buying": false,
       "max_sector_concentration": 3,
       "weight_fundamental": 15,
       "weight_momentum": 45,
       "weight_sentiment": 25,
-      "weight_quality": 15
+      "weight_quality": 15,
+      "technical_filters": {
+        "rsi_min": 55.0,
+        "rsi_max": 75.0,
+        "adx_min": 25.0,
+        "ema_50_vs_200": "above"
+      }
     },
     "listing_currency": "CAD"
   },
@@ -150,10 +153,7 @@
       "enrich_with_ratios": true,
       "pe_min": 3.0,
       "pe_max": 35.0,
-      "roe_min": 5.0,
       "debt_equity_max": 2.5,
-      "piotroski_min": 3,
-      "altman_z_min": 1.8,
       "price_change_3m_min": 2.0,
       "rvol_min": 1.0,
       "require_insider_buying": false,
@@ -161,7 +161,13 @@
       "weight_fundamental": 25,
       "weight_momentum": 40,
       "weight_sentiment": 20,
-      "weight_quality": 15
+      "weight_quality": 15,
+      "technical_filters": {
+        "ema_50_vs_200": "above",
+        "rsi_min": 50.0,
+        "rsi_max": 70.0,
+        "adx_min": 25.0
+      }
     },
     "listing_currency": "CAD"
   },
@@ -230,10 +236,7 @@
       "is_etf": false,
       "limit": 80,
       "enrich_with_ratios": true,
-      "roe_min": 5.0,
       "debt_equity_max": 2.5,
-      "piotroski_min": 3,
-      "altman_z_min": 1.8,
       "price_change_1m_min": -20.0,
       "price_change_1m_max": 12.0,
       "price_change_3m_min": -10.0,
@@ -322,7 +325,10 @@
       "weight_fundamental": 20,
       "weight_momentum": 25,
       "weight_sentiment": 30,
-      "weight_quality": 25
+      "weight_quality": 25,
+      "technical_filters": {
+        "rsi_max": 35.0
+      }
     },
     "listing_currency": "CAD"
   },
@@ -470,11 +476,8 @@
       "is_etf": false,
       "limit": 75,
       "enrich_with_ratios": true,
-      "roe_min": 5.0,
-      "piotroski_min": 3,
-      "altman_z_min": 1.8,
       "earnings_within_days": 14,
-      "min_earnings_beat_pct": 50.0,
+      "min_earnings_beat_pct": 30.0,
       "price_change_3m_min": -5.0,
       "max_sector_concentration": 3,
       "weight_fundamental": 20,
@@ -542,14 +545,13 @@
       "volume_min": 750000,
       "price_min": 8.0,
       "market_cap_min": 1000000000,
-      "beta_min": 1.0,
       "beta_max": 3.5,
       "is_actively_trading": true,
       "is_etf": false,
       "limit": 60,
       "enrich_with_ratios": false,
-      "price_change_1d_min": 0.5,
-      "rvol_min": 1.5,
+      "price_change_1d_min": 1.5,
+      "rvol_min": 2.0,
       "max_sector_concentration": 3,
       "weight_fundamental": 5,
       "weight_momentum": 60,

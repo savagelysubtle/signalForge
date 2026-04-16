@@ -306,7 +306,7 @@ def _distribute_citations(result: ScreeningResult, citations: list[str]) -> None
         matched = [
             url for url in citations if symbol in url.lower() or (slug and slug in url.lower())
         ]
-        td.news_urls = matched[:4] if matched else citations[:3]
+        td.news_urls = matched[:10] if matched else citations[:6]
 
 
 # ---------------------------------------------------------------------------

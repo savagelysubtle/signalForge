@@ -19,6 +19,7 @@ import time
 from anthropic import AsyncAnthropic
 from anthropic.types import TextBlock, ThinkingConfigAdaptiveParam
 
+from pipeline.fmp_context import format_fmp_for_claude
 from pipeline.http_retry import with_transient_retry
 from pipeline.model_config import CLAUDE_MAX_TOKENS, CLAUDE_MODEL
 from pipeline.prompts.claude_chart import (
@@ -160,6 +161,7 @@ async def _analyze_ticker(
     indicators_override: list[str] | None = None,
     regime_context: str = "",
     live_quote_context: str | None = None,
+    fmp_context_str: str | None = None,
     *,
     is_crypto: bool = False,
 ) -> tuple[TechnicalAssessment | None, dict]:
@@ -167,7 +169,8 @@ async def _analyze_ticker(
 
     Claude acts as a technical analyst whose primary data is the numerical
     TA snapshot.  The chart image is a visual sanity check.  Live quotes
-    provide real-time price calibration.
+    provide real-time price calibration.  FMP context provides fundamental
+    anchors (earnings dates, quality scores, insider activity).
     Returns a ``TechnicalAssessment`` (aliased as ``ChartAnalysis``).
 
     Args:
@@ -180,6 +183,7 @@ async def _analyze_ticker(
         indicators_override: Override indicators for short-TF analysis.
         regime_context: Pre-formatted market regime header, or empty.
         live_quote_context: Pre-formatted real-time quote string, or None.
+        fmp_context_str: Pre-formatted FMP fundamental context, or None.
 
     Returns:
         Tuple of (validated TechnicalAssessment or None, metadata dict).
@@ -194,6 +198,7 @@ async def _analyze_ticker(
         indicators_override=effective_indicators,
         regime_context=regime_context,
         live_quote_context=live_quote_context,
+        fmp_context_str=fmp_context_str,
     )
     metadata: dict = {
         "stage": "claude",
@@ -262,6 +267,7 @@ async def run_chart_analysis(
     user_id: str = "",
     regime_context: str = "",
     live_quotes: dict | None = None,
+    fmp_context: dict | None = None,
     *,
     is_crypto: bool = False,
 ) -> tuple[list[TechnicalAssessment], list[dict]]:
@@ -270,6 +276,7 @@ async def run_chart_analysis(
     Each ticker receives numerical TA data as its primary analytical input.
     Claude interprets the numbers and uses the chart image as visual
     confirmation.  Live quotes provide real-time price calibration.
+    FMP context provides fundamental anchors per ticker.
     Returns ``TechnicalAssessment`` objects (aliased as ``ChartAnalysis``
     for backward compatibility).
 
@@ -282,6 +289,8 @@ async def run_chart_analysis(
         regime_context: Pre-formatted market regime header, or empty.
         live_quotes: Mapping of ticker -> FmpQuote for real-time
             price injection into chart prompts (may be None).
+        fmp_context: Mapping of ticker -> FmpEnrichedStock for
+            fundamental context injection (may be None).
         is_crypto: When True, use crypto exchange symbols for chart fetching.
 
     Returns:
@@ -296,6 +305,9 @@ async def run_chart_analysis(
         ta = ta_map.get(ticker)
         ta_text = format_ta_for_prompt(ta) if ta else f"Ticker: {ticker}\n[No TA data available]"
         quote_str = _format_quote_for_claude(live_quotes, ticker) if live_quotes else None
+        fmp_str: str | None = None
+        if fmp_context and ticker in fmp_context:
+            fmp_str = format_fmp_for_claude(fmp_context[ticker])
 
         tasks.append(
             _analyze_ticker(
@@ -306,6 +318,7 @@ async def run_chart_analysis(
                 user_id,
                 regime_context=regime_context,
                 live_quote_context=quote_str,
+                fmp_context_str=fmp_str,
                 is_crypto=is_crypto,
             )
         )
@@ -323,6 +336,7 @@ async def run_chart_analysis(
                         timeframe_override=extra_tf,
                         regime_context=regime_context,
                         live_quote_context=quote_str,
+                        fmp_context_str=fmp_str,
                         is_crypto=is_crypto,
                     )
                 )
@@ -341,6 +355,7 @@ async def run_chart_analysis(
                         indicators_override=config.short_tf_indicators,
                         regime_context=regime_context,
                         live_quote_context=quote_str,
+                        fmp_context_str=fmp_str,
                         is_crypto=is_crypto,
                     )
                 )

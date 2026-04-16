@@ -9,8 +9,39 @@ import type {
 import { confidenceLabelToPercent, CONFIDENCE_LABEL_DISPLAY } from '../../types';
 import { ConfidenceBreakdown, buildConfidenceBreakdownView } from './ConfidenceBreakdown';
 import { motion, AnimatePresence } from 'motion/react';
-import { ShieldAlert, ChevronDown, ChevronUp, Ban, Eye, Gauge, Clock, AlertTriangle, BrainCircuit, ShieldOff } from 'lucide-react';
+import { ShieldAlert, ChevronDown, ChevronUp, Ban, Eye, Gauge, Clock, AlertTriangle, BrainCircuit, ShieldOff, CirclePause } from 'lucide-react';
 import clsx from 'clsx';
+
+/**
+ * Extracts a "why_not_now:" section from GPT's judge reasoning.
+ * GPT embeds this inline, e.g. "...because why_not_now: ADX is 22, RSI is 51. Next sentence..."
+ * Returns the extracted condition text and the reasoning with that section removed.
+ */
+function parseWhyNotNow(reasoning: string): { whyNotNow: string | null; cleanedReasoning: string } {
+  const marker = /\bwhy_not_now:\s*/i;
+  const match = marker.exec(reasoning);
+  if (!match) return { whyNotNow: null, cleanedReasoning: reasoning };
+
+  const startIdx = match.index;
+  const contentStart = startIdx + match[0].length;
+  const rest = reasoning.slice(contentStart);
+
+  // Find the sentence boundary: ". " followed by an uppercase letter (skip decimals like $9.38)
+  const sentenceEnd = rest.search(/\.\s+[A-Z]/);
+  const whyNotNow = sentenceEnd === -1 ? rest.trim() : rest.slice(0, sentenceEnd + 1).trim();
+
+  // Strip from "because why_not_now:" or just "why_not_now:" to produce cleaner reasoning
+  const prefixPattern = /\s*;?\s*(?:because\s+)?why_not_now:\s*/i;
+  const prefixMatch = prefixPattern.exec(reasoning.slice(Math.max(0, startIdx - 20)));
+  const stripStart = prefixMatch
+    ? Math.max(0, startIdx - 20) + prefixMatch.index
+    : startIdx;
+  const stripEnd = sentenceEnd === -1 ? reasoning.length : contentStart + sentenceEnd + 1;
+
+  const cleaned = (reasoning.slice(0, stripStart) + reasoning.slice(stripEnd)).replace(/\s{2,}/g, ' ').trim();
+
+  return { whyNotNow, cleanedReasoning: cleaned };
+}
 
 interface SynthesisTabProps {
   recommendation: Recommendation | null;
@@ -600,39 +631,56 @@ export function SynthesisTab({ recommendation, tickerData }: SynthesisTabProps) 
         <TradeParams rec={recommendation} />
       </div>
 
-      {/* Judge Reasoning */}
-      {recommendation.judge_reasoning && (
-        <div className="bg-bg-concrete rounded-lg border border-border-gutter p-6 mb-6">
-          <h3 className="text-sm font-semibold text-text-secondary mb-2 font-body">Judge Reasoning</h3>
-          <AnimatePresence initial={false}>
-            <motion.p
-              key={reasoningExpanded ? 'expanded' : 'collapsed'}
-              className={clsx(
-                'text-sm text-text-primary leading-relaxed',
-                !reasoningExpanded && 'line-clamp-4',
-              )}
-            >
-              {recommendation.judge_reasoning}
-            </motion.p>
-          </AnimatePresence>
-          <button
-            onClick={() => setReasoningExpanded(prev => !prev)}
-            className="mt-2 flex items-center gap-1 text-xs text-accent-signal hover:text-accent-signal/80 transition-colors font-body"
-          >
-            {reasoningExpanded ? (
-              <>
-                <ChevronUp className="w-3.5 h-3.5" />
-                Show less
-              </>
-            ) : (
-              <>
-                <ChevronDown className="w-3.5 h-3.5" />
-                Read full reasoning
-              </>
+      {/* Judge Reasoning + Why Not Now */}
+      {recommendation.judge_reasoning && (() => {
+        const { whyNotNow, cleanedReasoning } = parseWhyNotNow(recommendation.judge_reasoning);
+        return (
+          <>
+            {whyNotNow && (
+              <div className="mb-6 rounded-lg border border-accent-electric/40 bg-bg-concrete p-4 flex items-start gap-3">
+                <CirclePause className="w-5 h-5 text-accent-electric shrink-0 mt-0.5" />
+                <div>
+                  <h3 className="text-sm font-display font-semibold text-accent-electric mb-1">
+                    Why Not Now
+                  </h3>
+                  <p className="text-sm text-text-primary leading-relaxed">{whyNotNow}</p>
+                </div>
+              </div>
             )}
-          </button>
-        </div>
-      )}
+
+            <div className="bg-bg-concrete rounded-lg border border-border-gutter p-6 mb-6">
+              <h3 className="text-sm font-semibold text-text-secondary mb-2 font-body">Judge Reasoning</h3>
+              <AnimatePresence initial={false}>
+                <motion.p
+                  key={reasoningExpanded ? 'expanded' : 'collapsed'}
+                  className={clsx(
+                    'text-sm text-text-primary leading-relaxed',
+                    !reasoningExpanded && 'line-clamp-4',
+                  )}
+                >
+                  {cleanedReasoning}
+                </motion.p>
+              </AnimatePresence>
+              <button
+                onClick={() => setReasoningExpanded(prev => !prev)}
+                className="mt-2 flex items-center gap-1 text-xs text-accent-signal hover:text-accent-signal/80 transition-colors font-body"
+              >
+                {reasoningExpanded ? (
+                  <>
+                    <ChevronUp className="w-3.5 h-3.5" />
+                    Show less
+                  </>
+                ) : (
+                  <>
+                    <ChevronDown className="w-3.5 h-3.5" />
+                    Read full reasoning
+                  </>
+                )}
+              </button>
+            </div>
+          </>
+        );
+      })()}
 
       {/* Key Factors */}
       {recommendation.key_factors.length > 0 && (

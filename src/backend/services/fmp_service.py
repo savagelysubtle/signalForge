@@ -20,7 +20,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from pipeline.schemas import FmpScreenerConfig
+from pipeline.schemas import FmpScreenerConfig, TechnicalFilters
 from services.http_clients import get_http_client
 from services.keyring_service import get_api_key
 from utils.ticker import to_fmp_symbol
@@ -412,50 +412,86 @@ async def _fmp_get(endpoint: str, params: dict[str, Any] | None = None) -> Any:
 async def screen_stocks(config: FmpScreenerConfig) -> list[FmpScreenerResult]:
     """Screen stocks using the FMP company screener endpoint.
 
+    Supports multi-exchange screening: when ``country`` or ``exchange`` is a
+    list, fires parallel API calls for each combination and merges results
+    (deduped by symbol). Defaults to CA/TSX when omitted.
+
     Args:
         config: Screener configuration with filter parameters.
 
     Returns:
         List of validated screener results.
     """
-    params: dict[str, Any] = {
-        "limit": config.limit,
-        "isActivelyTrading": str(config.is_actively_trading).lower(),
-        "isEtf": str(config.is_etf).lower(),
-    }
+    countries = (
+        config.country
+        if isinstance(config.country, list)
+        else ([config.country] if config.country else [None])
+    )
+    exchanges = (
+        config.exchange
+        if isinstance(config.exchange, list)
+        else ([config.exchange] if config.exchange else [None])
+    )
 
-    field_map: dict[str, str] = {
-        "country": "country",
-        "exchange": "exchange",
-        "sector": "sector",
-        "industry": "industry",
-        "market_cap_min": "marketCapMoreThan",
-        "market_cap_max": "marketCapLowerThan",
-        "price_min": "priceMoreThan",
-        "price_max": "priceLowerThan",
-        "volume_min": "volumeMoreThan",
-        "beta_min": "betaMoreThan",
-        "beta_max": "betaLowerThan",
-    }
+    combos = [(c, e) for c in countries for e in exchanges]
 
-    for attr, param_name in field_map.items():
-        value = getattr(config, attr, None)
-        if value is not None:
-            params[param_name] = value
+    async def _single_screen(country: str | None, exchange: str | None) -> list[FmpScreenerResult]:
+        params: dict[str, Any] = {
+            "limit": config.limit,
+            "isActivelyTrading": str(config.is_actively_trading).lower(),
+            "isEtf": str(config.is_etf).lower(),
+        }
+        if country is not None:
+            params["country"] = country
+        if exchange is not None:
+            params["exchange"] = exchange
 
-    data = await _fmp_get("company-screener", params)
+        field_map: dict[str, str] = {
+            "sector": "sector",
+            "industry": "industry",
+            "market_cap_min": "marketCapMoreThan",
+            "market_cap_max": "marketCapLowerThan",
+            "price_min": "priceMoreThan",
+            "price_max": "priceLowerThan",
+            "volume_min": "volumeMoreThan",
+            "beta_min": "betaMoreThan",
+            "beta_max": "betaLowerThan",
+        }
+        for attr, param_name in field_map.items():
+            value = getattr(config, attr, None)
+            if value is not None:
+                params[param_name] = value
 
-    if not isinstance(data, list):
-        logger.warning("FMP screener returned non-list response: %s", type(data))
-        return []
+        data = await _fmp_get("company-screener", params)
+        if not isinstance(data, list):
+            logger.warning("FMP screener returned non-list response: %s", type(data))
+            return []
 
-    results = []
-    for item in data:
-        try:
-            results.append(FmpScreenerResult.model_validate(item))
-        except Exception:
-            logger.debug("Skipping invalid FMP screener item: %s", item)
-    return results
+        results = []
+        for item in data:
+            try:
+                results.append(FmpScreenerResult.model_validate(item))
+            except Exception:
+                logger.debug("Skipping invalid FMP screener item: %s", item)
+        return results
+
+    if len(combos) == 1:
+        return await _single_screen(*combos[0])
+
+    all_results = await asyncio.gather(*[_single_screen(c, e) for c, e in combos])
+    seen: set[str] = set()
+    merged: list[FmpScreenerResult] = []
+    for batch in all_results:
+        for r in batch:
+            if r.symbol not in seen:
+                seen.add(r.symbol)
+                merged.append(r)
+    logger.info(
+        "Multi-exchange screening: %d combos → %d unique results",
+        len(combos),
+        len(merged),
+    )
+    return merged
 
 
 async def fetch_ratios_ttm(symbol: str) -> FmpRatiosTTM | None:
@@ -885,8 +921,9 @@ async def filter_by_rsi(
 ) -> list[FmpEnrichedStock]:
     """Filter stocks by RSI to reject technically invalid candidates.
 
-    For momentum strategies: rejects overbought (RSI > 75).
-    For mean-reversion strategies: rejects oversold (RSI < 30).
+    For momentum/breakout strategies: rejects overbought (RSI > 75).
+    For mean-reversion strategies: rejects NOT-oversold (RSI > 45) — we
+    only want stocks that are actually oversold for mean reversion entries.
 
     Args:
         stocks: Pre-scored list of enriched stocks (top N).
@@ -908,14 +945,14 @@ async def filter_by_rsi(
         if rsi is None:
             passed.append(stock)
             continue
-        if strategy_type == "momentum" and rsi > 75:
+        if strategy_type in ("momentum", "momentum_breakout") and rsi > 75:
             logger.info(
                 "RSI filter: rejecting %s (RSI=%.1f, overbought for momentum)", stock.symbol, rsi
             )
             continue
-        if strategy_type == "mean_reversion" and rsi < 30:
+        if strategy_type == "mean_reversion" and rsi > 45:
             logger.info(
-                "RSI filter: rejecting %s (RSI=%.1f, oversold for mean-reversion)",
+                "RSI filter: rejecting %s (RSI=%.1f, not oversold for mean-reversion)",
                 stock.symbol,
                 rsi,
             )
@@ -1233,6 +1270,11 @@ def _apply_post_filters(
             and stock.price_change_3m < config.price_change_3m_min
         ),
         not (
+            config.price_change_6m_min is not None
+            and stock.price_change_6m is not None
+            and stock.price_change_6m < config.price_change_6m_min
+        ),
+        not (
             config.rvol_min is not None
             and stock.relative_volume is not None
             and stock.relative_volume < config.rvol_min
@@ -1387,7 +1429,15 @@ async def screen_crypto(config: FmpScreenerConfig) -> list[FmpEnrichedStock]:
             )
         )
 
-    enriched = compute_composite_scores(enriched, config)
+    crypto_config = config.model_copy(
+        update={
+            "weight_fundamental": 0.0,
+            "weight_quality": 0.0,
+            "weight_sentiment": config.weight_sentiment or 0.0,
+            "weight_momentum": config.weight_momentum or 70.0,
+        }
+    )
+    enriched = compute_composite_scores(enriched, crypto_config)
     enriched.sort(key=lambda s: s.composite_score or 0, reverse=True)
     limited = enriched[: config.limit]
     logger.info(
@@ -1422,13 +1472,14 @@ def _percentile_rank(
         invert: If ``True``, lower values rank higher (useful for P/E, debt).
 
     Returns:
-        Percentile rank 0-100, or 50.0 if insufficient data.
+        Percentile rank 0-100, or 30.0 if insufficient data (penalizes
+        data-poor names instead of awarding the median).
     """
     if value is None:
-        return 50.0
+        return 30.0
     clean = sorted(v for v in values if v is not None)
     if not clean:
-        return 50.0
+        return 30.0
     rank = sum(1 for v in clean if v <= value) / len(clean) * 100
     return (100 - rank) if invert else rank
 
@@ -1459,16 +1510,19 @@ def _score_momentum(stock: FmpEnrichedStock, pool: list[FmpEnrichedStock]) -> fl
 
     Higher price changes and relative volume = better (for momentum strategies).
     Mean reversion strategies invert this in the composite weights.
+    Includes 6-month price change for longer-horizon momentum context.
     """
     pc1d = [s.price_change_1d for s in pool]
     pc1m = [s.price_change_1m for s in pool]
     pc3m = [s.price_change_3m for s in pool]
+    pc6m = [s.price_change_6m for s in pool]
     rvol = [s.relative_volume for s in pool]
 
     scores = [
         _percentile_rank(pc1d, stock.price_change_1d),
         _percentile_rank(pc1m, stock.price_change_1m),
         _percentile_rank(pc3m, stock.price_change_3m),
+        _percentile_rank(pc6m, stock.price_change_6m),
         _percentile_rank(rvol, stock.relative_volume),
     ]
     return sum(scores) / len(scores)
@@ -1613,6 +1667,46 @@ def apply_regime_weight_adjustments(
     data["weight_momentum"] = max(5.0, base_momentum + deltas.get("momentum", 0))
     data["weight_sentiment"] = max(5.0, base_sentiment + deltas.get("sentiment", 0))
     data["weight_quality"] = max(5.0, base_quality + deltas.get("quality", 0))
+
+    return FmpScreenerConfig.model_validate(data)
+
+
+REGIME_FILTER_DELTAS: dict[str, dict[str, float]] = {
+    "high_volatility": {"roe_min": 3.0, "altman_z_min": 0.5, "beta_max": -0.5},
+    "risk_off": {"roe_min": 5.0, "altman_z_min": 0.5, "beta_max": -0.5},
+    "trending_bear": {"roe_min": 3.0, "altman_z_min": 0.3},
+}
+
+
+def apply_regime_filter_adjustments(
+    config: FmpScreenerConfig,
+    regime_type: str,
+) -> FmpScreenerConfig:
+    """Apply regime-based filter threshold adjustments.
+
+    Tightens or relaxes post-filter thresholds based on the current market
+    regime. For example, ``high_volatility`` raises ROE and Altman Z
+    minimums and lowers the beta ceiling.
+
+    Args:
+        config: Original FMP screener config (not mutated).
+        regime_type: Regime classification string from the regime classifier.
+
+    Returns:
+        New FmpScreenerConfig with adjusted filter thresholds.
+    """
+    deltas = REGIME_FILTER_DELTAS.get(regime_type)
+    if not deltas:
+        return config
+
+    data = config.model_dump()
+
+    if "roe_min" in deltas and data.get("roe_min") is not None:
+        data["roe_min"] = data["roe_min"] + deltas["roe_min"]
+    if "altman_z_min" in deltas and data.get("altman_z_min") is not None:
+        data["altman_z_min"] = data["altman_z_min"] + deltas["altman_z_min"]
+    if "beta_max" in deltas and data.get("beta_max") is not None:
+        data["beta_max"] = max(0.5, data["beta_max"] + deltas["beta_max"])
 
     return FmpScreenerConfig.model_validate(data)
 
@@ -1796,6 +1890,81 @@ async def _attach_earnings_data(
     return filtered
 
 
+async def _apply_technical_filters(
+    stocks: list[FmpEnrichedStock],
+    filters: TechnicalFilters,
+) -> list[FmpEnrichedStock]:
+    """Apply technical indicator filters that require per-candidate API calls.
+
+    Fetches RSI, EMA 50, EMA 200, and ADX for each candidate and rejects those
+    that fail the configured thresholds. Accepts the extra API cost since this
+    is the only way to match screener output to ``ta_focus``.
+
+    Args:
+        stocks: Enriched stocks that have passed ratio/signal post-filters.
+        filters: Technical filter thresholds from the strategy config.
+
+    Returns:
+        Filtered list of stocks passing all technical checks.
+    """
+    if not stocks:
+        return stocks
+
+    need_rsi = filters.rsi_min is not None or filters.rsi_max is not None
+    need_ema = filters.ema_50_vs_200 is not None
+    need_adx = filters.adx_min is not None
+
+    if not (need_rsi or need_ema or need_adx):
+        return stocks
+
+    async def _check_stock(stock: FmpEnrichedStock) -> FmpEnrichedStock | None:
+        sym = stock.symbol
+
+        if need_rsi:
+            rsi = await fetch_technical_indicator(sym, "daily", "rsi", filters.rsi_period)
+            if rsi is not None:
+                if filters.rsi_min is not None and rsi < filters.rsi_min:
+                    logger.debug(
+                        "Technical filter: %s RSI %.1f < min %.1f", sym, rsi, filters.rsi_min
+                    )
+                    return None
+                if filters.rsi_max is not None and rsi > filters.rsi_max:
+                    logger.debug(
+                        "Technical filter: %s RSI %.1f > max %.1f", sym, rsi, filters.rsi_max
+                    )
+                    return None
+
+        if need_ema:
+            ema50_val = await fetch_technical_indicator(sym, "daily", "ema", 50)
+            ema200_val = await fetch_technical_indicator(sym, "daily", "ema", 200)
+            if ema50_val is not None and ema200_val is not None:
+                above = ema50_val > ema200_val
+                if filters.ema_50_vs_200 in ("golden_cross", "above") and not above:
+                    logger.debug("Technical filter: %s EMA50 below EMA200", sym)
+                    return None
+                if filters.ema_50_vs_200 in ("death_cross", "below") and above:
+                    logger.debug("Technical filter: %s EMA50 above EMA200", sym)
+                    return None
+
+        if need_adx:
+            adx = await fetch_technical_indicator(sym, "daily", "adx", 14)
+            if adx is not None and filters.adx_min is not None and adx < filters.adx_min:
+                logger.debug("Technical filter: %s ADX %.1f < min %.1f", sym, adx, filters.adx_min)
+                return None
+
+        return stock
+
+    results = await asyncio.gather(*[_check_stock(s) for s in stocks])
+    passed = [s for s in results if s is not None]
+    if len(passed) < len(stocks):
+        logger.info(
+            "Technical filters: %d → %d stocks after RSI/EMA/ADX checks",
+            len(stocks),
+            len(passed),
+        )
+    return passed
+
+
 async def screen_and_enrich(
     config: FmpScreenerConfig,
 ) -> list[FmpEnrichedStock]:
@@ -1911,19 +2080,23 @@ async def screen_and_enrich(
             len(enriched),
         )
 
-    # Step 6: earnings calendar pre-fetch and filter
+    # Step 6: technical indicator filters (per-candidate API calls)
+    if config.technical_filters and enriched:
+        enriched = await _apply_technical_filters(enriched, config.technical_filters)
+
+    # Step 7: earnings calendar pre-fetch and filter
     if config.earnings_within_days is not None and enriched:
         enriched = await _attach_earnings_data(
             enriched, config.earnings_within_days, config.min_earnings_beat_pct
         )
 
-    # Step 7: composite scoring
+    # Step 8: composite scoring
     enriched = compute_composite_scores(enriched, config)
 
-    # Step 8: sort by composite score
+    # Step 9: sort by composite score
     enriched.sort(key=lambda s: s.composite_score or 0, reverse=True)
 
-    # Step 9: sector concentration guard
+    # Step 10: sector concentration guard
     if config.max_sector_concentration is not None:
         enriched = _apply_sector_cap(enriched, config.max_sector_concentration)
 

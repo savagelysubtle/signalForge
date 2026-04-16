@@ -422,7 +422,7 @@ def calibrate_recommendation(
     Returns:
         The same ``Recommendation`` with calibrated confidence fields set.
     """
-    if rec.action in ("NO_TRADE", "HOLD"):
+    if rec.action == "NO_TRADE":
         rec.raw_gpt_confidence = rec.confidence
         rec.signal_strength = _classify_signal_strength(rec.confidence, regime_context)
         return rec
