@@ -1,0 +1,84 @@
+[project]
+name = "signalforge-auditor"
+version = "0.1.0"
+description = "Pipeline recommendation auditor — grades predictions against historical price data"
+requires-python = ">=3.14"
+dependencies = [
+    "yfinance>=0.2.50",
+    "supabase>=2.15.0",
+    "pandas>=2.2.0",
+    "pyarrow>=19.0.0",
+    "pydantic>=2.11.0",
+    "click>=8.1.0",
+    "rich>=14.0.0",
+    "python-dotenv>=1.1.0",
+    "numpy>=2.2.0",
+]
+
+[project.scripts]
+audit = "auditor.cli:cli"
+
+[build-system]
+build-backend = "uv_build"
+requires = ["uv_build>=0.9.4,<0.10.0"]
+
+[tool.uv.build-backend]
+module-name = "auditor"
+module-root = ""
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+exclude = [
+    ".venv",
+    "__pypackages__",
+    "build",
+    "dist",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "W",
+    "F",
+    "I",
+    "B",
+    "C4",
+    "UP",
+    "SIM",
+    "RUF",
+]
+ignore = [
+    "E501",
+    "B008",
+    "C901",
+    "B905",
+]
+fixable = ["ALL"]
+unfixable = []
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["E402", "F401"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["auditor"]
+
+[tool.ty.environment]
+python-version = "3.14"
+
+[tool.ty.terminal]
+output-format = "full"
+error-on-warning = false
+
+[[tool.ty.overrides]]
+include = ["auditor/prices.py"]
+
+[tool.ty.overrides.rules]
+unresolved-import = "warn"
