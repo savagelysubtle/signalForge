@@ -1,0 +1,315 @@
+{
+  "generated_at": "2026-04-16T00:15:06.061949",
+  "total_recommendations": 739,
+  "total_graded": 556,
+  "total_skipped": 183,
+  "overall_win_rate": 0.24640287769784172,
+  "overall_avg_return_pct": 1.8008776978417267,
+  "overall_direction_accuracy": 0.31654676258992803,
+  "by_action": {
+    "HOLD": {
+      "total": 246,
+      "wins": 56,
+      "losses": 190,
+      "skipped": 0,
+      "win_rate": 0.22764227642276422,
+      "avg_return_pct": 3.5516333333333336,
+      "avg_confidence": 0.5696341463414634
+    },
+    "BUY": {
+      "total": 118,
+      "wins": 51,
+      "losses": 67,
+      "skipped": 0,
+      "win_rate": 0.4322033898305085,
+      "avg_return_pct": 0.11187542372881361,
+      "avg_confidence": 0.724669279661017
+    },
+    "SHORT": {
+      "total": 56,
+      "wins": 12,
+      "losses": 44,
+      "skipped": 0,
+      "win_rate": 0.21428571428571427,
+      "avg_return_pct": -3.1327214285714287,
+      "avg_confidence": 0.7667857142857143
+    },
+    "WATCH": {
+      "total": 92,
+      "wins": 3,
+      "losses": 89,
+      "skipped": 0,
+      "win_rate": 0.03260869565217391,
+      "avg_return_pct": 2.4645391304347823,
+      "avg_confidence": 0.4569675
+    },
+    "NO_TRADE": {
+      "total": 44,
+      "wins": 15,
+      "losses": 29,
+      "skipped": 0,
+      "win_rate": 0.3409090909090909,
+      "avg_return_pct": 1.4336295454545454,
+      "avg_confidence": 0.2725123863636364
+    }
+  },
+  "by_strategy": {
+    "unknown": {
+      "total": 166,
+      "wins": 31,
+      "losses": 135,
+      "skipped": 0,
+      "win_rate": 0.18674698795180722,
+      "avg_return_pct": 2.3514831325301206,
+      "avg_confidence": 0.6566265060240963
+    },
+    "Intraday Scalp": {
+      "total": 95,
+      "wins": 31,
+      "losses": 64,
+      "skipped": 0,
+      "win_rate": 0.3263157894736842,
+      "avg_return_pct": 3.14622,
+      "avg_confidence": 0.6053684210526316
+    },
+    "Earnings Play": {
+      "total": 12,
+      "wins": 2,
+      "losses": 10,
+      "skipped": 0,
+      "win_rate": 0.16666666666666666,
+      "avg_return_pct": -1.8927416666666668,
+      "avg_confidence": 0.58
+    },
+    "Mean Reversion": {
+      "total": 18,
+      "wins": 6,
+      "losses": 12,
+      "skipped": 0,
+      "win_rate": 0.3333333333333333,
+      "avg_return_pct": -0.19415555555555553,
+      "avg_confidence": 0.6766666666666666
+    },
+    "Momentum Breakout": {
+      "total": 76,
+      "wins": 14,
+      "losses": 62,
+      "skipped": 0,
+      "win_rate": 0.18421052631578946,
+      "avg_return_pct": -0.36443289473684215,
+      "avg_confidence": 0.6253947368421052
+    },
+    "Value Accumulation": {
+      "total": 48,
+      "wins": 15,
+      "losses": 33,
+      "skipped": 0,
+      "win_rate": 0.3125,
+      "avg_return_pct": 0.7382875000000001,
+      "avg_confidence": 0.5779166666666666
+    },
+    "EMA Stack Momentum Intraday": {
+      "total": 28,
+      "wins": 10,
+      "losses": 18,
+      "skipped": 0,
+      "win_rate": 0.35714285714285715,
+      "avg_return_pct": 1.876307142857143,
+      "avg_confidence": 0.5027142857142858
+    },
+    "Opening Range Breakout": {
+      "total": 25,
+      "wins": 10,
+      "losses": 15,
+      "skipped": 0,
+      "win_rate": 0.4,
+      "avg_return_pct": 4.308408,
+      "avg_confidence": 0.373776
+    },
+    "EMA 50/200 Golden Cross Swing": {
+      "total": 45,
+      "wins": 6,
+      "losses": 39,
+      "skipped": 0,
+      "win_rate": 0.13333333333333333,
+      "avg_return_pct": 2.229442222222222,
+      "avg_confidence": 0.506
+    },
+    "VWAP Reversal Scalp": {
+      "total": 4,
+      "wins": 2,
+      "losses": 2,
+      "skipped": 0,
+      "win_rate": 0.5,
+      "avg_return_pct": 3.67225,
+      "avg_confidence": 0.4875
+    },
+    "EMA 21 Pullback Swing": {
+      "total": 32,
+      "wins": 8,
+      "losses": 24,
+      "skipped": 0,
+      "win_rate": 0.25,
+      "avg_return_pct": 0.71543125,
+      "avg_confidence": 0.3378790625
+    },
+    "Bollinger Band Squeeze Breakout Swing": {
+      "total": 7,
+      "wins": 2,
+      "losses": 5,
+      "skipped": 0,
+      "win_rate": 0.2857142857142857,
+      "avg_return_pct": 4.623314285714286,
+      "avg_confidence": 0.39142857142857146
+    }
+  },
+  "by_confidence_bucket": {
+    "60-80%": {
+      "total": 202,
+      "wins": 48,
+      "losses": 154,
+      "skipped": 0,
+      "win_rate": 0.2376237623762376,
+      "avg_return_pct": 0.6442004950495049,
+      "avg_confidence": 0.6893069306930694
+    },
+    "40-60%": {
+      "total": 243,
+      "wins": 55,
+      "losses": 188,
+      "skipped": 0,
+      "win_rate": 0.22633744855967078,
+      "avg_return_pct": 3.5462213991769547,
+      "avg_confidence": 0.5201246913580246
+    },
+    "80-100%": {
+      "total": 47,
+      "wins": 16,
+      "losses": 31,
+      "skipped": 0,
+      "win_rate": 0.3404255319148936,
+      "avg_return_pct": -1.6774978723404255,
+      "avg_confidence": 0.8397872340425532
+    },
+    "0-40%": {
+      "total": 64,
+      "wins": 18,
+      "losses": 46,
+      "skipped": 0,
+      "win_rate": 0.28125,
+      "avg_return_pct": 1.3792203125,
+      "avg_confidence": 0.27362859375
+    }
+  },
+  "calibration": [
+    {
+      "range_label": "0-40%",
+      "predicted_confidence": 0.274,
+      "actual_win_rate": 0.281,
+      "count": 64,
+      "calibration_error": 0.008
+    },
+    {
+      "range_label": "40-60%",
+      "predicted_confidence": 0.52,
+      "actual_win_rate": 0.226,
+      "count": 243,
+      "calibration_error": 0.294
+    },
+    {
+      "range_label": "60-80%",
+      "predicted_confidence": 0.689,
+      "actual_win_rate": 0.238,
+      "count": 202,
+      "calibration_error": 0.452
+    },
+    {
+      "range_label": "80-100%",
+      "predicted_confidence": 0.84,
+      "actual_win_rate": 0.34,
+      "count": 47,
+      "calibration_error": 0.499
+    }
+  ],
+  "calibration_error_mean": 0.31325,
+  "timing_breakdown": {
+    "UNKNOWN": 281,
+    "LATE": 68,
+    "EARLY": 159,
+    "ON_TIME": 48
+  },
+  "top_winners": [
+    {
+      "ticker": "OMG.V",
+      "action": "HOLD",
+      "return": 64.2384,
+      "confidence": 0.56,
+      "strategy": "Intraday Scalp"
+    },
+    {
+      "ticker": "HUT",
+      "action": "HOLD",
+      "return": 49.7893,
+      "confidence": 0.59,
+      "strategy": ""
+    },
+    {
+      "ticker": "HUT.TO",
+      "action": "HOLD",
+      "return": 34.246,
+      "confidence": 0.58,
+      "strategy": ""
+    },
+    {
+      "ticker": "CLS.TO",
+      "action": "HOLD",
+      "return": 33.8775,
+      "confidence": 0.58,
+      "strategy": "Momentum Breakout"
+    },
+    {
+      "ticker": "CLS.TO",
+      "action": "HOLD",
+      "return": 33.2622,
+      "confidence": 0.6,
+      "strategy": ""
+    }
+  ],
+  "top_losers": [
+    {
+      "ticker": "VET",
+      "action": "HOLD",
+      "return": -14.8405,
+      "confidence": 0.64,
+      "strategy": ""
+    },
+    {
+      "ticker": "CVVY.TO",
+      "action": "SHORT",
+      "return": -12.069,
+      "confidence": 0.75,
+      "strategy": ""
+    },
+    {
+      "ticker": "ZDC.V",
+      "action": "BUY",
+      "return": -11.7647,
+      "confidence": 0.69,
+      "strategy": ""
+    },
+    {
+      "ticker": "CLS.TO",
+      "action": "SHORT",
+      "return": -11.729,
+      "confidence": 0.78,
+      "strategy": ""
+    },
+    {
+      "ticker": "SOIL.TO",
+      "action": "HOLD",
+      "return": -11.2195,
+      "confidence": 0.63,
+      "strategy": "EMA Stack Momentum Intraday"
+    }
+  ]
+}

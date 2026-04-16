@@ -151,9 +151,16 @@ class GradeEngine:
 
         sl_level: float
         tp_level: float
-        if sl is not None and tp is not None and sl > 0 and tp > 0:
-            sl_level = sl
-            tp_level = tp
+        levels_valid = (
+            sl is not None
+            and tp is not None
+            and sl > 0
+            and tp > 0
+            and _levels_match_direction(entry_price, sl, tp, is_long)
+        )
+        if levels_valid:
+            sl_level = sl  # type: ignore[assignment]
+            tp_level = tp  # type: ignore[assignment]
         else:
             atr_pct = _compute_atr_pct(prices, entry_idx)
             if is_long:
@@ -463,6 +470,18 @@ def _parse_holding_period(val: Any) -> int | None:
     if "month" in s:
         return num * 21
     return num
+
+
+def _levels_match_direction(entry: float, sl: float, tp: float, is_long: bool) -> bool:
+    """Check that SL/TP make sense for the trade direction.
+
+    For BUY:  SL should be below entry, TP above entry.
+    For SHORT: SL should be above entry, TP below entry.
+    Returns False if GPT set them backwards (e.g. long-style levels on a short).
+    """
+    if is_long:
+        return sl < entry < tp
+    return tp < entry < sl
 
 
 def _safe_float(val: Any) -> float | None:
