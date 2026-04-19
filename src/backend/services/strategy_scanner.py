@@ -1,8 +1,12 @@
 """Strategy Scanner — pre-pipeline discovery layer.
 
-Pulls a universe from FMP, fetches TA snapshots, applies deterministic
-strategy rules, scores with LightGBM, and persists ranked results to
-Supabase for the frontend dashboard and pipeline orchestrator.
+Pulls universes from FMP (per-template screener config), fetches TA snapshots,
+applies deterministic strategy rules, scores with LightGBM, and persists ranked
+results to Supabase for the frontend dashboard and pipeline orchestrator.
+
+Scanner rules are fast prescreen proxies. Full-fidelity rule evaluation (e.g.,
+actual RSI-2, 52-week distances, earnings recency) happens downstream in the
+LLM pipeline.
 """
 
 from __future__ import annotations
@@ -93,68 +97,69 @@ def _score_rule(conditions: list[tuple[bool, float]]) -> float:
     return passed_weight / total_weight
 
 
-STRATEGY_RULES: dict[str, Any] = {
-    "momentum_breakout": lambda f: _score_rule(
+def _score_connors_rsi2(f: TickerFeatures) -> float:
+    """Connors RSI(2) mean-reversion long-only strategy (proxy using RSI-14)."""
+    return _score_rule(
+        [
+            (f.rsi < 30, 3.0),
+            (f.ema200_vs_price > -3.0, 3.0),
+            (f.ema_alignment in ("all_bullish", "mixed"), 2.0),
+            (f.bb_position is not None and f.bb_position < 25, 2.0),
+            (f.volume_ratio > 1.2, 1.5),
+            (not f.earnings_within_5d, 1.0),
+        ]
+    )
+
+
+def _score_52wk_dual_momentum(f: TickerFeatures) -> float:
+    """52-week dual-momentum (LONG at 20d high, SHORT at 20d low). Returns max score."""
+    long_score = _score_rule(
         [
             (f.distance_from_20d_high < 3.0, 3.0),
-            (f.volume_ratio > 1.3, 3.0),
-            (f.ema_alignment in ("all_bullish", "mixed"), 2.0),
-            (f.momentum_score > 0.3, 2.0),
-            (55 < f.rsi < 80, 1.5),
-            (not f.earnings_within_5d, 1.0),
+            (f.ema_alignment == "all_bullish", 2.5),
+            (f.adx > 18, 2.0),
+            (55 <= f.rsi <= 75, 1.5),
+            (f.volume_ratio > 1.1, 1.5),
         ]
-    ),
-    "golden_cross_swing": lambda f: _score_rule(
+    )
+    short_score = _score_rule(
         [
-            (f.ema_alignment in ("all_bullish", "mixed"), 3.0),
-            (f.ema50_vs_price > -1.5, 2.0),
-            (f.ema200_vs_price > -8.0, 1.5),
-            (f.volume_ratio > 1.0, 1.5),
-            (45 < f.rsi < 72, 1.5),
-            (not f.earnings_within_5d, 1.0),
+            (f.distance_from_20d_low < 3.0, 3.0),
+            (f.ema_alignment == "all_bearish", 2.5),
+            (f.adx > 18, 2.0),
+            (25 <= f.rsi <= 45, 1.5),
+            (f.volume_ratio > 1.1, 1.5),
         ]
-    ),
-    "bb_squeeze_breakout": lambda f: _score_rule(
+    )
+    return max(long_score, short_score)
+
+
+def _score_pead_dual_direction(f: TickerFeatures) -> float:
+    """Post-Earnings Announcement Drift dual-direction. Returns max score."""
+    long_score = _score_rule(
         [
-            (f.atr_pct < 2.5, 4.0),
-            (f.volume_ratio < 1.0, 2.0),
-            (f.bollinger_width is not None and f.bollinger_width < 12.0, 2.0),
-            (f.adx < 28, 1.5),
+            (f.gap_pct is not None and f.gap_pct > 3.0, 3.0),
+            (f.volume_ratio > 1.8, 3.0),
+            (f.ema50_vs_price > -2.0, 2.0),
+            (50 <= f.rsi <= 75, 1.5),
+            (f.atr_pct > 2.0, 1.0),
         ]
-    ),
-    "mean_reversion": lambda f: _score_rule(
+    )
+    short_score = _score_rule(
         [
-            (f.rsi < 35 or f.rsi > 72, 3.0),
-            (f.distance_from_20d_low < 3 or f.distance_from_20d_high < 3, 2.0),
-            (f.volume_ratio > 1.3, 1.5),
-            (f.atr_pct < 4.0, 1.0),
+            (f.gap_pct is not None and f.gap_pct < -3.0, 3.0),
+            (f.volume_ratio > 1.8, 3.0),
+            (f.ema50_vs_price < 2.0, 2.0),
+            (25 <= f.rsi <= 50, 1.5),
+            (f.atr_pct > 2.0, 1.0),
         ]
-    ),
-    "value_accumulation": lambda f: _score_rule(
-        [
-            (f.rsi < 45, 2.0),
-            (f.distance_from_20d_low < 5, 2.0),
-            (f.ema50_vs_price < 5, 1.5),
-            (f.volume_ratio > 0.7, 1.0),
-        ]
-    ),
-    "earnings_play": lambda f: _score_rule(
-        [
-            (f.earnings_within_5d, 4.0),
-            (f.volume_ratio > 1.2, 2.0),
-            (40 < f.rsi < 75, 1.5),
-            (f.market_cap > 2e9, 1.5),
-        ]
-    ),
-    "intraday_scalp": lambda f: _score_rule(
-        [
-            (f.volume_ratio > 1.5, 3.0),
-            (0.5 < f.atr_pct < 3.0, 2.0),
-            (30 < f.rsi < 70, 1.5),
-            (f.adx > 18, 1.5),
-        ]
-    ),
-    "crypto_swing": lambda f: _score_rule(
+    )
+    return max(long_score, short_score)
+
+
+def _score_crypto_swing(f: TickerFeatures) -> float:
+    """Crypto swing long-only strategy."""
+    return _score_rule(
         [
             (43 < f.rsi < 70, 2.0),
             (f.ema_alignment in ("all_bullish", "mixed"), 2.0),
@@ -163,51 +168,28 @@ STRATEGY_RULES: dict[str, Any] = {
             (f.momentum_score > 0.05, 1.0),
             (f.atr_pct < 8.5, 1.5),
         ]
-    ),
-    "crypto_intraday_scalp": lambda f: _score_rule(
+    )
+
+
+def _score_crypto_intraday_scalp(f: TickerFeatures) -> float:
+    """Crypto intraday scalp long-only strategy."""
+    return _score_rule(
         [
             (f.volume_ratio > 1.3, 2.5),
             (0.3 < f.atr_pct < 6.5, 2.5),
             (28 < f.rsi < 74, 1.5),
             (f.adx > 12, 1.0),
         ]
-    ),
-}
+    )
 
-REGIME_ACTIVE_STRATEGIES: dict[str, list[str]] = {
-    "trending_bull": [
-        "momentum_breakout",
-        "golden_cross_swing",
-        "bb_squeeze_breakout",
-        "earnings_play",
-        "intraday_scalp",
-        "crypto_swing",
-        "crypto_intraday_scalp",
-    ],
-    "trending_bear": [
-        "mean_reversion",
-        "value_accumulation",
-        "crypto_swing",
-    ],
-    "high_volatility": [
-        "mean_reversion",
-        "bb_squeeze_breakout",
-        "earnings_play",
-        "value_accumulation",
-        "intraday_scalp",
-        "crypto_swing",
-    ],
-    "range_bound": [
-        "mean_reversion",
-        "bb_squeeze_breakout",
-        "value_accumulation",
-        "crypto_swing",
-    ],
-    "sector_rotation": ["momentum_breakout", "golden_cross_swing", "value_accumulation"],
-    "risk_off": ["mean_reversion", "value_accumulation"],
-}
 
-_DEFAULT_ACTIVE = list(STRATEGY_RULES.keys())
+STRATEGY_RULES: dict[str, Any] = {
+    "connors_rsi2_reversion": _score_connors_rsi2,
+    "52wk_dual_momentum": _score_52wk_dual_momentum,
+    "pead_dual_direction": _score_pead_dual_direction,
+    "crypto_swing": _score_crypto_swing,
+    "crypto_intraday_scalp": _score_crypto_intraday_scalp,
+}
 
 _CRYPTO_STRATEGIES: frozenset[str] = frozenset({"crypto_swing", "crypto_intraday_scalp"})
 
@@ -218,18 +200,6 @@ _RULE_WEIGHT = 0.4
 _ML_WEIGHT = 0.6
 
 _STRATEGY_TO_MODEL: dict[str, str] = {}
-
-_TEMPLATE_TO_SCANNER_RULES: dict[str, list[str]] = {
-    "momentum_breakout": ["momentum_breakout"],
-    "golden_cross_swing": ["golden_cross_swing"],
-    "bb_squeeze_breakout": ["bb_squeeze_breakout"],
-    "mean_reversion": ["mean_reversion"],
-    "value_accumulation": ["value_accumulation"],
-    "earnings_play": ["earnings_play"],
-    "intraday_scalp": ["intraday_scalp"],
-    "crypto_swing": ["crypto_swing"],
-    "crypto_intraday_scalp": ["crypto_intraday_scalp"],
-}
 
 
 # ---------------------------------------------------------------------------
@@ -356,65 +326,83 @@ class StrategyScanner:
         await self._save_scan_run(report, triggered_by)
 
         try:
+            from services.strategy import list_templates
+
             state = await self.heartbeat.get_current_state()
             report.regime_type = state.regime_type
 
-            active_strategies = REGIME_ACTIVE_STRATEGIES.get(
-                state.regime_type,
-                _DEFAULT_ACTIVE,
+            templates = await list_templates()
+            active_templates = [
+                t
+                for t in templates
+                if t.fmp_screener and t.fmp_screener.enabled and t.strategy_type in STRATEGY_RULES
+            ]
+            stock_templates = [t for t in active_templates if not t.fmp_screener.is_crypto]
+            crypto_templates = [t for t in active_templates if t.fmp_screener.is_crypto]
+
+            logger.info(
+                "Scanner: loaded %d active templates: %s",
+                len(active_templates),
+                [(t.name, t.strategy_type) for t in active_templates],
             )
-            if not active_strategies:
-                logger.info("Scanner: regime %s — no active strategies", state.regime_type)
+
+            if not active_templates:
+                logger.info("Scanner: no active templates with enabled screeners")
                 report.status = "completed"
                 report.completed_at = datetime.now(UTC)
                 await self._finalize_report(report)
                 return report
 
-            stock_strategies = [s for s in active_strategies if s not in _CRYPTO_STRATEGIES]
-            # Crypto always runs regardless of regime or stock filters
-            crypto_strategies = list(_CRYPTO_STRATEGIES)
-
-            async def _empty_list() -> list[str]:
-                return []
-
-            stock_universe_coro = (
-                self._fetch_universe(
-                    country=country,
-                    exchange=exchange,
-                    sector=sector,
-                    market_cap_min=market_cap_min,
-                    market_cap_max=market_cap_max,
-                    limit=limit,
-                )
-                if stock_strategies
-                else _empty_list()
-            )
-            crypto_universe_coro = self._fetch_crypto_universe()
-
-            stock_universe, crypto_universe = await asyncio.gather(
-                stock_universe_coro, crypto_universe_coro
+            has_overrides = any(
+                x is not None for x in (country, exchange, sector, market_cap_min, market_cap_max)
             )
 
-            report.universe_size = len(stock_universe) + len(crypto_universe)
+            per_template_tickers: dict[str, set[str]] = {}
+            all_stock_tickers: set[str] = set()
+            for tpl in stock_templates:
+                screener_cfg = tpl.fmp_screener
+                if has_overrides:
+                    screener_cfg = screener_cfg.model_copy(
+                        update={
+                            "country": country or screener_cfg.country,
+                            "exchange": exchange or screener_cfg.exchange,
+                            "sector": sector or screener_cfg.sector,
+                            "market_cap_min": market_cap_min or screener_cfg.market_cap_min,
+                            "market_cap_max": market_cap_max or screener_cfg.market_cap_max,
+                            "limit": limit,
+                        }
+                    )
+                tickers = await self._fetch_universe_for_template(screener_cfg)
+                per_template_tickers[tpl.strategy_type] = set(tickers)
+                all_stock_tickers.update(tickers)
+
+            crypto_universe = await self._fetch_crypto_universe() if crypto_templates else []
+
+            report.universe_size = len(all_stock_tickers) + len(crypto_universe)
             logger.info(
-                "Scanner: %d stock + %d crypto tickers, stock_strategies=%s, crypto_strategies=%s",
-                len(stock_universe),
+                "Scanner: %d stock + %d crypto tickers",
+                len(all_stock_tickers),
                 len(crypto_universe),
-                stock_strategies,
-                crypto_strategies,
             )
 
             stock_features: dict[str, TickerFeatures] = {}
             crypto_features: dict[str, TickerFeatures] = {}
-            if stock_universe:
-                stock_features = await self._fetch_all_ta(stock_universe, state)
+            if all_stock_tickers:
+                stock_features = await self._fetch_all_ta(list(all_stock_tickers), state)
             if crypto_universe:
                 crypto_features = await self._fetch_all_ta(crypto_universe, state, is_crypto=True)
 
             results: list[ScanResult] = []
 
-            results.extend(await self._score_universe(stock_features, stock_strategies, state))
-            results.extend(await self._score_universe(crypto_features, crypto_strategies, state))
+            for tpl in stock_templates:
+                tpl_tickers = per_template_tickers[tpl.strategy_type]
+                tpl_features = {t: f for t, f in stock_features.items() if t in tpl_tickers}
+                results.extend(await self._score_universe(tpl_features, [tpl.strategy_type], state))
+
+            for tpl in crypto_templates:
+                results.extend(
+                    await self._score_universe(crypto_features, [tpl.strategy_type], state)
+                )
 
             results.sort(key=lambda r: r.combined_score, reverse=True)
             report.results = results
@@ -482,13 +470,7 @@ class StrategyScanner:
                 .order("combined_score", desc=True)
             )
             if strategy_type:
-                scanner_rules = _TEMPLATE_TO_SCANNER_RULES.get(strategy_type)
-                if scanner_rules and len(scanner_rules) == 1:
-                    query = query.eq("strategy_type", scanner_rules[0])
-                elif scanner_rules:
-                    query = query.in_("strategy_type", scanner_rules)
-                else:
-                    query = query.eq("strategy_type", strategy_type)
+                query = query.eq("strategy_type", strategy_type)
 
             result = await query.execute()
             return [self._row_to_scan_result(r) for r in (result.data or [])]
@@ -619,6 +601,31 @@ class StrategyScanner:
             return [s.symbol for s in stocks]
         except Exception as exc:
             logger.warning("Universe fetch failed: %s", exc)
+            return []
+
+    async def _fetch_universe_for_template(self, screener_cfg: Any) -> list[str]:
+        """Fetch universe for a specific template using its FmpScreenerConfig."""
+        try:
+            from services.fmp_service import screen_stocks
+
+            stocks = await screen_stocks(screener_cfg)
+
+            if screener_cfg.country and not screener_cfg.exchange:
+                allowed = self._COUNTRY_EXCHANGES.get(screener_cfg.country, set())
+                if allowed:
+                    before = len(stocks)
+                    stocks = [s for s in stocks if s.exchangeShortName in allowed]
+                    logger.info(
+                        "Exchange post-filter for country=%s: %d → %d (kept: %s)",
+                        screener_cfg.country,
+                        before,
+                        len(stocks),
+                        allowed,
+                    )
+
+            return [s.symbol for s in stocks]
+        except Exception as exc:
+            logger.warning("Template universe fetch failed: %s", exc)
             return []
 
     async def _fetch_crypto_universe(self, *, limit: int = 50) -> list[str]:
@@ -891,60 +898,89 @@ class StrategyScanner:
     @staticmethod
     def _get_matched_rules(strategy: str, f: TickerFeatures) -> list[str]:
         """Return human-readable labels for passing conditions."""
-        labels: dict[str, list[tuple[bool, str]]] = {
-            "momentum_breakout": [
-                (f.distance_from_20d_high < 3.0, "Near 20d high"),
-                (f.volume_ratio > 1.3, f"Vol {f.volume_ratio:.1f}x breakout"),
-                (f.ema_alignment in ("all_bullish", "mixed"), "EMA stack"),
-                (f.momentum_score > 0.3, f"Strong mom {f.momentum_score:+.2f}"),
-            ],
-            "golden_cross_swing": [
-                (f.ema_alignment in ("all_bullish", "mixed"), "EMA alignment OK"),
-                (f.ema50_vs_price > -1.5, "Price vs 50EMA"),
-                (f.volume_ratio > 1.0, f"Vol {f.volume_ratio:.1f}x"),
-                (45 < f.rsi < 72, f"RSI {f.rsi:.0f}"),
-            ],
-            "bb_squeeze_breakout": [
-                (f.atr_pct < 2.5, f"ATR squeeze {f.atr_pct:.1f}%"),
-                (f.volume_ratio < 1.0, "Vol drying up"),
+        if strategy == "connors_rsi2_reversion":
+            labels: list[tuple[bool, str]] = [
+                (f.rsi < 30, f"Extreme oversold RSI {f.rsi:.0f}"),
+                (f.ema200_vs_price > -3.0, "Uptrend intact (near 200EMA)"),
                 (
-                    f.bollinger_width is not None and f.bollinger_width < 12.0,
-                    f"BB width {f.bollinger_width:.1f}%",
+                    f.ema_alignment in ("all_bullish", "mixed"),
+                    "EMA alignment OK",
                 ),
-                (f.adx < 28, f"ADX {f.adx:.0f} (consolidation)"),
-            ],
-            "mean_reversion": [
-                (f.rsi < 35, f"RSI oversold {f.rsi:.0f}"),
-                (f.rsi > 72, f"RSI overbought {f.rsi:.0f}"),
-                (f.volume_ratio > 1.3, f"Vol {f.volume_ratio:.1f}x"),
-            ],
-            "value_accumulation": [
-                (f.rsi < 45, f"RSI low {f.rsi:.0f}"),
-                (f.distance_from_20d_low < 5, "Near 20d low"),
-            ],
-            "earnings_play": [
-                (f.earnings_within_5d, "Earnings upcoming"),
-                (f.volume_ratio > 1.2, f"Vol {f.volume_ratio:.1f}x"),
-            ],
-            "intraday_scalp": [
-                (f.volume_ratio > 1.5, f"Vol {f.volume_ratio:.1f}x"),
-                (0.5 < f.atr_pct < 3.0, f"ATR {f.atr_pct:.1f}%"),
+                (
+                    f.bb_position is not None and f.bb_position < 25,
+                    f"Lower BB touch {f.bb_position:.0f}%",
+                ),
+                (f.volume_ratio > 1.2, f"Capitulation vol {f.volume_ratio:.1f}x"),
+                (not f.earnings_within_5d, "No event risk"),
+            ]
+            return [label for passed, label in labels if passed]
+
+        if strategy == "52wk_dual_momentum":
+            long_rules = [
+                (f.distance_from_20d_high < 3.0, "Near 20d high"),
+                (f.ema_alignment == "all_bullish", "EMA bullish stack"),
                 (f.adx > 18, f"ADX {f.adx:.0f}"),
-            ],
-            "crypto_swing": [
+                (55 <= f.rsi <= 75, f"RSI {f.rsi:.0f} momentum"),
+                (f.volume_ratio > 1.1, f"Vol {f.volume_ratio:.1f}x"),
+            ]
+            short_rules = [
+                (f.distance_from_20d_low < 3.0, "Near 20d low"),
+                (f.ema_alignment == "all_bearish", "EMA bearish stack"),
+                (f.adx > 18, f"ADX {f.adx:.0f}"),
+                (25 <= f.rsi <= 45, f"RSI {f.rsi:.0f} weakness"),
+                (f.volume_ratio > 1.1, f"Vol {f.volume_ratio:.1f}x"),
+            ]
+            long_score = sum(1 for passed, _ in long_rules if passed)
+            short_score = sum(1 for passed, _ in short_rules if passed)
+            if long_score >= short_score:
+                return [f"Long: {label}" for passed, label in long_rules if passed]
+            return [f"Short: {label}" for passed, label in short_rules if passed]
+
+        if strategy == "pead_dual_direction":
+            long_rules = [
+                (
+                    f.gap_pct is not None and f.gap_pct > 3.0,
+                    f"Gap up {f.gap_pct:.1f}%",
+                ),
+                (f.volume_ratio > 1.8, f"Vol surge {f.volume_ratio:.1f}x"),
+                (f.ema50_vs_price > -2.0, "Above 50EMA"),
+                (50 <= f.rsi <= 75, f"RSI {f.rsi:.0f}"),
+                (f.atr_pct > 2.0, f"ATR {f.atr_pct:.1f}%"),
+            ]
+            short_rules = [
+                (
+                    f.gap_pct is not None and f.gap_pct < -3.0,
+                    f"Gap down {f.gap_pct:.1f}%",
+                ),
+                (f.volume_ratio > 1.8, f"Vol surge {f.volume_ratio:.1f}x"),
+                (f.ema50_vs_price < 2.0, "Below 50EMA"),
+                (25 <= f.rsi <= 50, f"RSI {f.rsi:.0f}"),
+                (f.atr_pct > 2.0, f"ATR {f.atr_pct:.1f}%"),
+            ]
+            long_score = sum(1 for passed, _ in long_rules if passed)
+            short_score = sum(1 for passed, _ in short_rules if passed)
+            if long_score >= short_score:
+                return [f"Long: {label}" for passed, label in long_rules if passed]
+            return [f"Short: {label}" for passed, label in short_rules if passed]
+
+        if strategy == "crypto_swing":
+            labels = [
                 (43 < f.rsi < 70, f"RSI {f.rsi:.0f}"),
                 (f.ema_alignment in ("all_bullish", "mixed"), "EMA aligned"),
                 (f.volume_ratio > 1.05, f"Vol {f.volume_ratio:.1f}x"),
                 (f.atr_pct < 8.5, f"ATR {f.atr_pct:.1f}%"),
-            ],
-            "crypto_intraday_scalp": [
+            ]
+            return [label for passed, label in labels if passed]
+
+        if strategy == "crypto_intraday_scalp":
+            labels = [
                 (f.volume_ratio > 1.3, f"Vol {f.volume_ratio:.1f}x"),
                 (0.3 < f.atr_pct < 6.5, f"ATR {f.atr_pct:.1f}%"),
                 (f.adx > 12, f"ADX {f.adx:.0f}"),
-            ],
-        }
-        rules = labels.get(strategy, [])
-        return [label for passed, label in rules if passed]
+            ]
+            return [label for passed, label in labels if passed]
+
+        return []
 
     # ── Supabase persistence ────────────────────────────────────────────
 
